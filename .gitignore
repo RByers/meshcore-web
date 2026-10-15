@@ -5,3 +5,4 @@ test-results/
 packages/web/test/__screenshots__/
 *.tsbuildinfo
 .DS_Store
+.ref/

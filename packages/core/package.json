@@ -14,6 +14,31 @@
       "source": "./src/util/bytes.ts",
       "types": "./dist/util/bytes.d.ts",
       "import": "./dist/util/bytes.js"
+    },
+    "./framing": {
+      "source": "./src/framing/index.ts",
+      "types": "./dist/framing/index.d.ts",
+      "import": "./dist/framing/index.js"
+    },
+    "./transport": {
+      "source": "./src/transport/index.ts",
+      "types": "./dist/transport/index.d.ts",
+      "import": "./dist/transport/index.js"
+    },
+    "./util/events": {
+      "source": "./src/util/events.ts",
+      "types": "./dist/util/events.d.ts",
+      "import": "./dist/util/events.js"
+    },
+    "./util/deferred": {
+      "source": "./src/util/deferred.ts",
+      "types": "./dist/util/deferred.d.ts",
+      "import": "./dist/util/deferred.js"
+    },
+    "./protocol": {
+      "source": "./src/protocol/index.ts",
+      "types": "./dist/protocol/index.d.ts",
+      "import": "./dist/protocol/index.js"
     }
   },
   "files": [

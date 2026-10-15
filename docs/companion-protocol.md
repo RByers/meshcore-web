@@ -178,7 +178,7 @@ DOC claims OK may carry an "optional 32-bit value". **The firmware never sends o
 | 22 | 16 | DEVICE_QUERY | `[1]app_target_ver` | len≥2 | DEVICE_INFO |
 | 23 | 17 | EXPORT_PRIVATE_KEY | — | | PRIVATE_KEY `[0]=0x0E, [1..64]` 64-byte expanded Ed25519 private key (§9) / DISABLED |
 | 24 | 18 | IMPORT_PRIVATE_KEY | `[1..64]` 64-byte expanded private key (pubkey re-derived) | len≥65 | OK / ERR 6 (fails ECDH self-test) / ERR 5 / DISABLED. Reloads contacts. |
-| 25 | 19 | SEND_RAW_DATA | `[1]path_len (encoded, §path), [2..]path bytes, then payload ≥4 B` | len≥6, valid path_len, payload≥4 | OK (sent DIRECT as PAYLOAD_TYPE_RAW_CUSTOM) / ERR 1 (path_len 0xFF: flood unsupported) / ERR 6 / ERR 3 |
+| 25 | 19 | SEND_RAW_DATA | `[1]path_len (encoded, §path), [2..]path bytes, then payload ≥4 B` | len≥6, valid path_len, payload≥4 | OK (sent DIRECT as PAYLOAD_TYPE_RAW_CUSTOM) / ERR 1 (any invalid path_len, including 0xFF: flood unsupported) / ERR 6 (payload < 4 B after the path) / ERR 3 |
 | 26 | 1A | SEND_LOGIN | `[1..32]pubkey, [33..]password` (max 15 chars used) | len≥33 | SENT (tag = **first 4 bytes of the target pubkey**), then later LOGIN_SUCCESS/LOGIN_FAIL push / ERR 2/3 |
 | 27 | 1B | SEND_STATUS_REQ | `[1..32]pubkey` | len≥33 | SENT (tag = request timestamp), then STATUS_RESPONSE push (matched by pubkey prefix, not by tag) |
 | 28 | 1C | HAS_CONNECTION | `[1..32]pubkey` | len≥33 | OK (keep-alive connection active) / ERR 2 |
@@ -189,7 +189,7 @@ DOC claims OK may carry an "optional 32-bit value". **The firmware never sends o
 | 33 | 21 | SIGN_START | — | | SIGN_START `[0]=0x13, [1]=0 reserved, [2..5]max_len u32 = 8192` (discards any previous buffer) |
 | 34 | 22 | SIGN_DATA | `[1..]chunk` | len>1 | OK / ERR 4 (no start) / ERR 3 (>8192 total) |
 | 35 | 23 | SIGN_FINISH | — | | SIGNATURE `[0]=0x14, [1..64]Ed25519 sig over all chunks` / ERR 4 |
-| 36 | 24 | SEND_TRACE_PATH | `[1..4]tag u32, [5..8]auth_code u32, [9]flags (bits0-1 = path_sz: hash size 2^path_sz bytes, v1.11+), [10..]path hashes` | len>10, (len-10)>>path_sz ≤ 64, (len-10) multiple of 2^path_sz | SENT (`[1]=0`, tag echoed, est_timeout), later TRACE_DATA push / ERR 6/3 |
+| 36 | 24 | SEND_TRACE_PATH | `[1..4]tag u32, [5..8]auth_code u32, [9]flags (bits0-1 = path_sz: hash size 2^path_sz bytes, v1.11+), [10..]path hashes` | len>10 and len-10 < 179 (`MAX_PACKET_PAYLOAD-5`; otherwise falls through to ERR 1), (len-10)>>path_sz ≤ 64, (len-10) multiple of 2^path_sz | SENT (`[1]=0`, tag echoed, est_timeout), later TRACE_DATA push / ERR 6/3 |
 | 37 | 25 | SET_DEVICE_PIN | `[1..4]pin u32` | len≥5; 0 or 100000..999999 | OK / ERR 6 (takes effect on reboot) |
 | 38 | 26 | SET_OTHER_PARAMS | `[1]manual_add_contacts, [2]telemetry modes (bits as SELF_INFO[46], v5+), [3]advert_loc_policy, [4]multi_acks` (each optional from [2]) | none ([1] read even if len=1) | OK |
 | 39 | 27 | SEND_TELEMETRY_REQ | `[1..3]reserved, [4..35]pubkey` | len≥36 | SENT, then TELEMETRY_RESPONSE push |
@@ -203,7 +203,7 @@ DOC claims OK may carry an "optional 32-bit value". **The firmware never sends o
 | 51 | 33 | FACTORY_RESET | `[1..5]"reset"` | literal | interfaces disabled first, so OK is usually not received; reboot / ERR 5 |
 | 52 | 34 | SEND_PATH_DISCOVERY_REQ | `[1]=0 (reserved, must be 0), [2..33]pubkey` | len≥34 | SENT, then PATH_DISCOVERY_RESPONSE push. Sent as a **flood** REQ `GET_TELEMETRY_DATA` with mask = base only. |
 | 53 | 35 | (unassigned) | | | ERR 1 |
-| 54 | 36 | SET_FLOOD_SCOPE_KEY (v8+) | `[1]=0, [2..17]16-byte transport key` (len<18 → clear override) / `[1]=1` → force **unscoped** flood (v12+) | len≥2 | OK. Session only, not persisted. |
+| 54 | 36 | SET_FLOOD_SCOPE_KEY (v8+) | `[1]=0, [2..17]16-byte transport key` (len<18 → clear override) / `[1]=1` → force **unscoped** flood (v12+) | len≥2; `[1]` ∉ {0,1} → ERR 1 | OK. Session only, not persisted. |
 | 55 | 37 | SEND_CONTROL_DATA (v8+) | `[1..]control payload; [1]&0x80 must be set` | len≥2 | OK (sent zero-hop DIRECT, PAYLOAD_TYPE_CONTROL) / ERR 3 |
 | 56 | 38 | GET_STATS (v8+) | `[1]stats_type 0/1/2` | len≥2 | STATS (§5.6) / ERR 6 |
 | 57 | 39 | SEND_ANON_REQ | `[1..32]pubkey, [33..]data` | len>33. v13+: an unknown pubkey is accepted (a temporary anon contact is created, zero-hop) | SENT (tag = timestamp), reply as BINARY_RESPONSE / ERR 3 |
@@ -211,7 +211,7 @@ DOC claims OK may carry an "optional 32-bit value". **The firmware never sends o
 | 59 | 3B | GET_AUTOADD_CONFIG | — | | AUTOADD_CONFIG `[0]=0x19, [1]config, [2]max_hops` |
 | 60 | 3C | GET_ALLOWED_REPEAT_FREQ | — | | `[0]=0x1A`, then repeated `{lower u32 kHz, upper u32 kHz}` (default `{433000,433000},{869495,869495},{918000,918000}`) |
 | 61 | 3D | SET_PATH_HASH_MODE | `[1]=0 (must be 0), [2]mode 0..2` (hash size = mode+1 bytes, used for floods this node originates) | len≥3 | OK / ERR 6 |
-| 62 | 3E | SEND_CHANNEL_DATA | `[1]idx, [2]path_len (0xFF = flood, else encoded), [3..]path bytes (absent if 0xFF), then data_type u16 LE, then payload` | len≥4 | OK / ERR 2 (idx), ERR 6 (bad path_len, data_type 0, payload > 165), ERR 3 |
+| 62 | 3E | SEND_CHANNEL_DATA | `[1]idx, [2]path_len (0xFF = flood, else encoded), [3..]path bytes (absent if 0xFF), then data_type u16 LE, then payload` | len≥4 (shorter → **ERR 6**, not ERR 1) | OK / ERR 2 (idx), ERR 6 (bad path_len, data_type 0, payload > 165), ERR 3 |
 | 63 | 3F | SET_DEFAULT_FLOOD_SCOPE | `[1..31]name char[31] (NUL-terminated, 1..30 chars), [32..47]key[16]`. Shorter frame → clear. | len≥48 for set | OK / ERR 6. Persisted. |
 | 64 | 40 | GET_DEFAULT_FLOOD_SCOPE | — | | `[0]=0x1C, [1..31]name, [32..47]key` (48 B) or `[0]=0x1C` only when unset |
 | 65 | 41 | SEND_RAW_PACKET | `[1]priority, [2..]complete raw mesh packet (wire format, see mesh-packet-format.md)` | len≥4, parses | OK / ERR 6 / ERR 3 |
