@@ -1,0 +1,22 @@
+{
+  "name": "meshcore-web",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/core",
+    "packages/web"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "npm run build -w packages/core && npm run build -w packages/web",
+    "test": "npm test -w packages/core && npm test -w packages/web",
+    "typecheck": "npm run typecheck -w packages/core && npm run typecheck -w packages/web",
+    "lint": "npm run typecheck",
+    "dev": "npm run dev -w packages/web"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2"
+  }
+}

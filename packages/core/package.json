@@ -1,0 +1,33 @@
+{
+  "name": "@meshcore-web/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./util/bytes": {
+      "source": "./src/util/bytes.ts",
+      "types": "./dist/util/bytes.d.ts",
+      "import": "./dist/util/bytes.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "6.2.5",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5"
+  }
+}

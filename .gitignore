@@ -1,0 +1,7 @@
+node_modules/
+dist/
+test-results/
+.vite/
+packages/web/test/__screenshots__/
+*.tsbuildinfo
+.DS_Store

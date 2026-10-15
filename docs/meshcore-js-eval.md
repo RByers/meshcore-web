@@ -1,0 +1,22 @@
+# Evaluation: should we depend on @liamcottle/meshcore.js 1.15.0?
+
+**Recommendation: don't depend on it. Reimplement the codec in TypeScript, using meshcore.js only as a reference.** If we want to save time, vendor (copy, with the MIT licence) two small pure files: the `Advert` app-data parser and the Packet header/path helpers.
+
+| Question | Finding (evidence) |
+|---|---|
+| Does `serialport` load eagerly? | No. `NodeJSSerialConnection.connect()` does `await import('serialport')` and `TCPConnection.connect()` does `await import("net")`. `index.js` statically imports both classes, but neither touches Node APIs at module load. |
+| Does it bundle with Vite? | Yes, with noise. Test in a scratch project (vite 5.4.10 build, `import { WebSerialConnection, Packet }`): build succeeds, emits about 20 "Module stream/fs/path/... externalized for browser compatibility" warnings from `@serialport/*`, and tree-shakes serialport out of the output (48 kB index + 28 kB ed25519 chunk). In dev, the dep optimizer pre-bundles serialport and `net` into lazy chunks. `npm install` still pulls serialport plus native-binding packages (`node-gyp-build`, `@serialport/bindings-cpp`) into our lockfile. |
+| Raw frames available? | Yes for frames: `Connection.onFrameReceived` emits `"rx"` with the de-framed companion frame, and `sendToRadioFrame` emits `"tx"`. That is enough to log every frame to IndexedDB. Raw packets come only via `LOG_RX_DATA` (`raw`) and `RAW_DATA` (`payload`) events. Caveat: serial `onDataReceived` silently resyncs and drops bytes, so we never see malformed input. |
+| TypeScript types? | None: no `.d.ts`, no `types` field, plain JS with `class` statics. We would have to write ambient declarations for every event payload. |
+| Newer protocol features? | Partial. It lacks 21 of the commands handled by firmware v1.18 (contact-by-key, path discovery, anon req, autoadd config, path hash mode, default flood scope, raw packet, CLI command, custom vars, tuning, advert path, PIN, factory reset, …). It also lacks responses 0x15-0x17, 0x19, 0x1A, 0x1C, 0x1D and pushes 0x86, 0x8D, 0x8F, 0x90 (they log "unhandled frame"). See companion-protocol.md §12. |
+| Correctness | Several parsing bugs against the firmware: DEVICE_INFO tail decoded as one string; signed-message author prefix left in the text; TRACE SNR count wrong for multi-byte hashes; `outPathLen` read as int8 (breaks 3-byte-hash paths); `readCString` returns `undefined` when there is no NUL; `setRadioParams` omits the repeat byte, which silently turns client repeat off; LOGIN_SUCCESS truncated. |
+| API design | Request/response correlation is "first event of that code wins" (`once(ResponseCodes.Ok …)`). There is no command queue or mutex: the code itself notes "GATT operation already in progress", and concurrent calls cross-resolve on OK/ERR. A UI that issues overlapping commands, and a device emulator, both need a strict one-in-flight queue with per-command expected-response sets. |
+| Packet decoder | `Packet.fromBytes` handles the header, transport codes and multi-byte paths correctly. Payload parsing is mostly `// todo`: no decryption, no PATH/RESPONSE/TXT bodies, no GRP_TXT/GRP_DATA/TRACE/CONTROL/MULTIPART. CayenneLPP covers about 12 types and aborts on unknown ones (no analog, altitude, frequency, distance, …, though our firmware emits them). |
+
+Why reimplement rather than depend:
+1. We have to store and replay every frame byte-exactly, and an emulator has to encode the same frames. One shared TS codec (`encode`/`decode` per frame type, table-driven from companion-protocol.md) serves the client, the emulator and the decoder. meshcore.js has no encoders for responses or pushes.
+2. Writing the types is about as much work as writing the codec (each frame is under 15 fields).
+3. Its transports are 100-line wrappers around Web Serial and Web Bluetooth. We need our own anyway, for reconnect, MTU handling, a write mutex, and frame logging before resync.
+4. It avoids putting `serialport`, its native-binding packages and `@noble/curves` 1.x into a browser-only lockfile. We will need @noble/curves (or WebCrypto) for Ed25519/X25519 regardless, and should choose that version ourselves.
+
+Use meshcore.js as a reference for: field naming, the serial resync heuristic, the Web Bluetooth service lookup, and the hashtag-region key derivation. Its examples are useful as test vectors only after checking them against the firmware.
