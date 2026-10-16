@@ -39,6 +39,16 @@
       "source": "./src/protocol/index.ts",
       "types": "./dist/protocol/index.d.ts",
       "import": "./dist/protocol/index.js"
+    },
+    "./packet": {
+      "source": "./src/packet/index.ts",
+      "types": "./dist/packet/index.d.ts",
+      "import": "./dist/packet/index.js"
+    },
+    "./emulator": {
+      "source": "./src/emulator/index.ts",
+      "types": "./dist/emulator/index.d.ts",
+      "import": "./dist/emulator/index.js"
     }
   },
   "files": [

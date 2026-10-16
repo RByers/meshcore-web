@@ -97,6 +97,8 @@ Public channel PSK: `8b3387e9c5cdea6ac9e5edbaa115cd72` (base64 `izOH6cXN6mrJ5e26
 
 To decrypt: try every known contact whose pubkey[0] == src_hash (when the local node is the destination) and check the MAC.
 
+Size guards when building (`Mesh::create*Datagram`): reject when `data_len + overhead + 15 > 184`, with overhead 2 for REQ/RESPONSE/TXT_MSG (the MAC; the 2 hash bytes are not counted), 33 for ANON_REQ (hash + pubkey; the MAC is not counted) and 1 for GRP_TXT/GRP_DATA. `createPathReturn` instead requires `path bytes + extra_len + 5 ≤ 166`.
+
 ### 3.1 REQ (0x00) plaintext
 
 | Off | Size | Field |
@@ -160,7 +162,7 @@ Legacy servers return `"OK"` at offset 4. Wrong password → **no response at al
 | 48 | u32 | total_rx_air_time_secs |
 | 52 | u32 | n_recv_errors |
 
-Total 56 bytes. Older repeaters stop at 48 (meshcore.js treats 48-55 as optional).
+Total 56 bytes. Older repeaters stop at 48 (meshcore.js treats 48-55 as optional). Over the air the RESPONSE plaintext is zero-padded to 16 bytes, so both a repeater body (4 + 56) and a room body (4 + 52) decrypt to 60 bytes after the tag: an over-the-air decoder cannot tell them apart by length and must use the contact type.
 **Room server `ServerStats`** (`ROOM` L24-39): identical up to offset 47, then `[48]n_posted u16, [50]n_post_push u16`, total 52. The two can be distinguished only by length or by the contact type.
 
 **Telemetry** (0x03): `[LPP bytes]` (§4).
@@ -261,7 +263,7 @@ Anon replies (RESPONSE body): regions → `[tag][now u32][ASCII "name,name,…,"
 |---|---|---|
 | 0 | 1 | path_len (encoded) — the route **from the original sender to this node** (the flood path the original packet accumulated). The recipient uses it as its out_path. |
 | 1 | hops×size | path |
-| next | 1 | extra_type (low 4 bits = a PAYLOAD_TYPE; 0xFF = none) |
+| next | 1 | extra_type (low 4 bits = a PAYLOAD_TYPE; 0xFF = none). The receiver masks with 0x0F, so 0xFF is dispatched as type 15 and ignored. |
 | next | rest | extra: ACK (3) → 4 or 6 ACK bytes; RESPONSE (1) → a full response body (§3.2); none → 4 random bytes |
 
 ### 3.10 TRACE (0x09) — unencrypted, always DIRECT (`Mesh::createTrace` L605, `sendDirect` L698-704, `Mesh.cpp` L42-68)
@@ -333,7 +335,7 @@ Stream of `[channel u8][type u8][value, big-endian]`. Channel 1 = `TELEM_CHANNEL
 Cross-check against the firmware's own LPP helper `src/helpers/sensors/LPPDataHelpers.h`, which defines `LPPReader`/`LPPWriter`. These are used by the companion UI to parse its own telemetry and by the sensor AVG_MIN_MAX reply:
 - The `#define` comments and `*_MULT` constants agree with the table above.
 - Its `getDataSize()` returns **2** for RELATIVE_HUMIDITY and `getMultiplier()` returns **10** for it. This contradicts its own `#define` (1 byte, ×2) and the CayenneLPP library. Treat it as a firmware bug, not the wire format: telemetry produced by `CayenneLPP::addRelativeHumidity` is 1 byte, /2. **However**, sensor AVG_MIN_MAX replies are written with `LPPData::putFloat` and therefore use 2-byte, ×10 humidity.
-- `isSigned()` = altitude, temperature, gyrometer, analog in/out, GPS, accelerometer. Voltage, current and power are unsigned. meshcore.js reads voltage and current signed on purpose, to allow negative values.
+- `isSigned()` = altitude, temperature, gyrometer, analog in/out, GPS, accelerometer. Voltage, current and power are unsigned. meshcore.js reads voltage and current signed on purpose, to allow negative values. The firmware's own `LPPReader::readCurrent` also reads current signed, and `LPPReader::readRelativeHumidity` reads 1 byte /2 (consistent with the wire format, unlike `getDataSize`).
 - Types it doesn't list (e.g. 122 load) fall back to size 1 in `getDataSize`. UNVERIFIED that the library ever emits 122; it is not used by firmware sensors.
 
 Sensor AVG_MIN_MAX reply body (`SENS` L165-197): `[tag u32][now u32]`, then up to 8 × `{channel u8, lpp_type u8, min, max, avg}`, where each value is `getDataSize(type)` bytes big-endian, scaled by `getMultiplier(type)`, two's complement if `isSigned(type)`.

@@ -324,6 +324,8 @@ Empty slot = name `""`, secret all zeros. Slot 0 is preloaded with `"Public"`, s
 | 0x8F | CONTACT_DELETED | `[1..32]pubkey` | the oldest non-favourite contact was overwritten (autoadd bit0) | `MM onContactOverwrite` L342 |
 | 0x90 | CONTACTS_FULL | `[0]` only | after the NEW_ADVERT for an advert that could not be stored | `MM onContactsFull` L351 |
 
+Note: there is no host command to enable or disable LOG_RX_DATA in v1.18 (no "SET_LOG" command); it is emitted for every receive whenever an interface reports connected.
+
 ### 6.1 Messages are NOT pushed directly
 
 Contact messages, channel messages and channel datagrams are **never** sent to the host as pushes. They are encoded into a frame, appended to the offline queue, then a 1-byte `MSG_WAITING` (0x83) is sent if connected (`MM queueMessage`, `onChannelMessageRecv`, `onChannelDataRecv`). The host must drain the queue with `CMD_SYNC_NEXT_MESSAGE` until `NO_MORE_MESSAGES` (0x0A). FIFO order.
@@ -416,6 +418,9 @@ In order of evaluation (only one pending slot is non-zero, see §4 notes):
 4. len>4 and tag == `pending_req` → BINARY_RESPONSE `[2..5]=tag`.
 5. Otherwise → BINARY_RESPONSE `[1]=0, [2..]=entire response` (e.g. sensor telemetry pushes).
 PATH_DISCOVERY is matched separately in `onContactPathRecv` (tag == pending_discovery), and the reciprocal path is suppressed.
+- Rule 1 has no `len > 4` check, and the login reply's tag is the **server's** clock, not the request tag. Rules 3/4 compare the reply's first 4 bytes with the pending tag (the companion's `getCurrentTimeUnique()`), so a late reply whose tag happens to equal the pending tag is mis-delivered (e.g. a late login reply stamped with the same second as a pending telemetry request becomes a TELEMETRY_RESPONSE). Clients should check the prefix as well.
+- A matched PATH_DISCOVERY reply does **not** update the contact's out_path (MyMesh returns before the base class). An unmatched one (late) takes the normal PATH route: out_path replaced, PATH_UPDATED, then the RESPONSE extra is handled by the rules above (→ generic BINARY_RESPONSE).
+- Any request or message sent flood is answered inside a flood PATH packet (`BCM onPeerDataRecv`), so the companion first replaces out_path and pushes PATH_UPDATED, then handles the ACK / RESPONSE extra (`BCM onContactPathRecv` L353-370).
 
 ---
 
@@ -455,6 +460,8 @@ Total 148 bytes. In CMD_ADD_UPDATE_CONTACT, offsets 136-147 are optional (lat/lo
 - Adverts with timestamp ≤ the stored `last_advert_timestamp` are ignored (replay protection), with no push.
 - Adverts without a name are ignored.
 - Each advert accepted from a contact: update name, type, lat/lon (only if present), last_advert_timestamp, lastmod=now. Push ADVERT (0x80). Also records `{prefix7, name, path}` in the 16-entry advert-path table (CMD 42).
+- `lastmod` is also set to the RTC "now" when a PLAIN or SIGNED_PLAIN message is received from the contact (`BCM onPeerDataRecv` L236, L293) and when a PATH replaces its out_path (`BCM onContactPathRecv` L357), but not for CLI_DATA messages or RESET_PATH. Such contacts therefore reappear in a since-filtered GET_CONTACTS.
+- Contacts added with CMD_ADD_UPDATE_CONTACT have no stored advert blob until an advert from them is received, so SHARE_CONTACT answers ERR 3 and EXPORT_CONTACT ERR 2 for them.
 
 ---
 

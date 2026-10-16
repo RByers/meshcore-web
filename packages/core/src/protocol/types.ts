@@ -510,13 +510,17 @@ export type Command =
   /** 0x24. `pathHashSize` 1/2/4/8 → flags bits 0-1 (default 1). path = concatenated hop hashes. */
   | { kind: 'sendTracePath'; tag: number; authCode: number; path: Uint8Array; pathHashSize?: number }
   | { kind: 'setDevicePin'; pin: number }
-  /** 0x26. Always sent in full (5 bytes). */
+  /**
+   * 0x26. The client should always send all fields (5 bytes). Trailing fields are optional on
+   * the wire (§4 CMD 38) and absent ones leave the device setting unchanged; each requires the
+   * previous one.
+   */
   | {
       kind: 'setOtherParams';
       manualAddContacts: number;
-      telemetryModes: TelemetryModes;
-      advertLocPolicy: number;
-      multiAcks: number;
+      telemetryModes?: TelemetryModes;
+      advertLocPolicy?: number;
+      multiAcks?: number;
     }
   /** 0x27. No pubKey = self telemetry (exactly 4 bytes). */
   | { kind: 'sendTelemetryReq'; pubKey?: Uint8Array }
