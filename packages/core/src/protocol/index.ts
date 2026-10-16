@@ -5,3 +5,4 @@ export * from './encode.js';
 export * from './decode.js';
 export * from './decode-command.js';
 export * from './encode-frame.js';
+export * from './annotate-frame.js';

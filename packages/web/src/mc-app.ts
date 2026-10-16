@@ -10,6 +10,7 @@ import { HashRouter, hrefFor, pages, type PageDef, type Route } from './router.j
 import { shared, tokens } from './styles.js';
 import './components/mc-toasts.js';
 import './pages/index.js';
+import { bindTheme } from './theme.js';
 
 /** Elements rendered as pages get these properties. */
 export interface PageElement extends HTMLElement {
@@ -226,13 +227,15 @@ export class McApp extends AppElement {
     const conn = this.app.connection;
     this.#offs.push(
       conn.events.on('connected', () => {
-        if (this.router.path.peek() === '/') this.router.navigate('/device');
+        // land on the conversations overview when the messaging pages are registered
+        if (this.router.path.peek() === '/') this.router.navigate(this.router.registry.match('/messages') ? '/messages' : '/device');
       }),
       conn.events.on('disconnected', () => {
         this.router.navigate('/');
       }),
     );
     void this.app.refreshDevices();
+    this.#offs.push(bindTheme(this.app));
   }
 
   override disconnectedCallback(): void {
@@ -264,7 +267,11 @@ export class McApp extends AppElement {
       route = this.router.registry.match('/');
     }
     const unread = conn.connected.value ? this.app.unread.totals.value : null;
-    const counts: Record<string, number> = { '/contacts': unread?.contacts ?? 0, '/channels': unread?.channels ?? 0 };
+    const counts: Record<string, number> = {
+      '/messages': unread?.total ?? 0,
+      '/contacts': unread?.contacts ?? 0,
+      '/channels': unread?.channels ?? 0,
+    };
     const current = route?.page.path;
     return html`
       <a class="skip" href="#main" @click=${this.#skip}>Skip to content</a>

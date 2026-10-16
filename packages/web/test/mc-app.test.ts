@@ -25,25 +25,30 @@ describe('<mc-app> shell', () => {
     await t.mount();
     expect(t.query('.brand')?.textContent).toBe('MeshCore Web');
     const nav = t.queryAll<HTMLAnchorElement>('nav a').map((a) => a.dataset['path']);
-    expect(nav).toEqual(['/', '/device', '/contacts', '/channels', '/packets', '/settings']);
+    expect(nav).toEqual(['/', '/device', '/messages', '/contacts', '/channels', '/packets', '/settings']);
     expect(t.query('nav a[aria-current="page"]')?.dataset['path']).toBe('/');
     expect(t.query('mc-connect-page')).not.toBeNull();
     expect(t.query('.chip')?.textContent).toContain('Not connected');
     expect(t.query('[data-action="disconnect"]')).toBeNull();
   });
 
-  it('routes to placeholder pages and redirects connection-only pages', async () => {
+  it('redirects connection-only pages while disconnected, routes them once connected, and 404s unknown paths', async () => {
     const t = harness();
     await t.mount();
-    location.hash = '#/channels';
-    await t.until(() => t.query('mc-placeholder-page'), 2000, 'placeholder');
-    await t.until(() => t.text().includes('Coming soon'));
+    for (const path of ['/channels', '/device', '/messages']) {
+      location.hash = `#${path}`;
+      await t.until(() => location.hash === '#/' && t.query('mc-connect-page'), 3000, `redirect from ${path}`);
+    }
+    expect(t.query('mc-channels-page')).toBeNull();
+    location.hash = '#/nope';
+    await t.until(() => t.text().includes('Page not found'), 3000, 'not found');
+
+    location.hash = '#/';
+    await t.until(() => t.query('mc-connect-page'), 3000, 'connect page');
+    await t.connectEmulator('/channels');
+    await t.until(() => t.query('mc-channels-page'), 3000, 'channels page');
     expect(t.query('nav a[aria-current="page"]')?.dataset['path']).toBe('/channels');
     expect(document.title).toBe('Channels · MeshCore Web');
-    location.hash = '#/nope';
-    await t.until(() => t.text().includes('Page not found'));
-    location.hash = '#/device';
-    await t.until(() => location.hash === '#/' && t.query('mc-connect-page'), 2000, 'redirect');
   });
 
   it('nav links are keyboard reachable', async () => {
@@ -61,8 +66,10 @@ describe('connect flows', () => {
     const t = harness();
     await t.mount();
     expect(t.text()).toContain('simulated radio');
-    await t.click('[data-connect="emulator"]');
-    await t.until(() => location.hash === '#/device' && t.query('[data-field="name"]'), 5000, 'device page');
+    await t.connectEmulator();
+    expect(location.hash).toBe('#/messages');
+    location.hash = '#/device';
+    await t.until(() => t.query('[data-field="name"]'), 5000, 'device page');
     expect(t.query('[data-field="name"]')!.textContent).toBe('Emulator');
     const scenario = t.emulatorScenario();
     expect(t.query('[data-field="pubkey"]')!.getAttribute('title')).toBe(toHex(scenario.keys.self));
@@ -80,7 +87,9 @@ describe('connect flows', () => {
     await t.until(() => t.app.connection.phase.value === 'connected', 5000, 'connected');
     expect(t.serial.port.openOptions).toEqual({ baudRate: 115200 });
     expect(t.serial.framesFromHost.length).toBeGreaterThan(3);
-    await t.until(() => t.query('[data-field="link"]')?.textContent?.includes('USB serial 239a:8029'), 3000, 'link');
+    await t.until(() => location.hash === '#/messages', 3000, 'landing page');
+    location.hash = '#/device';
+    await t.until(() => t.query('[data-field="link"]')?.textContent?.includes('USB serial 239a:8029'), 5000, 'link');
     expect(t.app.connection.kind.value).toBe('serial');
 
     await t.click('[data-action="disconnect"]');
@@ -177,7 +186,7 @@ describe('connect flows', () => {
     expect(t.query('.option[data-kind="emulator"] .badge')?.textContent).toBe('Last used');
     expect(t.query('[data-reconnect]')!.closest('li')!.textContent).toContain('Emulator');
     await t.click('[data-reconnect]');
-    await t.until(() => location.hash === '#/device' && t.app.connection.connected.value, 5000, 'reconnected');
+    await t.until(() => location.hash === '#/messages' && t.app.connection.connected.value, 10000, 'reconnected');
   });
 
   it('keeps the nav visible on a narrow viewport', async () => {
@@ -192,7 +201,7 @@ describe('connect flows', () => {
       expect(r.height).toBeGreaterThan(0);
       const main = t.query('main')!.getBoundingClientRect();
       expect(r.top).toBeGreaterThanOrEqual(main.top);
-      expect(t.queryAll('nav a').length).toBe(6);
+      expect(t.queryAll('nav a').length).toBe(7);
     } finally {
       await page.viewport(1280, 800);
     }

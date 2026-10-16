@@ -55,6 +55,8 @@ export interface PacketQuery extends LogQueryBase {
   source?: PacketSource;
   /** Exact packet hash hex (finds re-heard copies of one packet). Results ordered by id. */
   hash?: string;
+  /** Extra residual predicate (applied before offset/limit, and by count/export). */
+  match?: (r: PacketRecord) => boolean;
 }
 
 const PACKET_SOURCES = ['logRxData', 'rawData', 'traceData', 'sent', 'import', 'other'] as const;
@@ -200,20 +202,21 @@ export class PacketLog extends TimeLog<PacketRecord, PacketQuery> {
     const routeF = routeType === undefined ? undefined : (r: PacketRecord) => r.routeType === routeType;
     const srcF = source === undefined ? undefined : (r: PacketRecord) => r.source === source;
     const ptF = payloadType === undefined ? undefined : (r: PacketRecord) => r.payloadType === payloadType;
+    const m = q.match;
     if (q.hash !== undefined) {
       return {
         index: INDEX.packets.hash,
         query: this.db.only(q.hash.toLowerCase()),
-        ...combine([this.tsFilter(q), dirF, routeF, srcF, ptF]),
+        ...combine([this.tsFilter(q), dirF, routeF, srcF, ptF, m]),
       };
     }
     if (payloadType !== undefined) {
-      return { index: INDEX.packets.payloadTypeTs, query: this.tsRange([payloadType], q), ...combine([dirF, routeF, srcF]) };
+      return { index: INDEX.packets.payloadTypeTs, query: this.tsRange([payloadType], q), ...combine([dirF, routeF, srcF, m]) };
     }
     if (direction !== undefined) {
-      return { index: INDEX.packets.directionTs, query: this.tsRange([direction], q), ...combine([routeF, srcF]) };
+      return { index: INDEX.packets.directionTs, query: this.tsRange([direction], q), ...combine([routeF, srcF, m]) };
     }
-    return { index: INDEX.packets.ts, query: this.tsRange([], q), ...combine([routeF, srcF]) };
+    return { index: INDEX.packets.ts, query: this.tsRange([], q), ...combine([routeF, srcF, m]) };
   }
 
   protected validateImported(o: Record<string, unknown>, bytes: Uint8Array): Omit<PacketRecord, 'id'> {

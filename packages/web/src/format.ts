@@ -28,3 +28,20 @@ export function formatRelative(ts: number, now = Date.now()): string {
 export function batteryPercent(mv: number): number {
   return Math.max(0, Math.min(100, Math.round(((mv - 3000) / 1200) * 100)));
 }
+
+/** Clock time of an epoch-ms timestamp ("14:05"), with the date when not today. */
+export function formatTime(ts: number, now = Date.now()): string {
+  const d = new Date(ts);
+  const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  return new Date(now).toDateString() === d.toDateString() ? time : `${d.toLocaleDateString()} ${time}`;
+}
+
+/** "6.5 dB" */
+export function formatSnr(snr: number): string {
+  return `${Number.isInteger(snr) ? snr : snr.toFixed(2).replace(/0$/, '')} dB`;
+}
+
+/** "850 ms" / "1.2 s" */
+export function formatDuration(ms: number): string {
+  return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
+}

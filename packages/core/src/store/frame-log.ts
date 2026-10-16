@@ -19,6 +19,8 @@ export interface FrameQuery extends LogQueryBase {
   direction?: FrameDirection;
   code?: number;
   kind?: string;
+  /** Extra residual predicate (applied before offset/limit, and by count/export). */
+  match?: (r: FrameRecord) => boolean;
 }
 
 /** Best-effort frame kind: `DeviceFrame['kind']` for 'in', `Command['kind']` for 'out'. */
@@ -67,15 +69,16 @@ export class FrameLog extends TimeLog<FrameRecord, FrameQuery> {
   protected plan(q: FrameQuery): QueryPlan<FrameRecord> {
     const kind = q.kind;
     const kindFilter = kind === undefined ? undefined : (r: FrameRecord) => r.kind === kind;
+    const m = q.match;
     if (q.code !== undefined) {
       const direction = q.direction;
-      const filters = [kindFilter, direction === undefined ? undefined : (r: FrameRecord) => r.direction === direction];
+      const filters = [kindFilter, m, direction === undefined ? undefined : (r: FrameRecord) => r.direction === direction];
       return { index: INDEX.frames.codeTs, query: this.tsRange([q.code], q), ...combine(filters) };
     }
     if (q.direction !== undefined) {
-      return { index: INDEX.frames.directionTs, query: this.tsRange([q.direction], q), ...combine([kindFilter]) };
+      return { index: INDEX.frames.directionTs, query: this.tsRange([q.direction], q), ...combine([kindFilter, m]) };
     }
-    return { index: INDEX.frames.ts, query: this.tsRange([], q), ...combine([kindFilter]) };
+    return { index: INDEX.frames.ts, query: this.tsRange([], q), ...combine([kindFilter, m]) };
   }
 
   protected validateImported(o: Record<string, unknown>, bytes: Uint8Array): Omit<FrameRecord, 'id'> {

@@ -23,7 +23,7 @@ import {
   buildTxtMsgPlaintext,
   channelHash,
 } from './payloads.js';
-import { annotatePacket, annotatePacketSync, type AnnotateKeys, type AnnotationNode } from './annotate.js';
+import { annotatePacket, annotatePacketSync, annotatePayload, annotatePayloadSync, type AnnotateKeys, type AnnotationNode } from './annotate.js';
 
 const PSK = fromHex(PUBLIC_CHANNEL_SECRET_HEX);
 const a = await ed25519KeyPairFromSeed(Uint8Array.from({ length: 32 }, (_, i) => i + 1));
@@ -335,5 +335,31 @@ describe('annotatePacket — garbage input never throws and stays tiled', () => 
         checkTiling(await annotatePacket(concatBytes(bad, randomBytes(Math.floor(rnd() * 4))), { keys: KEYS }));
       }
     }
+  });
+});
+
+describe('annotatePayload (bare payloads: RAW_DATA / TRACE_DATA / CONTROL_DATA records)', () => {
+  it('TRACE payload §3.10: offsets relative to the payload, tiling', async () => {
+    const pl = buildTracePayload({ tag: 7, authCode: 9, flags: 1, hashes: fromHex('aabbccdd') });
+    const ann = await annotatePayload(PayloadType.TRACE, pl);
+    checkTiling(ann);
+    expect(ann.errors).toEqual([]);
+    expect(ann.value).toBe('TRACE, 13 bytes');
+    expect(find(ann, 'tag')).toMatchObject({ offset: 0, length: 4, value: '7' });
+    expect(find(ann, 'flags')).toMatchObject({ offset: 8, length: 1 });
+    expect(find(ann, 'hash[1]')).toMatchObject({ offset: 11, length: 2, value: 'ccdd' });
+  });
+
+  it('GRP_TXT payload decrypts with a PSK; sync variant does not', async () => {
+    const pl = await buildGroupDatagramPayload({
+      channelHash: await channelHash(PSK),
+      secret: PSK,
+      plaintext: buildGrpTxtPlaintext({ timestamp: 1, senderName: 'a', text: 'b' }),
+    });
+    const ann = await annotatePayload(PayloadType.GRP_TXT, pl, { keys: KEYS });
+    checkTiling(ann);
+    expect(find(ann, 'text')).toMatchObject({ decrypted: true, value: '"a: b"' });
+    expect(find(annotatePayloadSync(PayloadType.GRP_TXT, pl), 'text')).toBeUndefined();
+    expect((await annotatePayload(PayloadType.ACK, new Uint8Array(0))).errors).toEqual(['empty payload']);
   });
 });

@@ -27,6 +27,13 @@ export const tokens = css`
     --mc-mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
     accent-color: var(--mc-accent);
   }
+  /* theme override (Settings → App → Theme), see theme.ts */
+  :host-context(html[data-theme='light']) {
+    color-scheme: light;
+  }
+  :host-context(html[data-theme='dark']) {
+    color-scheme: dark;
+  }
 `;
 
 export const shared = css`

@@ -221,6 +221,7 @@ Notes:
 - **Only one remote request can be outstanding.** Every SEND_LOGIN / STATUS / TELEMETRY / BINARY / ANON / PATH_DISCOVERY calls `clearPendingReqs()` (`MM.h` L192), so a response to an earlier request is no longer recognised. It is then delivered as a generic BINARY_RESPONSE (§6.10).
 - Sends choose flood or direct automatically: flood if the contact's `out_path_len == 0xFF`, else direct. `SENT[1]` reports which was used.
 - `SET_OTHER_PARAMS`, `SET_TUNING_PARAMS` and `SET_RADIO_PARAMS` have no length checks. Always send full frames.
+- There is **no command for automatic advert intervals or flood limits** on companion firmware: `advert_interval`, `flood_advert_interval` and `flood_max*` exist only as commented-out custom-var definitions (`NodePrefs.h` L145-147, L195-196). Those are repeater CLI settings (`set advert.interval`, …).
 
 ---
 

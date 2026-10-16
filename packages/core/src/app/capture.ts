@@ -5,7 +5,8 @@
  *   are extracted there);
  * - contact / channel message pushes → `MessagesRepo.append` (which bumps unread counts);
  * - `contactsChanged` → `ContactsRepo.syncFromDevice` / `markRemovedFromDevice`;
- * - `selfInfo` updates → `DevicesRepo.update`.
+ * - `selfInfo` updates → `DevicesRepo.update`;
+ * - SEND_CONFIRMED pushes → `MessagesRepo.markDeliveredByAck` (outgoing DMs expecting that ACK).
  *
  * The pipeline is attached to the client *before* `connect()` so the handshake is captured too.
  * The radio's public key is only known once the handshake has finished, so events are buffered
@@ -57,6 +58,9 @@ export class CapturePipeline {
       ev.on('channelMessage', (e) => this.#enqueue('channelMessage', (s) => this.#channelMessage(s, e))),
       ev.on('contactsChanged', (e) => this.#enqueue('contactsChanged', (s) => this.#contactsChanged(s, e))),
       ev.on('selfInfo', (e) => this.#enqueue('selfInfo', (s) => this.#selfInfo(s, e))),
+      ev.on('sendConfirmed', (e) =>
+        this.#enqueue('sendConfirmed', (s) => s.messages.markDeliveredByAck(e.ackCode, { roundTripMs: e.roundTripMs, now: this.client.clock.now() }).then(() => undefined)),
+      ),
     ];
   }
 

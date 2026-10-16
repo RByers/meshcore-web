@@ -143,6 +143,8 @@ export class ConnectionModel {
 
   #session: Session | null = null;
   #seq = 0;
+  /** Set by {@link expectDisconnect}: the session whose link loss is intentional (reboot…). */
+  #expectedLoss: { session: Session; message: string } | null = null;
   #teardown: Promise<void> = Promise.resolve();
 
   constructor(private readonly deps: ConnectionModelDeps) {
@@ -302,8 +304,27 @@ export class ConnectionModel {
     }
   }
 
+  /**
+   * Marks the next link loss of the current session as intentional (REBOOT, FACTORY_RESET,
+   * identity change): it is reported as an info toast with `message` and `disconnected` is
+   * emitted without an error.
+   */
+  expectDisconnect(message: string): void {
+    const s = this.#session;
+    if (s) this.#expectedLoss = { session: s, message };
+  }
+
   #onLinkLost(s: Session, error: Error): void {
     this.#session = null;
+    const expected = this.#expectedLoss?.session === s ? this.#expectedLoss : null;
+    this.#expectedLoss = null;
+    if (expected) {
+      this.#phase.value = 'disconnected';
+      this.deps.notifications.info(expected.message);
+      void this.#cleanup(s);
+      this.events.emit('disconnected', {});
+      return;
+    }
     batch(() => {
       this.#phase.value = 'disconnected';
       this.#error.value = error;

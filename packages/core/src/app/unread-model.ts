@@ -28,7 +28,11 @@ export class UnreadModel extends StoreBoundModel {
   }
 
   protected async load(store: RadioStore): Promise<void> {
-    this.#totals.value = await store.messages.totalUnread();
+    const t = await store.messages.totalUnread();
+    // muted channels keep their own count but do not add to the badges
+    let muted = 0;
+    for (const c of await store.channels.list()) if (c.muted) muted += c.unread;
+    this.#totals.value = { contacts: t.contacts, channels: t.channels - muted, total: t.total - muted };
   }
 
   protected reset(): void {

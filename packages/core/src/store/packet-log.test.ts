@@ -165,3 +165,24 @@ describe('PacketLog', () => {
     s.close();
   });
 });
+
+describe('log queries with a residual `match` predicate', () => {
+  it('applies match before offset/limit and in count/export, combined with indexed filters', async () => {
+    const s = await openStore();
+    for (let i = 0; i < 6; i++) await s.packets.append({ direction: i % 2 ? 'tx' : 'rx', bytes: grpTxtPacket(i % 3), ts: 100 + i });
+    const even = (r: { pathLen: number }) => r.pathLen === 0;
+    const page = await s.packets.query({ match: even, order: 'asc', limit: 1, offset: 1 });
+    expect(page.items.map((r) => r.ts)).toEqual([103]);
+    expect(page.hasMore).toBe(false);
+    expect(await s.packets.count({ match: even })).toBe(2);
+    expect(await s.packets.count({ match: even, direction: 'tx' })).toBe(1);
+    expect(await s.packets.count({ match: even, payloadType: PayloadType.GRP_TXT })).toBe(2);
+    expect((await s.packets.export({ match: even })).count).toBe(2);
+    await s.frames.append({ direction: 'out', bytes: Uint8Array.of(0x16, 3), ts: 1 });
+    await s.frames.append({ direction: 'in', bytes: Uint8Array.of(0x00), ts: 2 });
+    expect(await s.frames.count({ match: (r) => r.size === 2 })).toBe(1);
+    expect(await s.frames.count({ match: (r) => r.size === 2, direction: 'in' })).toBe(0);
+    expect(await s.frames.count({ match: (r) => r.size === 2, code: 0x16 })).toBe(1);
+    s.close();
+  });
+});

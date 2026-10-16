@@ -8,6 +8,8 @@
  *   const el = await h.mount();             // <mc-app .app=${h.app}> at '#/'
  *   await h.click('[data-connect="serial"]');
  *   await h.until(() => h.app.connection.phase.value === 'connected');
+ *   // or, for the in-page emulator: connect, wait for the landing page, then go to a route
+ *   await h.connectEmulator('/settings');
  *   ...
  *   afterEach(() => h.cleanup());
  */
@@ -46,10 +48,23 @@ export interface Harness {
   query<T extends Element = HTMLElement>(selector: string): T | null;
   queryAll<T extends Element = HTMLElement>(selector: string): T[];
   click(selector: string): Promise<void>;
+  /**
+   * Clicks the Emulator connect button, waits for phase 'connected' and for the app's post-connect
+   * landing navigation (away from '#/'), then (if `path` is given) navigates to `path` and waits
+   * for the hash to settle there. Without `path` the app stays wherever it landed.
+   */
+  connectEmulator(path?: string, timeoutMs?: number): Promise<void>;
   /** Polls `cond` (every animation frame) until truthy; throws after `timeoutMs`. */
   until(cond: () => unknown, timeoutMs?: number, what?: string): Promise<void>;
   /** Text content of the whole UI, shadow roots included. */
   text(): string;
+  /** Sets an input / textarea / select value and fires input + change. */
+  fill(selector: string, value: string): Promise<void>;
+  /**
+   * Simulates a page reload: unmounts, disposes `app` and mounts a fresh AppModel (same options,
+   * same emulator scenarios, same IndexedDB). `h.app` is replaced.
+   */
+  reload(): Promise<McApp>;
   cleanup(): Promise<void>;
 }
 
@@ -100,7 +115,7 @@ export function createHarness(opts: HarnessOptions = {}): Harness {
   bleScenario.emulator.onFrame((f) => ble.pushFrameToHost(f));
 
   const emulatorFactory = createEmulatorTransportFactory(opts.scenario);
-  const app = new AppModel({
+  const makeApp = (): AppModel => new AppModel({
     ...(opts.serial === false
       ? {}
       : {
@@ -117,6 +132,7 @@ export function createHarness(opts: HarnessOptions = {}): Harness {
     reconnectableKinds: ['emulator', 'serial'],
     ...opts.app,
   });
+  const app = makeApp();
 
   const h: Harness = {
     app,
@@ -128,9 +144,9 @@ export function createHarness(opts: HarnessOptions = {}): Harness {
     el: undefined,
     async mount() {
       history.replaceState(null, '', '#/');
-      await app.init();
+      await h.app.init();
       const el = document.createElement('mc-app');
-      el.app = app;
+      el.app = h.app;
       document.body.append(el);
       h.el = el;
       await el.updateComplete;
@@ -147,6 +163,18 @@ export function createHarness(opts: HarnessOptions = {}): Harness {
       h.query(selector)!.click();
       await h.el?.updateComplete;
     },
+    async connectEmulator(path, timeoutMs = 10000) {
+      await h.click('[data-connect="emulator"]');
+      await h.until(() => h.app.connection.phase.value === 'connected', timeoutMs, 'phase connected');
+      // the app navigates from '/' to its landing page on 'connected'; wait so it can't override `path`
+      await h.until(() => location.hash !== '' && location.hash !== '#/', timeoutMs, 'post-connect landing page');
+      if (path !== undefined) {
+        const target = `#${path}`;
+        if (location.hash !== target) location.hash = target;
+        await h.until(() => location.hash === target && h.app.connection.phase.value === 'connected', timeoutMs, `route ${path}`);
+      }
+      await h.el?.updateComplete;
+    },
     async until(cond, timeoutMs = 5000, what = 'condition') {
       const start = performance.now();
       while (!cond()) {
@@ -157,10 +185,25 @@ export function createHarness(opts: HarnessOptions = {}): Harness {
     text() {
       return h.el ? deepText(h.el) : '';
     },
+    async fill(selector, value) {
+      await h.until(() => h.query(selector), 2000, selector);
+      const el = h.query<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>(selector)!;
+      el.value = value;
+      el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+      await h.el?.updateComplete;
+    },
+    async reload() {
+      h.el?.remove();
+      h.el = undefined;
+      await h.app.dispose();
+      h.app = makeApp();
+      return h.mount();
+    },
     async cleanup() {
       h.el?.remove();
       h.el = undefined;
-      await app.dispose();
+      await h.app.dispose();
       await deleteAppDatabases();
       history.replaceState(null, '', '#/');
     },

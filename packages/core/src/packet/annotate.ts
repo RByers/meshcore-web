@@ -200,6 +200,43 @@ export function annotatePacketSync(bytes: Uint8Array): Annotation {
   return buildAnnotation(bytes, { verifySignatures: false }, null);
 }
 
+/**
+ * Annotates a bare payload (no envelope), e.g. the RAW_DATA / TRACE_DATA / CONTROL_DATA payloads
+ * the device reports without their packet header. Offsets are relative to `bytes`. Never throws.
+ */
+export async function annotatePayload(payloadType: number, bytes: Uint8Array, opts: AnnotateOptions = {}): Promise<Annotation> {
+  const pending: Pending[] = [];
+  const ann = buildPayloadAnnotation(payloadType, bytes, opts, pending);
+  for (const p of pending) {
+    try {
+      await p();
+    } catch (e) {
+      ann.errors.push(`async step failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  return ann;
+}
+
+/** Synchronous structural variant of {@link annotatePayload}. */
+export function annotatePayloadSync(payloadType: number, bytes: Uint8Array): Annotation {
+  return buildPayloadAnnotation(payloadType, bytes, { verifySignatures: false }, null);
+}
+
+function buildPayloadAnnotation(payloadType: number, bytes: Uint8Array, opts: AnnotateOptions, pending: Pending[] | null): Annotation {
+  const errors: string[] = [];
+  const root: Annotation = { offset: 0, length: bytes.length, name: 'payload', value: `${payloadTypeName(payloadType)}, ${bytes.length} bytes`, errors };
+  try {
+    const f = new Fields(bytes, 0, bytes.length, 0, errors);
+    if (bytes.length === 0) errors.push('empty payload');
+    else annotatePayloadFields(payloadType, f, opts, pending);
+    root.children = f.finish();
+  } catch (e) {
+    errors.push(`annotator failure: ${e instanceof Error ? e.message : String(e)}`);
+    root.children = bytes.length ? [{ offset: 0, length: bytes.length, name: 'unparsed', value: toHex(bytes) }] : [];
+  }
+  return root;
+}
+
 function buildAnnotation(bytes: Uint8Array, opts: AnnotateOptions, pending: Pending[] | null): Annotation {
   const errors: string[] = [];
   const root: Annotation = { offset: 0, length: bytes.length, name: 'packet', value: `${bytes.length} bytes`, errors };
@@ -289,7 +326,7 @@ function annotateEnvelope(
   }
   const payloadNode = f.add(f.remaining, 'payload', toHex, `${payloadTypeName(payloadType)}`)!;
   const pf = new Fields(bytes, payloadNode.offset, bytes.length, 0, errors);
-  annotatePayload(payloadType, pf, opts, pending);
+  annotatePayloadFields(payloadType, pf, opts, pending);
   payloadNode.children = pf.finish();
   return f.nodes;
 }
@@ -298,7 +335,7 @@ function annotateEnvelope(
 // Payloads
 // ---------------------------------------------------------------------------
 
-function annotatePayload(type: number, f: Fields, opts: AnnotateOptions, pending: Pending[] | null): void {
+function annotatePayloadFields(type: number, f: Fields, opts: AnnotateOptions, pending: Pending[] | null): void {
   switch (type) {
     case PayloadType.REQ:
     case PayloadType.RESPONSE:

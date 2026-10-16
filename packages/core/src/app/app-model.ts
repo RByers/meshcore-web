@@ -10,7 +10,7 @@ import { RadioStore, type RadioStoreOptions } from '../store/radio-store.js';
 import type { ConversationType, DeviceRecord } from '../store/schema.js';
 import { basicScenario, type BasicScenario, type BasicScenarioOptions } from '../emulator/scenarios.js';
 import { ChannelsModel } from './channels-model.js';
-import { ChatModel } from './chat-model.js';
+import { ChatModel, type ChatModelOptions } from './chat-model.js';
 import {
   ConnectionModel,
   memoryPreferences,
@@ -19,10 +19,12 @@ import {
   type TransportFactory,
 } from './connection.js';
 import { ContactsModel } from './contacts-model.js';
-import { DeviceSettingsModel } from './device-settings-model.js';
+import { ConversationsModel } from './conversations-model.js';
+import { DeviceSettingsModel, type GeolocationProvider } from './device-settings-model.js';
+import { AppSettingsModel } from './app-settings-model.js';
 import { NotificationsModel, type NotificationsTimers } from './notifications.js';
 import { PacketLogModel } from './packet-log-model.js';
-import { RemoteAdminModel } from './remote-admin-model.js';
+import { RemoteAdminModel, type RemoteAdminOptions } from './remote-admin-model.js';
 import { signal, type ReadonlySignal } from './signal.js';
 import { UnreadModel } from './unread-model.js';
 
@@ -41,6 +43,12 @@ export interface AppModelOptions {
   clientOptions?: CompanionClientOptions;
   storeOptions?: Omit<RadioStoreOptions, 'factory' | 'keyRange'>;
   notificationTimers?: NotificationsTimers;
+  /** Current position for "use my location" in device settings (navigator.geolocation in the browser). */
+  geolocation?: GeolocationProvider;
+  /** Chat paging and DM retry tuning (tests use short timeouts). */
+  messaging?: ChatModelOptions;
+  /** Remote admin tuning (tests use short remote timeouts). */
+  remoteAdmin?: RemoteAdminOptions;
 }
 
 /**
@@ -70,14 +78,18 @@ export class AppModel {
   #contacts: ContactsModel | undefined;
   #channels: ChannelsModel | undefined;
   #unread: UnreadModel | undefined;
+  #conversations: ConversationsModel | undefined;
   #packetLog: PacketLogModel | undefined;
   #deviceSettings: DeviceSettingsModel | undefined;
+  #appSettings: AppSettingsModel | undefined;
+  readonly #prefs: PreferencesStore;
   #remoteAdmin: RemoteAdminModel | undefined;
   readonly #chats = new Map<string, ChatModel>();
   #offs: Array<() => void> = [];
 
   constructor(opts: AppModelOptions = {}) {
     this.#opts = opts;
+    this.#prefs = opts.preferences ?? memoryPreferences();
     this.notifications = new NotificationsModel(opts.notificationTimers);
     const factories: Partial<Record<ConnectionKind, TransportFactory>> = {
       emulator: opts.createEmulatorTransport ?? createEmulatorTransportFactory(),
@@ -90,7 +102,7 @@ export class AppModel {
       openStore: (pubKey) => RadioStore.open(pubKey, { ...opts.storeOptions, ...this.#idbOpts() }),
       devices: () => this.devicesRepo(),
       notifications: this.notifications,
-      preferences: opts.preferences ?? memoryPreferences(),
+      preferences: this.#prefs,
       ...(opts.clientOptions ? { clientOptions: opts.clientOptions } : {}),
     });
     this.#offs.push(
@@ -149,16 +161,29 @@ export class AppModel {
     return (this.#unread ??= new UnreadModel(this.connection).start());
   }
 
+  /** Recent DMs and channels for the messages overview. */
+  get conversations(): ConversationsModel {
+    return (this.#conversations ??= new ConversationsModel(this.connection).start());
+  }
+
   get packetLog(): PacketLogModel {
     return (this.#packetLog ??= new PacketLogModel(this.connection).start());
   }
 
   get deviceSettings(): DeviceSettingsModel {
-    return (this.#deviceSettings ??= new DeviceSettingsModel(this.connection));
+    return (this.#deviceSettings ??= new DeviceSettingsModel(this.connection, {
+      ...(this.#opts.geolocation ? { geolocation: this.#opts.geolocation } : {}),
+      storePrivateKey: () => this.appSettings.storePrivateKey.peek(),
+    }));
+  }
+
+  /** Local app preferences (theme, time format, retention, private key storage). */
+  get appSettings(): AppSettingsModel {
+    return (this.#appSettings ??= new AppSettingsModel(this.#prefs, this.connection));
   }
 
   get remoteAdmin(): RemoteAdminModel {
-    return (this.#remoteAdmin ??= new RemoteAdminModel(this.connection));
+    return (this.#remoteAdmin ??= new RemoteAdminModel(this.connection, { ...this.#opts.remoteAdmin, contacts: this.contacts }));
   }
 
   /** The model of one conversation (cached per conversation). */
@@ -166,7 +191,7 @@ export class AppModel {
     const id = `${convType}:${convKey.toLowerCase()}`;
     let m = this.#chats.get(id);
     if (!m) {
-      m = new ChatModel(this.connection, convType, convKey).start();
+      m = new ChatModel(this.connection, convType, convKey, this.#opts.messaging ?? {}).start();
       this.#chats.set(id, m);
     }
     return m;
@@ -176,8 +201,10 @@ export class AppModel {
   async dispose(): Promise<void> {
     await this.connection.disconnect();
     for (const off of this.#offs.splice(0)) off();
-    for (const m of [this.#contacts, this.#channels, this.#unread, this.#packetLog, ...this.#chats.values()]) m?.dispose();
+    for (const m of [this.#contacts, this.#channels, this.#unread, this.#conversations, this.#packetLog, ...this.#chats.values()]) m?.dispose();
     this.#remoteAdmin?.dispose();
+    this.#deviceSettings?.dispose();
+    this.#appSettings?.dispose();
     this.#chats.clear();
     this.notifications.clear();
     const repo = await this.#devicesRepo;

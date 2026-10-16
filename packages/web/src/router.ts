@@ -6,7 +6,7 @@
  *   registerPage({ path: '/contacts', title: 'Contacts', icon: '👥', tag: 'mc-contacts-page', order: 20 });
  *   registerPage({ path: '/contacts/:key', title: 'Chat', icon: '💬', tag: 'mc-chat-page', nav: false, requiresConnection: true });
  *
- * Registering an existing path replaces it (so a real page replaces its placeholder). Page
+ * Registering an existing path replaces it (later registrations win). Page
  * elements receive `.app` (the AppModel) and `.params` (path parameters) properties.
  */
 import { signal, type ReadonlySignal, type Signal } from '@meshcore-web/core/app';

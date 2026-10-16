@@ -80,6 +80,17 @@ export function browserAppOptions(g: typeof globalThis = globalThis): AppModelOp
     opts.createBleTransport = () => new WebBluetoothTransport({ bluetooth });
   }
   opts.reconnectableKinds = reconnectable;
+  const geo = (nav as Navigator & { geolocation?: Geolocation }).geolocation;
+  if (geo) {
+    opts.geolocation = () =>
+      new Promise((resolve, reject) =>
+        geo.getCurrentPosition(
+          (p) => resolve({ lat: p.coords.latitude, lon: p.coords.longitude }),
+          (e) => reject(new Error(e.message || 'Location unavailable')),
+          { enableHighAccuracy: false, timeout: 15000, maximumAge: 60000 },
+        ),
+      );
+  }
   const prefs = browserPreferences();
   if (prefs) opts.preferences = prefs;
   return opts;
