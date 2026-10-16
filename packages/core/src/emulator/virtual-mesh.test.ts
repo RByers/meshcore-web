@@ -306,6 +306,29 @@ describe('companion on the mesh (basicScenario)', () => {
     expect(s.nodes.repeater.remote.requests.map((r) => r.kind)).toEqual(['login', 'status', 'binary']);
   });
 
+  it('repeater and room answer CLI_DATA commands the same as CLI_COMMAND (CLI_DATA reply, unique timestamp)', async () => {
+    const s = await mesh();
+    await s.send({ kind: 'sendLogin', pubKey: s.keys.repeater, password: 'password' });
+    await s.advance(1000);
+    await s.drain();
+    // sender timestamp equal to the device RTC now: the reply must still differ from it
+    const next = NOW;
+    await s.send({ kind: 'sendTxtMsg', recipient: s.keys.repeater, text: 'get name', timestamp: next, txtType: TxtType.CLI_DATA });
+    await s.advance(1000);
+    const [reply] = await s.drain();
+    expect(reply).toMatchObject({ txtType: TxtType.CLI_DATA, text: '> Hilltop Repeater' });
+    expect((reply as { senderTimestamp: number }).senderTimestamp).not.toBe(next);
+    expect(s.nodes.repeater.remote.messages.map((m) => m.txtType)).toEqual([TxtType.CLI_DATA]);
+
+    // the room server answers the same way
+    await s.send({ kind: 'sendLogin', pubKey: s.keys.room, password: '' });
+    await s.advance(1000);
+    await s.drain();
+    await s.send({ kind: 'sendTxtMsg', recipient: s.keys.room, text: 'ver', timestamp: 5, txtType: TxtType.CLI_DATA });
+    await s.advance(1000);
+    expect((await s.drain())[0]).toMatchObject({ txtType: TxtType.CLI_DATA });
+  });
+
   it('wrong passwords get no answer; path discovery reports both paths without touching the contact', async () => {
     const s = await mesh();
     await s.send({ kind: 'sendLogin', pubKey: s.keys.repeater, password: 'nope' });

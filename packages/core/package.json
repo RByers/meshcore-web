@@ -59,6 +59,11 @@
       "source": "./src/store/index.ts",
       "types": "./dist/store/index.d.ts",
       "import": "./dist/store/index.js"
+    },
+    "./app": {
+      "source": "./src/app/index.ts",
+      "types": "./dist/app/index.d.ts",
+      "import": "./dist/app/index.js"
     }
   },
   "files": [

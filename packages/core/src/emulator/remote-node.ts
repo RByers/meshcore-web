@@ -79,7 +79,7 @@ export interface RemoteNodeConfig {
   onBinaryRequest?: (reqType: number, data: Uint8Array) => Uint8Array | null | undefined;
   /** Chat peers: reply text for a plain message (sent back after ackDelayMs + responseDelayMs). */
   autoReply?: (text: string) => string | null | undefined;
-  /** CLI handler for CLI_COMMAND text messages; returns the reply text, or null for none. */
+  /** CLI handler for CLI_DATA and CLI_COMMAND text messages; returns the reply text, or null for none. */
   onCliCommand?: (command: string) => string | null;
   /** Delay before the node's reply arrives. Default 300 ms. */
   responseDelayMs?: number;
@@ -259,7 +259,7 @@ export class RemoteNode {
     }
   }
 
-  /** Reply to a CLI_COMMAND message (sent back as a CLI_DATA message), or null. */
+  /** Reply to a CLI_DATA or CLI_COMMAND message (sent back as a CLI_DATA message), or null. */
   cliReply(command: string): string | null {
     if (this.config.onCliCommand) return this.config.onCliCommand(command);
     if (this.config.type === 'chat') return null;

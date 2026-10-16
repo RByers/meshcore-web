@@ -30,3 +30,11 @@ find a doc error, fix the doc in the same change).
 - `.ref/meshcore.js` — official JS client (reference only, not a dependency)
 - `.ref/meshcore-open` — Flutter client we are mirroring feature-wise
 If `.ref/` is missing, clone those three GitHub repos (meshcore-dev/MeshCore, meshcore-dev/meshcore.js, zjs81/meshcore-open) into it.
+
+## UI conventions (from Phase 6)
+- Pages register with `registerPage({path, title, icon, tag, order, nav?, requiresConnection?})` in
+  `packages/web/src/pages/index.ts`; page elements extend `AppElement` (`src/app-context.ts`) and get `.app`
+  (the core `AppModel`) and `.params`. Reading a signal during render auto re-renders.
+- Browser tests use `createHarness()` from `packages/web/src/testing/harness.ts` (emulator behind mocked
+  Web Serial/Bluetooth, real IndexedDB, `h.cleanup()` in afterEach). Use `data-*` hooks for test selectors.
+- Feature logic goes in `packages/core/src/app/*-model.ts` (see `packages/core/src/app/README.md`).

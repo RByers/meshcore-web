@@ -637,9 +637,15 @@ export class MeshNode implements MeshEndpoint {
       return;
     }
     if (flood) this.#later(() => this.#sendPathReturn(c, p, false), ackDelay); // path only, no ACK for CLI types
-    if (m.txtType === TxtType.CLI_COMMAND) {
+    if (m.txtType === TxtType.CLI_COMMAND || m.txtType === TxtType.CLI_DATA) {
+      // simple_repeater / simple_room_server handle CLI_DATA and CLI_COMMAND identically (no ACK):
+      // the reply is CLI_DATA stamped with the unique RTC time, bumped if it equals the sender's.
       const reply = this.remote.cliReply(m.text);
-      if (reply !== null) this.#later(() => this.sendText(c.publicKey, reply, { txtType: TxtType.CLI_DATA }), this.remote.responseDelayMs);
+      if (reply !== null) {
+        let timestamp = this.#rtcUnique();
+        if (timestamp === m.timestamp) timestamp = this.#rtcUnique();
+        this.#later(() => this.sendText(c.publicKey, reply, { txtType: TxtType.CLI_DATA, timestamp }), this.remote.responseDelayMs);
+      }
     }
   }
 

@@ -600,7 +600,7 @@ describe('remote requests', () => {
     const acl = await s.run(s.client.anonRequest(s.keys.repeater, Uint8Array.of(ReqType.GET_ACCESS_LIST)));
     expect(toHex(acl.subarray(0, 6))).toBe(toHex(s.keys.self.slice(0, 6)));
 
-    const ver = await s.run(s.client.sendRemoteCliCommand(s.keys.repeater, 'ver', { txtType: TxtType.CLI_COMMAND }));
+    const ver = await s.run(s.client.sendRemoteCliCommand(s.keys.repeater, 'ver'));
     expect(ver).toContain('v1.18.0');
   });
 });
