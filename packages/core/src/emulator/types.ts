@@ -4,6 +4,7 @@ import type { Contact, RepeatFreqRange } from '../protocol/types.js';
 import type { EmulatorClock } from './clock.js';
 import type { AckPolicy, RemoteNodeConfig } from './remote-node.js';
 import type { Rng } from './rng.js';
+import type { VirtualMesh } from './virtual-mesh.js';
 
 /** A contact as stored on the emulated device (protocol Contact plus device-only fields). */
 export interface DeviceContact extends Contact {
@@ -88,15 +89,24 @@ export interface FirmwareInfo {
 
 export interface CompanionEmulatorOptions {
   /**
-   * Device identity. Missing parts are generated from `rng`. When only the private key is
-   * given, the public key comes from `derivePublicKey`.
+   * Device identity (real Ed25519). `privateKey` is the firmware's 64-byte *expanded* key; a
+   * 32-byte `seed` is expanded like orlp `ed25519_create_keypair`. Missing parts are generated
+   * from `rng`; when only the private key (or seed) is given the public key is derived from it.
+   * Giving both keys uses them as-is (they need not match, but then nothing verifies).
    */
-  identity?: { publicKey?: Uint8Array; privateKey?: Uint8Array };
+  identity?: { publicKey?: Uint8Array; privateKey?: Uint8Array; seed?: Uint8Array };
   /**
-   * Maps a 64-byte private key to its public key (IMPORT_PRIVATE_KEY "re-derives" it). Default is
-   * a FAKE SHA-256 derivation, not Ed25519.
+   * Maps a 64-byte private key to its public key (identity setup, IMPORT_PRIVATE_KEY). Default:
+   * the real Ed25519 public key of the key's scalar half.
    */
   derivePublicKey?: (privateKey: Uint8Array) => Uint8Array;
+  /**
+   * Join this VirtualMesh: commands then transmit real packets on it and packets heard on it
+   * are processed (LOG_RX_DATA, messages, ACKs, …). Must share `clock`.
+   */
+  mesh?: VirtualMesh;
+  /** The device's meshId on `mesh` (default "self"). */
+  meshId?: string;
   name?: string;
   /** Degrees. */
   lat?: number;
@@ -156,8 +166,14 @@ export interface CompanionEmulatorOptions {
   radioStats?: { noiseFloorDbm?: number; lastRssiDbm?: number; lastSnr?: number };
 }
 
-/** Something the emulated radio "transmitted" (no real packets in this phase). */
-export type AirEvent =
+/**
+ * Something the emulated radio transmitted. `raw` holds the on-air packet bytes
+ * (docs/mesh-packet-format.md) — the same bytes a joined VirtualMesh carries. It is a
+ * non-enumerable property (so `toEqual` on the other fields keeps working; spreads drop it).
+ */
+export type AirEvent = AirEventBody & { raw?: Uint8Array };
+
+export type AirEventBody =
   | {
       type: 'txtMsg';
       to: Uint8Array;
@@ -177,8 +193,13 @@ export type AirEvent =
   | { type: 'rawData'; pathLen: number; path: Uint8Array; payload: Uint8Array }
   | { type: 'rawPacket'; priority: number; packet: Uint8Array }
   | { type: 'controlData'; payload: Uint8Array }
-  | { type: 'ack'; to: Uint8Array }
-  | { type: 'cliReply'; to: Uint8Array; text: string };
+  /** ACK for a received message (inside a flood PATH return when the message came by flood). */
+  | { type: 'ack'; to: Uint8Array; ackCode?: number }
+  | { type: 'cliReply'; to: Uint8Array; text: string }
+  /** PATH return without extra (reciprocal path, CLI message path). */
+  | { type: 'path'; to: Uint8Array }
+  /** RESPONSE to a contact's request (the device's own telemetry). */
+  | { type: 'response'; to: Uint8Array; tag: number };
 
 /** Options for injectContactMessage. */
 export interface InjectMessageOptions {
@@ -217,4 +238,6 @@ export interface InjectAdvertInput {
   path?: Uint8Array;
   snr?: number;
   rssi?: number;
+  /** 64-byte expanded private key to sign with (default: the mesh node's key, else unsigned). */
+  privateKey?: Uint8Array;
 }

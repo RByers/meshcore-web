@@ -52,9 +52,10 @@ packages/core   @meshcore-web/core   pure TS, no DOM; tested in node with vitest
                    tree) for the inspector; advert/txt/grp/ack/path/trace/req/resp
                    payloads; CayenneLPP; channel-message decryption when PSK known
   src/emulator/    CompanionEmulator (device state machine mirroring MyMesh.cpp),
-                   VirtualMesh (several EmulatedNode instances sharing an "air", real
-                   packet encoding, Ed25519/X25519-less fake crypto where allowed by tests
-                   but real hashing for ack codes), scenario builders
+                   VirtualMesh (MeshNode chat/repeater/room/sensor nodes sharing an "air":
+                   real packets via packet/, real Ed25519/X25519/AES/HMAC crypto run
+                   synchronously (crypto-sync.ts) so ManualClock tests stay deterministic),
+                   scenario builders
   src/store/       IndexedDB schema + typed repositories: packets, frames, messages,
                    contacts, channels, devices, settings
   src/app/         Framework-agnostic application model (ConnectionManager, ChatModel,
@@ -86,9 +87,9 @@ made on `main`. Phases are sequential unless marked parallelisable.
 | 0 | Research & scaffold | Protocol docs, feature inventory, monorepo with node + Chromium test pipelines | done |
 | 1 | Protocol codec | `protocol/`: all CMD encoders, RESP/PUSH decoders, SELF_INFO/DEVICE_INFO/contact/channel/stats records, error mapping; byte-exact tests from firmware layouts | done |
 | 2 | Framing & transports | Serial framer; `FrameTransport` interface; `LoopbackTransport`; `WebSerialTransport`; `WebBluetoothTransport` (MTU-aware, 1 frame per write/notify); browser tests with mocked `navigator.serial`/`navigator.bluetooth` | done |
-| 3 | Companion emulator + virtual mesh | `CompanionEmulator` implementing the firmware behaviour for every command in Phase 1 (contacts DB, msg queue + MSG_WAITING, ack hashing, protocol-version gating, ERR semantics, remote-request mutex); `VirtualMesh` with emulated chat/repeater/room/sensor nodes producing real on-air packets (adverts, txt, grp txt, acks, path, trace, status/telemetry responses); scenario helpers | 3a packet codec + 3b emulator done; 3c virtual mesh pending |
-| 4 | CompanionClient | Typed client over any `FrameTransport`: handshake (APP_START, DEVICE_QUERY), contacts sync (since-timestamp), message sync loop, send DM/channel with retry + ack/SEND_CONFIRMED matching + timeouts, adverts, time, radio/advert/other params, channels, repeater/sensor requests, signing, key export/import; full integration test suite against the emulator | |
-| 5 | Packet decoder & store | `packet/` parser + annotator covering all payload types and `mesh-packet-format.md`; `store/` IndexedDB schema and repositories with migration; capture pipeline: every frame and every LOG_RX/RAW/TRACE push persisted with metadata; tests with fake-indexeddb | |
+| 3 | Companion emulator + virtual mesh | `CompanionEmulator` implementing the firmware behaviour for every command in Phase 1 (contacts DB, msg queue + MSG_WAITING, ack hashing, protocol-version gating, ERR semantics, remote-request mutex); `VirtualMesh` with emulated chat/repeater/room/sensor nodes producing real on-air packets (adverts, txt, grp txt, acks, path, trace, status/telemetry responses); scenario helpers | done (3a packet codec, 3b emulator, 3c virtual mesh) |
+| 4 | CompanionClient | Typed client over any `FrameTransport`: handshake (APP_START, DEVICE_QUERY), contacts sync (since-timestamp), message sync loop, send DM/channel with retry + ack/SEND_CONFIRMED matching + timeouts, adverts, time, radio/advert/other params, channels, repeater/sensor requests, signing, key export/import; full integration test suite against the emulator | done |
+| 5 | Packet decoder & store | `packet/` parser + annotator covering all payload types and `mesh-packet-format.md`; `store/` IndexedDB schema and repositories with migration; capture pipeline: every frame and every LOG_RX/RAW/TRACE push persisted with metadata; tests with fake-indexeddb | done (capture pipeline wiring in Phase 6) |
 | 6 | App model + web shell | `app/` models; `<mc-app>` with router, connect panel (Serial / BLE / Emulator), device info header, connection state, error toasts; e2e browser tests using in-process emulator via mocked navigator APIs | |
 | 7 | Contacts & direct messages | Contact list (type icons, last seen, path, SNR), add/remove/share/reset path, DM chat with status (pending/sent/delivered/failed), retries, unread counts, message persistence | |
 | 8 | Channels | Channel list from device (GET_CHANNEL), add/edit (name + PSK / hashtag channels), group chat with "sender: text" convention, reply/reaction conventions from `feature-inventory.md` | |

@@ -49,6 +49,16 @@
       "source": "./src/emulator/index.ts",
       "types": "./dist/emulator/index.d.ts",
       "import": "./dist/emulator/index.js"
+    },
+    "./client": {
+      "source": "./src/client/index.ts",
+      "types": "./dist/client/index.d.ts",
+      "import": "./dist/client/index.js"
+    },
+    "./store": {
+      "source": "./src/store/index.ts",
+      "types": "./dist/store/index.d.ts",
+      "import": "./dist/store/index.js"
     }
   },
   "files": [

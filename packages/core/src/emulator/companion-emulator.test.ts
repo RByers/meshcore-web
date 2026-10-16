@@ -17,7 +17,9 @@ import { encodeCommand } from '../protocol/encode.js';
 import type { Command, DeviceFrame } from '../protocol/types.js';
 import { ManualClock } from './clock.js';
 import { CompanionEmulator, computeAckCode } from './companion-emulator.js';
-import { parseAdvertPacket } from './packet-lite.js';
+import { parsePacket } from '../packet/packet.js';
+import { parseAdvertPayload, verifyAdvert } from '../packet/payloads.js';
+import { ed25519Verify } from '../packet/crypto.js';
 import type { RemoteNodeConfig } from './remote-node.js';
 import type { CompanionEmulatorOptions } from './types.js';
 
@@ -100,6 +102,15 @@ async function setup(opts: CompanionEmulatorOptions = {}, connect = true) {
 }
 
 const kinds = (fs: DeviceFrame[]): string[] => fs.map((f) => f.kind);
+
+/** Advert fields of a raw advert packet (via the packet/ codec). */
+function advertOf(pkt: Uint8Array): Record<string, unknown> {
+  const a = parseAdvertPayload(parsePacket(pkt).payload);
+  const out: Record<string, unknown> = { pubKey: a.publicKey, name: a.app.name, type: a.app.nodeType };
+  if (a.app.latitudeE6 !== undefined) out.latE6 = a.app.latitudeE6;
+  if (a.app.longitudeE6 !== undefined) out.lonE6 = a.app.longitudeE6;
+  return out;
+}
 const contactSeeds = [
   { pubKey: ALICE, name: 'Alice', lastMod: NOW - 300 },
   { pubKey: BOB, name: 'Bob', lastMod: NOW - 200 },
@@ -403,7 +414,8 @@ describe('contacts (§7)', () => {
     const self = await a.one({ kind: 'exportContact' }, 'exportContact');
     expect(self.packet[0]).toBe(0x11);
     expect(self.packet[1]).toBe(0x00);
-    expect(parseAdvertPacket(self.packet)).toMatchObject({ pubKey: a.emu.publicKey, name: 'Device A', type: 1, latE6: 1e6, lonE6: 2e6 });
+    expect(advertOf(self.packet)).toMatchObject({ pubKey: a.emu.publicKey, name: 'Device A', type: 1, latE6: 1e6, lonE6: 2e6 });
+    expect(await verifyAdvert(parseAdvertPayload(parsePacket(self.packet).payload))).toBe(true); // real Ed25519 signature
 
     const b = await setup({ seed: 8 });
     await b.one({ kind: 'importContact', packet: self.packet }, 'ok');
@@ -591,7 +603,7 @@ describe('SEND_TXT_MSG, SENT and SEND_CONFIRMED (§5.1, §6.5, §8, §10)', () =
   it('SEND_CHANNEL_TXT_MSG → OK (not SENT); txt_type ≠ 0 → ERR 1; idx ≥ max → ERR 2', async () => {
     const h = await setup();
     await h.one({ kind: 'sendChannelTxtMsg', channelIdx: 0, text: 'hello all', timestamp: 5 }, 'ok');
-    expect(h.emu.airLog.at(-1)).toEqual({ type: 'grpTxt', channelIdx: 0, timestamp: 5, text: 'Emu: hello all' });
+    expect(h.emu.airLog.at(-1)).toMatchObject({ type: 'grpTxt', channelIdx: 0, timestamp: 5, text: 'Emu: hello all' });
     await h.one({ kind: 'sendChannelTxtMsg', channelIdx: 7, text: 'empty slot is fine', timestamp: 5 }, 'ok');
     expect(await h.err({ kind: 'sendChannelTxtMsg', channelIdx: 0, text: 'x', timestamp: 5, txtType: 1 })).toBe(ERR.UNSUPPORTED_CMD);
     expect(await h.err({ kind: 'sendChannelTxtMsg', channelIdx: 8, text: 'x', timestamp: 5 })).toBe(ERR.NOT_FOUND);
@@ -769,7 +781,9 @@ describe('device settings (§4)', () => {
     expect(ads.map((e) => e.type === 'advert' && e.flood)).toEqual([false, true]);
     const first = ads[0];
     if (first?.type !== 'advert') throw new Error('advert expected');
-    expect(parseAdvertPacket(first.packet)).not.toHaveProperty('latE6');
+    expect(advertOf(first.packet)).not.toHaveProperty('latE6');
+    // on air: zero-hop = DIRECT path_len 0 (0x12), flood = FLOOD (0x11)
+    expect(ads.map((e) => e.raw?.[0])).toEqual([0x12, 0x11]);
   });
 
   it('EXPORT/IMPORT_PRIVATE_KEY; importing re-derives the public key; DISABLED when compiled out', async () => {
@@ -790,7 +804,7 @@ describe('device settings (§4)', () => {
     expect(kinds(await d.send({ kind: 'importPrivateKey', privateKey: other }))).toEqual(['disabled']);
   });
 
-  it('SIGN_START / SIGN_DATA / SIGN_FINISH (fake but deterministic signature) and their ERR codes', async () => {
+  it('SIGN_START / SIGN_DATA / SIGN_FINISH (real, deterministic Ed25519 signature) and their ERR codes', async () => {
     const h = await setup();
     expect(await h.err({ kind: 'signData', chunk: x('01') })).toBe(ERR.BAD_STATE);
     expect(await h.err({ kind: 'signFinish' })).toBe(ERR.BAD_STATE);
@@ -799,6 +813,7 @@ describe('device settings (§4)', () => {
     await h.one({ kind: 'signData', chunk: x('03') }, 'ok');
     const sig1 = await h.one({ kind: 'signFinish' }, 'signature');
     expect(sig1.signature.length).toBe(64);
+    expect(await ed25519Verify(h.emu.publicKey, x('010203'), sig1.signature)).toBe(true);
     expect(await h.err({ kind: 'signFinish' })).toBe(ERR.BAD_STATE); // buffer freed
     await h.send({ kind: 'signStart' });
     await h.send({ kind: 'signData', chunk: x('010203') });
@@ -1001,12 +1016,14 @@ describe('remote requests (§4 notes, §6.6-§6.10)', () => {
   });
 
   it('quirk: a late reply whose tag equals the pending telemetry tag is taken as TELEMETRY_RESPONSE', async () => {
-    // the login reply's tag is the server's clock (NOW) — the same value the device used as the
-    // telemetry request tag, so §6.10 rule 3 matches it
-    const h = await setup({ remoteNodes: nodes() });
+    // the login reply's tag is the server's clock — here NOW + 1 after a 1 s reply delay — the same
+    // value the device used as the telemetry request tag (its unique RTC: the login took NOW), so
+    // §6.10 rule 3 matches it; the sensor's real reply then arrives unmatched
+    const [rpt, , sensor] = nodes({ responseDelayMs: 1000 });
+    const h = await setup({ remoteNodes: [rpt!, { ...sensor!, responseDelayMs: 1500 }] });
     await h.send({ kind: 'sendLogin', pubKey: RPT, password: 'admin' });
     await h.send({ kind: 'sendTelemetryReq', pubKey: SENSOR });
-    const fs = await h.advance(100);
+    const fs = await h.advance(1500);
     expect(kinds(fs)).toEqual(['telemetryResponse', 'binaryResponse']);
     expect(fs[0]).toMatchObject({ pubKeyPrefix: RPT.slice(0, 6) });
   });

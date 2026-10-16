@@ -1,0 +1,243 @@
+/**
+ * Log of every over-the-air packet the radio reports or sends (roadmap goal 3), with radio
+ * metadata. Packet envelope / hash per docs/mesh-packet-format.md §1.
+ */
+
+import type { DeviceFrame } from '../protocol/types.js';
+import { toHex } from '../util/bytes.js';
+import { PayloadType, RouteType, payloadTypeName, routeTypeName } from '../packet/constants.js';
+import { packetHash, parsePacket } from '../packet/packet.js';
+import { buildTracePayload } from '../packet/payloads.js';
+import {
+  INDEX,
+  STORE,
+  type PacketBytesFormat,
+  type PacketDirection,
+  type PacketRecord,
+  type PacketSource,
+} from './schema.js';
+import { safeEmit } from './events.js';
+import { combine } from './frame-log.js';
+import {
+  TimeLog,
+  optNumber,
+  optString,
+  reqNumber,
+  reqOneOf,
+  reqString,
+  type LogQueryBase,
+  type QueryPlan,
+} from './time-log.js';
+
+export interface PacketInput {
+  direction: PacketDirection;
+  bytes: Uint8Array;
+  /** Default 'packet' (a full over-the-air packet that is parsed for type/route/path/hash). */
+  format?: PacketBytesFormat;
+  /** Default 'other'. */
+  source?: PacketSource;
+  ts?: number;
+  snr?: number;
+  rssi?: number;
+  sourceFrameId?: number;
+  /** For `format: 'payload'` (no envelope): what is known about the packet. Default -1. */
+  routeType?: number;
+  payloadType?: number;
+  pathLen?: number;
+  /** Default: a short structural summary such as `GRP_TXT FLOOD 2 hops, 48 B`. */
+  decodedSummary?: string;
+}
+
+export interface PacketQuery extends LogQueryBase {
+  direction?: PacketDirection;
+  payloadType?: number;
+  routeType?: number;
+  source?: PacketSource;
+  /** Exact packet hash hex (finds re-heard copies of one packet). Results ordered by id. */
+  hash?: string;
+}
+
+const PACKET_SOURCES = ['logRxData', 'rawData', 'traceData', 'sent', 'import', 'other'] as const;
+
+/** Derives the stored record (minus id) from an input: parses the envelope and hashes it. */
+export async function packetRecordFromInput(input: PacketInput, now = Date.now()): Promise<Omit<PacketRecord, 'id'>> {
+  const format = input.format ?? 'packet';
+  let routeType = input.routeType ?? -1;
+  let payloadType = input.payloadType ?? -1;
+  let pathLen = input.pathLen ?? -1;
+  let hash = '';
+  let parseError: string | undefined;
+  let summary: string | undefined;
+  if (format === 'packet') {
+    try {
+      const p = parsePacket(input.bytes);
+      routeType = p.routeType;
+      payloadType = p.payloadType;
+      pathLen = p.pathLen;
+      hash = toHex(await packetHash(p));
+      summary = `${payloadTypeName(p.payloadType)} ${routeTypeName(p.routeType)} ${p.pathHashCount} hop${p.pathHashCount === 1 ? '' : 's'}, ${input.bytes.length} B`;
+    } catch (err) {
+      parseError = err instanceof Error ? err.message : String(err);
+      summary = `unparsable, ${input.bytes.length} B`;
+    }
+  } else {
+    if (payloadType >= 0) {
+      hash = toHex(await packetHash({ payloadType, pathLen: Math.max(0, pathLen), payload: input.bytes }));
+      summary = `${payloadTypeName(payloadType)} payload, ${input.bytes.length} B`;
+    } else {
+      summary = `payload, ${input.bytes.length} B`;
+    }
+  }
+  const rec: Omit<PacketRecord, 'id'> = {
+    ts: input.ts ?? now,
+    direction: input.direction,
+    bytes: input.bytes,
+    format,
+    source: input.source ?? 'other',
+    routeType,
+    payloadType,
+    pathLen,
+    hash,
+  };
+  if (input.snr !== undefined) rec.snr = input.snr;
+  if (input.rssi !== undefined) rec.rssi = input.rssi;
+  if (input.sourceFrameId !== undefined) rec.sourceFrameId = input.sourceFrameId;
+  const decodedSummary = input.decodedSummary ?? summary;
+  if (decodedSummary !== undefined) rec.decodedSummary = decodedSummary;
+  if (parseError !== undefined) rec.parseError = parseError;
+  return rec;
+}
+
+/**
+ * Maps a decoded device push that carries an over-the-air packet to a {@link PacketInput}:
+ * LOG_RX_DATA (full packet), RAW_DATA (RAW_CUSTOM payload), TRACE_DATA (trace payload rebuilt
+ * from the push fields) and CONTROL_DATA (CONTROL payload). Returns null for other frames.
+ */
+export function packetInputFromFrame(frame: DeviceFrame, meta: { ts?: number; sourceFrameId?: number } = {}): PacketInput | null {
+  const base = {
+    direction: 'rx' as const,
+    ...(meta.ts !== undefined ? { ts: meta.ts } : {}),
+    ...(meta.sourceFrameId !== undefined ? { sourceFrameId: meta.sourceFrameId } : {}),
+  };
+  switch (frame.kind) {
+    case 'logRxData':
+      return { ...base, bytes: frame.packet, format: 'packet', source: 'logRxData', snr: frame.snr, rssi: frame.rssi };
+    case 'rawData':
+      return {
+        ...base,
+        bytes: frame.payload,
+        format: 'payload',
+        source: 'rawData',
+        snr: frame.snr,
+        rssi: frame.rssi,
+        payloadType: PayloadType.RAW_CUSTOM,
+        routeType: RouteType.DIRECT,
+        pathLen: 0,
+      };
+    case 'traceData':
+      return {
+        ...base,
+        bytes: buildTracePayload({ tag: frame.tag, authCode: frame.authCode, flags: frame.flags, hashes: frame.pathHashes }),
+        format: 'payload',
+        source: 'traceData',
+        snr: frame.finalSnr,
+        payloadType: PayloadType.TRACE,
+        routeType: RouteType.DIRECT,
+        pathLen: frame.pathLen,
+      };
+    case 'controlData':
+      return {
+        ...base,
+        bytes: frame.payload,
+        format: 'payload',
+        source: 'other',
+        snr: frame.snr,
+        rssi: frame.rssi,
+        payloadType: PayloadType.CONTROL,
+        pathLen: frame.pathLen,
+      };
+    default:
+      return null;
+  }
+}
+
+export class PacketLog extends TimeLog<PacketRecord, PacketQuery> {
+  protected readonly storeName = STORE.packets;
+  protected readonly tsIndex = INDEX.packets.ts;
+  protected readonly exportFormat = 'meshcore-web/packets';
+
+  protected emitRecord(record: PacketRecord): void {
+    safeEmit(this.emitter, 'packet', record);
+  }
+
+  async append(input: PacketInput): Promise<PacketRecord> {
+    const rec = await packetRecordFromInput(input);
+    const [out] = await this.insert([rec]);
+    return out!;
+  }
+
+  /** Appends several packets in one transaction (hashes are computed first). */
+  async appendMany(inputs: readonly PacketInput[]): Promise<PacketRecord[]> {
+    const now = Date.now();
+    const recs = await Promise.all(inputs.map((i) => packetRecordFromInput(i, now)));
+    return this.insert(recs);
+  }
+
+  /** Appends the packet carried by `frame` if it is a packet-bearing push; else resolves null. */
+  async appendFromFrame(frame: DeviceFrame, meta: { ts?: number; sourceFrameId?: number } = {}): Promise<PacketRecord | null> {
+    const input = packetInputFromFrame(frame, meta);
+    return input ? this.append(input) : null;
+  }
+
+  /** All stored copies of one packet (same hash), oldest first. */
+  async byHash(hash: string): Promise<PacketRecord[]> {
+    return this.db.getAll<PacketRecord>(this.storeName, { index: INDEX.packets.hash, query: this.db.only(hash.toLowerCase()) });
+  }
+
+  protected plan(q: PacketQuery): QueryPlan<PacketRecord> {
+    const { direction, routeType, source, payloadType } = q;
+    const dirF = direction === undefined ? undefined : (r: PacketRecord) => r.direction === direction;
+    const routeF = routeType === undefined ? undefined : (r: PacketRecord) => r.routeType === routeType;
+    const srcF = source === undefined ? undefined : (r: PacketRecord) => r.source === source;
+    const ptF = payloadType === undefined ? undefined : (r: PacketRecord) => r.payloadType === payloadType;
+    if (q.hash !== undefined) {
+      return {
+        index: INDEX.packets.hash,
+        query: this.db.only(q.hash.toLowerCase()),
+        ...combine([this.tsFilter(q), dirF, routeF, srcF, ptF]),
+      };
+    }
+    if (payloadType !== undefined) {
+      return { index: INDEX.packets.payloadTypeTs, query: this.tsRange([payloadType], q), ...combine([dirF, routeF, srcF]) };
+    }
+    if (direction !== undefined) {
+      return { index: INDEX.packets.directionTs, query: this.tsRange([direction], q), ...combine([routeF, srcF]) };
+    }
+    return { index: INDEX.packets.ts, query: this.tsRange([], q), ...combine([routeF, srcF]) };
+  }
+
+  protected validateImported(o: Record<string, unknown>, bytes: Uint8Array): Omit<PacketRecord, 'id'> {
+    const rec: Omit<PacketRecord, 'id'> = {
+      ts: reqNumber(o, 'ts'),
+      direction: reqOneOf(o, 'direction', ['rx', 'tx'] as const),
+      bytes,
+      format: reqOneOf(o, 'format', ['packet', 'payload'] as const),
+      source: reqOneOf(o, 'source', PACKET_SOURCES),
+      routeType: reqNumber(o, 'routeType'),
+      payloadType: reqNumber(o, 'payloadType'),
+      pathLen: reqNumber(o, 'pathLen'),
+      hash: reqString(o, 'hash').toLowerCase(),
+    };
+    const snr = optNumber(o, 'snr');
+    const rssi = optNumber(o, 'rssi');
+    const sourceFrameId = optNumber(o, 'sourceFrameId');
+    const decodedSummary = optString(o, 'decodedSummary');
+    const parseError = optString(o, 'parseError');
+    if (snr !== undefined) rec.snr = snr;
+    if (rssi !== undefined) rec.rssi = rssi;
+    if (sourceFrameId !== undefined) rec.sourceFrameId = sourceFrameId;
+    if (decodedSummary !== undefined) rec.decodedSummary = decodedSummary;
+    if (parseError !== undefined) rec.parseError = parseError;
+    return rec;
+  }
+}

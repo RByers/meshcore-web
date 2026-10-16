@@ -11,9 +11,15 @@ const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 async function connect(s: ReturnType<typeof basicScenario>, clock: ManualClock) {
   const host = s.emulator.createLoopbackTransport();
   const got: DeviceFrame[] = [];
-  host.events.on('frame', (b) => got.push(decodeFrame(b)));
+  const logRx: DeviceFrame[] = [];
+  // every packet the radio hears is pushed as LOG_RX_DATA; kept apart from the other frames
+  host.events.on('frame', (b) => {
+    const f = decodeFrame(b);
+    (f.kind === 'logRxData' ? logRx : got).push(f);
+  });
   await host.connect();
   return {
+    logRx,
     async send(cmd: Command): Promise<DeviceFrame[]> {
       await host.send(encodeCommand(cmd));
       await settle();

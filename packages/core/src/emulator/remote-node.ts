@@ -1,10 +1,11 @@
 /**
- * Emulated remote nodes (repeater / room server / sensor / chat peer) that answer the companion's
- * requests. They build RESPONSE plaintexts as the real server firmwares do
- * (mesh-packet-format.md §3.2: `[tag u32][body]`); the companion emulator feeds those through
- * the same matching rules as `MyMesh::onContactResponse` (companion-protocol.md §6.10).
+ * Behaviour of emulated remote nodes (repeater / room server / sensor / chat peer): how they answer
+ * logins, requests and CLI commands. They build RESPONSE plaintexts as the real server firmwares
+ * do (mesh-packet-format.md §3.2: `[tag u32][body]`).
  *
- * No packets go on air in this phase; delivery is simulated with timers.
+ * Two drivers use it: `MeshNode` (virtual-mesh.ts) exchanges real packets over a `VirtualMesh`;
+ * nodes registered with `CompanionEmulator.addRemoteNode` (no mesh) are simulated directly with
+ * timers, feeding the same matching rules as `MyMesh::onContactResponse` (companion-protocol.md §6.10).
  */
 
 import { concatBytes, u16le, u32le, utf8Encode } from '../util/bytes.js';
@@ -32,12 +33,18 @@ export interface NeighbourEntry {
   snr: number;
 }
 
-export interface AclEntry {
+export interface RemoteAclEntry {
   /** 6-byte pubkey prefix. */
   prefix: Uint8Array;
   /** ACL permission byte (bits 0-1 role, AclRole). */
   permissions: number;
 }
+
+/**
+ * @deprecated Use {@link RemoteAclEntry}; `AclEntry` is also the name of the decoded ACL record in
+ * `packet/` (not re-exported from emulator/index.ts).
+ */
+export type AclEntry = RemoteAclEntry;
 
 export interface RemoteNodeConfig {
   type: RemoteNodeType;
@@ -60,7 +67,7 @@ export interface RemoteNodeConfig {
   stats?: Partial<CommonNodeStats> & { rxAirTimeSecs?: number; recvErrors?: number; posted?: number; postPush?: number };
   /** Raw CayenneLPP telemetry. Default: battery voltage on channel 1. */
   telemetry?: Uint8Array;
-  acl?: AclEntry[];
+  acl?: RemoteAclEntry[];
   neighbours?: NeighbourEntry[];
   /** Owner info text for GET_OWNER_INFO. */
   ownerInfo?: string;
@@ -175,11 +182,14 @@ export class RemoteNode {
     return concatBytes(tag, Uint8Array.of(0, 0, isAdmin, perms), randomBytes(rng, 4), Uint8Array.of(level));
   }
 
-  /** Status body: RepeaterStats (56 B) or room ServerStats (52 B); sensors don't answer. */
-  statusBody(uptimeSecs: number): Uint8Array | null {
+  /**
+   * Status body: RepeaterStats (56 B) or room ServerStats (52 B); sensors don't answer. `live`
+   * values (a mesh node's real counters) are used where `config.stats` does not override them.
+   */
+  statusBody(uptimeSecs: number, live: Partial<CommonNodeStats> = {}): Uint8Array | null {
     const c = this.config;
     if (c.type === 'sensor' || c.type === 'chat') return null;
-    const s = c.stats ?? {};
+    const s = { ...live, ...(c.stats ?? {}) };
     const common: CommonNodeStats = {
       batteryMv: s.batteryMv ?? this.batteryMv,
       txQueueLen: s.txQueueLen ?? 0,

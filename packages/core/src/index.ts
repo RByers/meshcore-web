@@ -7,4 +7,6 @@ export * from './protocol/index.js';
 export { encodeSerialFrame, SerialDeframer, SERIAL_MARKER_HOST_TO_DEVICE, SERIAL_MARKER_DEVICE_TO_HOST, SERIAL_HEADER_SIZE } from './framing/index.js';
 export * from './transport/index.js';
 export * from './packet/index.js';
-export { CompanionEmulator, basicScenario, emptyScenario, ManualClock } from './emulator/index.js';
+export * from './emulator/index.js';
+export * from './client/index.js';
+export * from './store/index.js';
