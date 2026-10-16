@@ -11,6 +11,7 @@ import { shared, tokens } from './styles.js';
 import './components/mc-toasts.js';
 import './pages/index.js';
 import { bindTheme } from './theme.js';
+import { installErrorBoundary } from './error-boundary.js';
 
 /** Elements rendered as pages get these properties. */
 export interface PageElement extends HTMLElement {
@@ -236,6 +237,7 @@ export class McApp extends AppElement {
     );
     void this.app.refreshDevices();
     this.#offs.push(bindTheme(this.app));
+    this.#offs.push(installErrorBoundary(window, this.app.notifications));
   }
 
   override disconnectedCallback(): void {

@@ -145,7 +145,7 @@ export function packetInputFromFrame(frame: DeviceFrame, meta: { ts?: number; so
         snr: frame.finalSnr,
         payloadType: PayloadType.TRACE,
         routeType: RouteType.DIRECT,
-        pathLen: frame.pathLen,
+        pathLen: frame.snrs.length, // on air, a TRACE path carries one SNR byte per hop (hashes live in the payload)
       };
     case 'controlData':
       return {

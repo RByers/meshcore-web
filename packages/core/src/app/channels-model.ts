@@ -131,14 +131,25 @@ export class ChannelsModel extends StoreBoundModel {
     return rec;
   }
 
-  /** Renames and/or re-keys a channel (a new PSK makes it a different conversation). */
+  /**
+   * Renames and/or re-keys a channel (a new PSK makes it a different conversation). Renaming to
+   * a different "#hashtag" without an explicit key switches to that hashtag's derived key.
+   */
   async edit(key: string, patch: { name?: string; psk?: string }): Promise<ChannelRecord> {
     const cur = this.find(key);
     if (!cur) throw new Error('Unknown channel');
     const name = (patch.name ?? cur.name).trim();
     const err = channelNameError(name);
     if (err) throw new Error(err);
-    const psk = patch.psk !== undefined && patch.psk.trim() ? parsePsk(patch.psk) : cur.psk;
+    // No explicit key: keep the current one, except that renaming to a different #hashtag joins
+    // that hashtag (its key is derived from the name; keeping the old key would leave a channel
+    // labelled "#new" that only talks to "#old").
+    const psk =
+      patch.psk !== undefined && patch.psk.trim()
+        ? parsePsk(patch.psk)
+        : name.startsWith('#') && name !== cur.name
+          ? await resolveChannelPsk(name)
+          : cur.psk;
     if (cur.deviceIndex === null) {
       const store = this.store;
       if (!store) throw new Error('Not connected');

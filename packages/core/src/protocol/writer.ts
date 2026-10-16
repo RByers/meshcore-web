@@ -146,9 +146,9 @@ export function writeContactRecord(w: Writer, code: number, c: ContactInput): vo
   w.fixed(c.outPath ?? new Uint8Array(0), MAX_PATH_SIZE, 'outPath');
   w.fixed(nameBytes(w, c.name), MAX_NAME_SIZE, 'name');
   w.u32(c.lastAdvert);
-  const hasLoc = c.lat !== undefined || c.lon !== undefined;
-  if (hasLoc || c.lastMod !== undefined) {
-    w.i32(degToMicro(c.lat ?? 0)).i32(degToMicro(c.lon ?? 0));
-    if (c.lastMod !== undefined) w.u32(c.lastMod);
-  }
+  // Always write lat/lon: firmware `updateContactFromFrame` (MyMesh.cpp L194-216) only copies them
+  // if present, and for a NEW contact `CMD_ADD_UPDATE_CONTACT` (L1328-1348) builds the record in an
+  // uninitialised stack `ContactInfo`, so omitting them stores garbage coordinates.
+  w.i32(degToMicro(c.lat ?? 0)).i32(degToMicro(c.lon ?? 0));
+  if (c.lastMod !== undefined) w.u32(c.lastMod);
 }

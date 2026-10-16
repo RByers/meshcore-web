@@ -103,6 +103,17 @@ export const shared = css`
   .mono {
     font-family: var(--mc-mono);
   }
+  /* honour the OS "reduce motion" setting everywhere (also in index.html for the light DOM) */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
   .visually-hidden {
     position: absolute;
     width: 1px;

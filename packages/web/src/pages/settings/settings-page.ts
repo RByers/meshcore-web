@@ -21,6 +21,7 @@ import {
   type TimeFormatPreference,
 } from '@meshcore-web/core/app';
 import { AppElement } from '../../app-context.js';
+import { APP_VERSION, BUILD_DATE, MESHCORE_FIRMWARE_URL, MESHCORE_URL, REPO_URL } from '../../build-info.js';
 import { batteryPercent } from '../../format.js';
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
@@ -209,6 +210,12 @@ export class McSettingsPage extends AppElement {
         border-radius: 8px;
         user-select: all;
       }
+      section.about {
+        margin-block-start: var(--mc-gap);
+      }
+      section.about dl {
+        margin-block-end: 0.75em;
+      }
       .warn {
         color: var(--mc-warn);
       }
@@ -369,6 +376,7 @@ export class McSettingsPage extends AppElement {
             </section>`}
         ${this.#appSection()}
       </div>
+      ${this.#about()}
       ${this.#renderDialog()}
     `;
   }
@@ -995,6 +1003,30 @@ export class McSettingsPage extends AppElement {
         >
         <p class="hint">Off by default. Turning it off deletes a stored key of the connected radio.</p>
       </form>
+    </section>`;
+  }
+
+  #about(): TemplateResult {
+    const built = new Date(BUILD_DATE);
+    const builtText = Number.isNaN(built.getTime()) ? BUILD_DATE : built.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+    return html`<section class="card about" data-section="about" aria-labelledby="s-about">
+      <h2 id="s-about">About</h2>
+      <dl>
+        <dt>Version</dt>
+        <dd data-field="version">${APP_VERSION}</dd>
+        <dt>Built</dt>
+        <dd data-field="build-date"><time datetime=${BUILD_DATE}>${builtText}</time></dd>
+        <dt>Source</dt>
+        <dd><a data-field="repo" href=${REPO_URL} target="_blank" rel="noopener">${REPO_URL.replace(/^https:\/\//, '')}</a></dd>
+        <dt>Licence</dt>
+        <dd data-field="licence">MIT</dd>
+      </dl>
+      <p class="hint">
+        MeshCore Web is an independent web client for
+        <a href=${MESHCORE_URL} target="_blank" rel="noopener">MeshCore</a>. Thanks to the MeshCore project and
+        contributors for the <a href=${MESHCORE_FIRMWARE_URL} target="_blank" rel="noopener">firmware</a> and companion
+        protocol this app is built on. Runs entirely in your browser; nothing is sent to a server.
+      </p>
     </section>`;
   }
 

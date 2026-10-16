@@ -22,8 +22,8 @@ truth = firmware companion-v1.18.0), `mesh-packet-format.md` (over-the-air packe
    device reports (LOG_RX_DATA / RAW_DATA / TRACE_DATA pushes) is stored in IndexedDB with
    its radio metadata (SNR, RSSI, timestamp, direction, interface). A packet inspector
    explains each byte according to the protocol spec.
-4. **Minimal dependencies.** Runtime: `lit` only (map tiles, if added, via a vendored
-   minimal loader or `leaflet` as the single exception, decided in Phase 12). Dev:
+4. **Minimal dependencies.** Runtime: `lit` only (Phase 12 decided against Leaflet: the
+   map is an in-house tile view, see "Phase 12 notes"). Dev:
    typescript, vite, vitest, playwright, fake-indexeddb.
 5. **Local-first, privacy-preserving.** No server. All state in IndexedDB keyed by the
    connected radio's public key, so multiple radios can be used from one browser.
@@ -59,7 +59,8 @@ packages/core   @meshcore-web/core   pure TS, no DOM; tested in node with vitest
   src/store/       IndexedDB schema + typed repositories: packets, frames, messages,
                    contacts, channels, devices, settings
   src/app/         Framework-agnostic application model (ConnectionManager, ChatModel,
-                   ContactsModel, ChannelsModel, PacketLogModel, DeviceSettingsModel)
+                   ContactsModel, ChannelsModel, PacketLogModel, DeviceSettingsModel,
+                   MapModel + geo maths)
                    that the UI binds to. Observable via a tiny signal/event helper.
 
 packages/web    @meshcore-web/web    Vite + Lit; tested with vitest browser mode in Chromium
@@ -96,7 +97,7 @@ made on `main`. Phases are sequential unless marked parallelisable.
 | 9 | Packet log & inspector | Packet log view with filters (direction, type, node, time), live tail, per-packet inspector showing hex dump with the annotation tree, decrypted view when key known, frame-level log of host↔device traffic, export/import JSON | done |
 | 10 | Repeater / room / sensor admin | Login, status, telemetry, CLI (send command text, show replies), trace path, path discovery, neighbours; room-server posts | done |
 | 11 | Device settings | Name, lat/lon, radio params (freq/bw/sf/cr/tx power), advert interval/flood settings, other params, tuning, time sync, battery, stats, export/import private key, reboot/factory reset, manual-add / auto-add flags, advert send (flood / zero-hop) | done |
-| 12 | Map & polish | Node map (contacts with location, own location), PWA manifest + offline shell, keyboard/accessibility pass, settings export, README user guide, release build | |
+| 12 | Map & polish | Node map (contacts with location, own location), PWA manifest + offline shell, keyboard/accessibility pass, settings export, README user guide, release build | done (see Phase 12 notes; settings export not done) |
 
 Cross-cutting, tracked per phase: protocol version gating (V1/V3 message pushes),
 multiple-radio support (store keyed by pubkey), error handling and reconnect.
@@ -110,4 +111,42 @@ multiple-radio support (store keyed by pubkey), error handling and reconnect.
 - Decrypting over-the-air DMs in the inspector requires the device's private key
   (exportable via EXPORT_PRIVATE_KEY, 64-byte expanded key) and X25519 — kept optional
   and off by default; channel decryption only needs the PSK.
-- Map tiles need a tile source; decided in Phase 12.
+- Map tiles: decided in Phase 12 (OpenStreetMap tiles by default, configurable template; see below).
+
+## Phase 12 notes and decisions
+
+**Map (no Leaflet).** The map is `<mc-tile-map>` (`packages/web/src/components/tile-map.ts`), a
+small Web Mercator raster-tile view with drag/touch pan, wheel/pinch and keyboard zoom, and
+focusable markers. The maths (projection, tile maths, haversine distance, bearing, fit-bounds)
+is in `packages/core/src/app/geo.ts`; state (markers from contacts with a location, own
+position from SELF_INFO, kind / max-age filters, selection, distance + bearing) is
+`MapModel` (`map-model.ts`). This keeps the runtime dependency list at `lit` only. Tiles come
+from OpenStreetMap's standard tile server (`https://tile.openstreetmap.org/{z}/{x}/{y}.png`,
+attribution always shown) by default; the template is configurable on the Map page
+("Tile source") and stored in preferences, so users can point at their own or a commercial
+tile server (OSM's tile usage policy is not meant for heavy use). Tiles are fetched directly
+by the browser and are never cached by the service worker.
+
+**PWA.** `packages/web/public/manifest.webmanifest` (standalone, theme `#0b63c9`, background
+`#f6f7f9`, SVG + 192/512 PNG icons rendered from `icon.svg` by
+`packages/web/scripts/render-icons.mjs` with playwright's Chromium). `public/sw.js` is a
+hand-written service worker (no Workbox): on install it fetches `./` and caches it plus every
+`./assets/…` URL referenced in it and the manifest/icons; navigations are network-first with
+the cached `index.html` as offline fallback; `assets/` (content-hashed) are cache-first with
+a background refresh; everything else (tiles, other origins, non-GET) passes through. The SW
+is registered only in production builds (`import.meta.env.PROD`) as
+`./sw.js?v=<__BUILD_ID__>`; the build id is injected by vite `define`, so each deploy installs
+a new worker with a new cache (`meshcore-web-<build id>`) and old caches are deleted on
+activate. All paths are relative, so the build works from any base path. "Install app" on
+the Connect page appears only when Chromium fires `beforeinstallprompt`.
+
+**Polish.** App-level error boundary (`packages/web/src/error-boundary.ts`: window `error` /
+`unhandledrejection` → deduplicated error toast + `console.error`), `prefers-reduced-motion`
+guard (shared styles and `index.html`), About section in Settings (version from
+`packages/web/package.json`, build date, repository link via the single `REPO_URL` constant in
+`packages/web/src/build-info.ts`, MIT licence, MeshCore credits). Docs: `docs/user-guide.md`,
+rewritten `README.md`, `LICENSE`.
+
+**Not done in Phase 12:** settings export/import (app preferences + per-radio local data as a
+file); a dedicated keyboard/accessibility audit beyond what earlier phases added; `REPO_URL`
+is a placeholder until the repository is published.

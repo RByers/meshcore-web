@@ -349,8 +349,15 @@ export class McPacketInspector extends LitElement {
   }
 
   #bits(parent: AnnotationNode, n: AnnotationNode): TemplateResult {
-    const byte = this.bytes[parent.offset] ?? 0;
     const mask = n.bits?.mask ?? 0;
+    // A decrypted parent's plaintext byte is not in `bytes` (those are the ciphertext): use the
+    // parent's "0x.." value, or failing that rebuild the bits from this field's value.
+    let byte = this.bytes[parent.offset] ?? 0;
+    if (parent.decrypted) {
+      const hex = /^0x([0-9a-f]{2})$/i.exec(parent.value.trim());
+      const shift = mask ? 31 - Math.clz32(mask & -mask) : 0;
+      byte = hex ? parseInt(hex[1]!, 16) : ((Number.parseInt(n.value, 10) || 0) << shift) & mask;
+    }
     return html`<span class="bitdiagram" aria-label=${`bits ${mask.toString(2).padStart(8, '0')}`}>${[7, 6, 5, 4, 3, 2, 1, 0].map(
       (bit) => html`<span class=${mask & (1 << bit) ? 'on' : ''}>${mask & (1 << bit) ? (byte >> bit) & 1 : '·'}</span>`,
     )}</span>`;

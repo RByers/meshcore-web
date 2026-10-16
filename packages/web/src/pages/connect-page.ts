@@ -4,6 +4,7 @@ import { CONNECTION_KIND_LABEL, isConnectionKind, type ConnectionKind } from '@m
 import type { DeviceRecord } from '@meshcore-web/core/store';
 import { AppElement } from '../app-context.js';
 import { PHASE_LABEL, formatRelative, shortKey } from '../format.js';
+import { getInstallPrompt } from '../pwa.js';
 import { shared } from '../styles.js';
 
 interface Option {
@@ -100,6 +101,17 @@ export class McConnectPage extends AppElement {
       .device .name {
         font-weight: 600;
       }
+      .install {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px 16px;
+        margin-block-start: var(--mc-gap);
+      }
+      .install p {
+        flex: 1 1 14rem;
+        margin: 0;
+      }
     `,
   ];
 
@@ -117,8 +129,19 @@ export class McConnectPage extends AppElement {
         ${phase === 'error' && conn.error.value ? html`<span class="why">Last attempt failed: ${conn.error.value.message}</span>` : nothing}
       </p>
       <div class="options">${OPTIONS.map((o) => this.#option(o, busy, last))}</div>
-      ${this.#devices(busy)}
+      ${this.#devices(busy)} ${this.#install()}
     `;
+  }
+
+  /** Shown only while the browser offers installation (`beforeinstallprompt`). */
+  #install() {
+    const install = getInstallPrompt();
+    if (!install.available.value) return nothing;
+    return html`<section class="card install" data-section="install" aria-labelledby="install-h">
+      <p><strong id="install-h">Install MeshCore Web</strong><br />
+        <span class="muted">Open it from your dock or home screen, in its own window; the app shell works offline.</span></p>
+      <button data-action="install" @click=${() => void install.prompt()}>Install app</button>
+    </section>`;
   }
 
   #option(o: Option, busy: boolean, last: ConnectionKind | null) {

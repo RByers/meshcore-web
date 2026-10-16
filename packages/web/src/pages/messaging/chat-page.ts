@@ -98,8 +98,11 @@ export class McChatPage extends AppElement {
         border-radius: 14px;
         background: var(--mc-surface);
         border: 1px solid var(--mc-border);
-        white-space: pre-wrap;
         overflow-wrap: anywhere;
+      }
+      /* pre-wrap only on the message text: on .bubble it would render the template's indentation. */
+      .bubble [data-field='text'] {
+        white-space: pre-wrap;
       }
       .msg[data-dir='out'] .bubble {
         background: var(--mc-accent-soft);
@@ -368,11 +371,16 @@ export class McChatPage extends AppElement {
     const tries = this.convType === 'contact' && attempts > 1 ? html`<span data-field="attempt">attempt ${attempts}</span>` : nothing;
     switch (m.status) {
       case 'pending':
-        return html`${tries}<span class="status" data-status="pending" aria-label="Sending"><span class="spinner"></span></span>`;
+        return html`${tries}<span class="status" data-status="pending" role="img" aria-label="Sending" title="Sending"><span class="spinner"></span></span>`;
       case 'sent':
-        return html`${tries}<span class="status" data-status="sent" title="Sent by the radio" aria-label="Sent">✓</span>`;
+        return html`${tries}<span class="status" data-status="sent" title="Sent by the radio" role="img" aria-label="Sent">✓</span>`;
       case 'delivered':
-        return html`${tries}<span class="status" data-status="delivered" aria-label="Delivered"
+        return html`${tries}<span
+            class="status"
+            data-status="delivered"
+            role="img"
+            title="Delivered"
+            aria-label=${m.roundTripMs !== undefined ? `Delivered in ${formatDuration(m.roundTripMs)}` : 'Delivered'}
             >✓✓${m.roundTripMs !== undefined ? html` <span data-field="rtt">${formatDuration(m.roundTripMs)}</span>` : nothing}</span
           >`;
       case 'failed':

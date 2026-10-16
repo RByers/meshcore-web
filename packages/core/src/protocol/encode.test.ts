@@ -140,9 +140,13 @@ describe('encodeCommand — contacts (companion-protocol.md §4, §7)', () => {
     expect(bytes[132]).toBe(0x04); // last_advert at 132
   });
 
-  it('ADD_UPDATE_CONTACT optional trailing fields: 136 / 144 / 148 bytes', () => {
+  it('ADD_UPDATE_CONTACT always sends lat/lon (144 bytes), lastMod optional (148)', () => {
+    // MyMesh.cpp L1328-1348: a NEW contact is built in an uninitialised stack ContactInfo and
+    // updateContactFromFrame (L194-216) copies gps only if present, so lat/lon are never omitted.
     const base = { pubKey: KEY, type: 1, flags: 0, outPathLen: 0xff, name: 'A', lastAdvert: 0 };
-    expect(encodeCommand({ kind: 'addUpdateContact', contact: base }).length).toBe(136);
+    const noLoc = encodeCommand({ kind: 'addUpdateContact', contact: base });
+    expect(noLoc.length).toBe(144);
+    expect(toHex(noLoc.slice(136))).toBe(h('00000000 00000000'));
     expect(encodeCommand({ kind: 'addUpdateContact', contact: { ...base, lat: 1, lon: 2 } }).length).toBe(144);
     const withMod = encodeCommand({ kind: 'addUpdateContact', contact: { ...base, lastMod: 5 } });
     expect(withMod.length).toBe(148);
@@ -504,3 +508,4 @@ describe('encodeCommand — coverage', () => {
     expect(toHex(u32le(0x6553f100))).toBe('00f15365');
   });
 });
+

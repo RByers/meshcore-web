@@ -35,7 +35,7 @@ export interface Contact {
   lastMod: number;
 }
 
-/** Input for CMD_ADD_UPDATE_CONTACT. lat/lon and lastMod are optional trailing fields. §4 CMD 9 */
+/** Input for CMD_ADD_UPDATE_CONTACT. §4 CMD 9 */
 export interface ContactInput {
   pubKey: Uint8Array;
   type: number;
@@ -46,7 +46,11 @@ export interface ContactInput {
   outPath?: Uint8Array;
   name: string;
   lastAdvert: number;
-  /** Degrees. Sent only if both lat and lon are given (or lastMod is given: then 0 is sent). */
+  /**
+   * Degrees. Always sent (0 if absent): the firmware would leave a NEW contact's coordinates
+   * uninitialised if the field were omitted. `CompanionClient.addOrUpdateContact` fills them from
+   * the cached contact.
+   */
   lat?: number;
   lon?: number;
   /** If absent the device sets lastmod to its RTC now. */

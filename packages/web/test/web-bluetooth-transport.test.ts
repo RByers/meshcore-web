@@ -82,13 +82,13 @@ describe('WebBluetoothTransport + mock bluetooth', () => {
     await t.disconnect();
   });
 
-  it('uses write-without-response only when the characteristic supports it', async () => {
+  it('writes with response by default; without response only on opt-out when supported', async () => {
     const mock = createMockBluetooth({ writeWithoutResponse: true });
-    const t = new WebBluetoothTransport({ device: mock.device });
+    const t = new WebBluetoothTransport({ device: mock.device, preferWriteWithResponse: false });
     await t.connect();
     await t.send(fromHex('01'));
     await t.disconnect();
-    const t2 = new WebBluetoothTransport({ device: mock.device, preferWriteWithResponse: true });
+    const t2 = new WebBluetoothTransport({ device: mock.device });
     await t2.connect();
     await t2.send(fromHex('02'));
     await t2.disconnect();

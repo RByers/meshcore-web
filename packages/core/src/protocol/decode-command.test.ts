@@ -42,6 +42,11 @@ const ROUND_TRIPS: Array<[Command, Command?]> = [
       kind: 'addUpdateContact',
       contact: { pubKey: KEY, type: 2, flags: 1, outPathLen: 0x42, outPath: x('a1a2b1b2'), name: 'Rpt', lastAdvert: 1700000000 },
     },
+    // lat/lon are always sent (0 when absent): firmware leaves a new contact's gps uninitialised otherwise
+    {
+      kind: 'addUpdateContact',
+      contact: { pubKey: KEY, type: 2, flags: 1, outPathLen: 0x42, outPath: x('a1a2b1b2'), name: 'Rpt', lastAdvert: 1700000000, lat: 0, lon: 0 },
+    },
   ],
   [
     {

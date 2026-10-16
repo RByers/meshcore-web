@@ -2,11 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
 import { toHex } from '../util/bytes.js';
 import { channelKeyForPsk } from '../store/channels.js';
-import type { MessageStatus } from '../store/schema.js';
+import type { MessageRecord, MessageStatus } from '../store/schema.js';
 import { hashtagChannelSecret, publicChannelSecret, scenarioKey } from '../emulator/scenarios.js';
 import { AppModel, createEmulatorTransportFactory, type AppModelOptions } from './app-model.js';
 import { memoryPreferences } from './connection.js';
 import { base64Encode } from './messaging.js';
+import { messagePreview } from './contacts-model.js';
 
 const apps: AppModel[] = [];
 
@@ -338,6 +339,20 @@ describe('ChannelsModel', () => {
       ['#side', 5],
     ]);
   });
+
+  it('renaming a #hashtag channel without a key joins the new hashtag', async () => {
+    const { app, s } = await connected();
+    const m = app.channels;
+    await vi.waitFor(() => expect(m.views.value).toHaveLength(2));
+    const tag = await m.add({ name: '#hiking' });
+    const renamed = await m.edit(tag.key, { name: '#hike' });
+    expect(s.emulator.channels[2]!.name).toBe('#hike');
+    expect(toHex(s.emulator.channels[2]!.secret)).toBe(toHex(hashtagChannelSecret('#hike')));
+    expect(renamed.key).toBe(await channelKeyForPsk(hashtagChannelSecret('#hike')));
+    // same name, no key: unchanged
+    const same = await m.edit(renamed.key, { name: '#hike' });
+    expect(same.key).toBe(renamed.key);
+  });
 });
 
 describe('ConversationsModel', () => {
@@ -351,5 +366,26 @@ describe('ConversationsModel', () => {
     s.emulator.injectContactMessage(s.keys.carol, 'news from the valley');
     await vi.waitFor(() => expect(c.items.value[0]).toMatchObject({ key: hex.carol, convType: 'contact', unread: 1, icon: 'chat' }));
     expect(c.items.value[0]!.lastMessage?.text).toBe('news from the valley');
+  });
+});
+
+describe('messagePreview', () => {
+  const base: MessageRecord = {
+    id: 1,
+    convKey: 'aa',
+    convType: 'contact',
+    direction: 'out',
+    text: 'hi',
+    timestamp: 0,
+    receivedAt: 0,
+    txtType: 0,
+    status: 'sent',
+    pathLen: 0,
+  };
+  it('prefixes the author and shows replies without the raw @[name] convention', () => {
+    expect(messagePreview(undefined)).toBe('');
+    expect(messagePreview(base)).toBe('You: hi');
+    expect(messagePreview({ ...base, direction: 'in', senderName: 'Dave', text: 'yo' })).toBe('Dave: yo');
+    expect(messagePreview({ ...base, text: '@[Alice] Yes, all day' })).toBe('You: ↪ Yes, all day');
   });
 });

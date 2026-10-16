@@ -29,7 +29,13 @@ export interface WebBluetoothTransportOptions {
    * writes). See the MTU note on the class.
    */
   maxFrameLength?: number;
-  /** Force write-with-response even if the RX characteristic allows write-without-response. */
+  /**
+   * Default true: always write-with-response when the RX characteristic supports it (as
+   * meshcore.js `writeValue` does). nRF52 firmware (Adafruit BLEUart, RX = WRITE | WRITE_NR) reads
+   * everything buffered in its RX FIFO as ONE frame (nrf52/SerialBLEInterface.cpp onBleUartRX), so
+   * unacknowledged back-to-back writes can merge; ESP32 RX is WRITE only. Pass false to allow
+   * write-without-response.
+   */
   preferWriteWithResponse?: boolean;
 }
 
@@ -51,8 +57,7 @@ export interface RequestBleDeviceOptions {
  *   can only enforce the protocol limit (`maxFrameLength`, 176) and rely on the OS. RP2040
  *   drops notifications with `len + 3 > MTU`; ESP32 sets MTU 176 on its side.
  * - Writes are serialized (Chrome rejects concurrent GATT operations with "GATT operation
- *   already in progress"). Write-without-response is used only when the RX characteristic
- *   advertises it; firmware RX is WRITE (with response), so that is the normal path.
+ *   already in progress"). Write-with-response is the default (see `preferWriteWithResponse`).
  * - The device queue is small (4-12 frames), so the client should send one command at a time.
  */
 export class WebBluetoothTransport extends BaseTransport implements FrameTransport {
@@ -89,7 +94,7 @@ export class WebBluetoothTransport extends BaseTransport implements FrameTranspo
     this.#bluetooth = options.bluetooth;
     this.#device = options.device;
     this.#max = options.maxFrameLength ?? MAX_FRAME_SIZE;
-    this.#preferWithResponse = options.preferWriteWithResponse ?? false;
+    this.#preferWithResponse = options.preferWriteWithResponse ?? true;
   }
 
   /** Shows the browser's device picker (user gesture required). */
@@ -178,7 +183,7 @@ export class WebBluetoothTransport extends BaseTransport implements FrameTranspo
     const data = frame.slice(); // own copy, detached from caller mutations
     const p = this.#writeChain.then(async () => {
       if (this.state !== 'connected') throw new TransportError('BLE transport is not connected');
-      if (!this.#preferWithResponse && rx.properties.writeWithoutResponse && rx.writeValueWithoutResponse) {
+      if (rx.properties.writeWithoutResponse && rx.writeValueWithoutResponse && (!this.#preferWithResponse || !rx.properties.write)) {
         await rx.writeValueWithoutResponse(data);
       } else if (rx.writeValueWithResponse) {
         await rx.writeValueWithResponse(data);

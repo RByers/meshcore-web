@@ -23,6 +23,7 @@ import { ConversationsModel } from './conversations-model.js';
 import { DeviceSettingsModel, type GeolocationProvider } from './device-settings-model.js';
 import { AppSettingsModel } from './app-settings-model.js';
 import { NotificationsModel, type NotificationsTimers } from './notifications.js';
+import { MapModel } from './map-model.js';
 import { PacketLogModel } from './packet-log-model.js';
 import { RemoteAdminModel, type RemoteAdminOptions } from './remote-admin-model.js';
 import { signal, type ReadonlySignal } from './signal.js';
@@ -84,6 +85,7 @@ export class AppModel {
   #appSettings: AppSettingsModel | undefined;
   readonly #prefs: PreferencesStore;
   #remoteAdmin: RemoteAdminModel | undefined;
+  #map: MapModel | undefined;
   readonly #chats = new Map<string, ChatModel>();
   #offs: Array<() => void> = [];
 
@@ -184,6 +186,11 @@ export class AppModel {
 
   get remoteAdmin(): RemoteAdminModel {
     return (this.#remoteAdmin ??= new RemoteAdminModel(this.connection, { ...this.#opts.remoteAdmin, contacts: this.contacts }));
+  }
+
+  /** Node map: contacts with a location, own location, filters (Phase 12). */
+  get map(): MapModel {
+    return (this.#map ??= new MapModel(this.contacts.views, this.connection.selfInfo, { preferences: this.#prefs }));
   }
 
   /** The model of one conversation (cached per conversation). */

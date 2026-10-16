@@ -90,6 +90,10 @@ describe('/packets page', () => {
     expect(t.query('[data-byte="1"]')!.classList.contains('hl')).toBe(false);
     // header bit fields are drawn as bit diagrams
     expect(t.queryAll('.bitdiagram').length).toBeGreaterThanOrEqual(3);
+    // decrypted flags byte (PLAIN, attempt 0 → 0x00): its bit diagram shows the plaintext bits,
+    // not the ciphertext byte at the same offset
+    const txtType = t.query('.node.decrypted[data-name="txt_type"] .bitdiagram')!;
+    expect([...txtType.querySelectorAll('span.on')].map((b) => b.textContent).join('')).toBe('000000');
 
     // hovering a byte highlights the deepest field covering it
     t.query('[data-byte="1"]')!.dispatchEvent(new MouseEvent('mouseenter'));
@@ -110,6 +114,12 @@ describe('/packets page', () => {
     const sels = t.queryAll('.bytes span.sel').map((s) => Number(s.dataset['byte']));
     expect(sels).toHaveLength(1);
     expect(t.query('[data-name="channel_hash"]')!.classList.contains('sel')).toBe(true);
+
+    // the inspector belongs to the packets tab: hidden on the frames tab, back on return
+    await t.click('[data-tab="frames"]');
+    await t.until(() => !t.query('aside mc-packet-inspector'), 2000, 'hidden on frames tab');
+    await t.click('[data-tab="packets"]');
+    await t.until(() => t.query('aside mc-packet-inspector'), 2000, 'shown again on packets tab');
 
     await t.click('[data-action="close-inspector"]');
     await t.until(() => !t.query('aside mc-packet-inspector'), 2000, 'closed');

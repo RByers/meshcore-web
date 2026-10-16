@@ -20,6 +20,7 @@ import {
   type ContactShare,
   type ContactKind,
   type PathDisplay,
+  parseReply,
 } from './messaging.js';
 
 export type ContactSort = 'recent' | 'name';
@@ -65,10 +66,12 @@ export interface AddContactOptions {
 function preview(m: MessageRecord | undefined): string {
   if (!m) return '';
   const who = m.direction === 'out' ? 'You: ' : m.senderName ? `${m.senderName}: ` : '';
-  return `${who}${m.text}`;
+  // Replies are stored as "@[name] text"; show them as "↪ text" rather than the raw convention.
+  const reply = parseReply(m.text);
+  return `${who}${reply ? `↪ ${reply.text}` : m.text}`;
 }
 
-/** "You: hi" / "Dave: hi" / "hi" for list previews. */
+/** "You: hi" / "Dave: hi" / "hi" / "You: ↪ hi" (a reply) for list previews. */
 export function messagePreview(m: MessageRecord | undefined): string {
   return preview(m);
 }

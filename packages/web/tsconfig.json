@@ -5,6 +5,7 @@
     "moduleResolution": "Bundler",
     "customConditions": ["source"],
     "noEmit": true,
+    "resolveJsonModule": true,
     "types": ["vite/client"]
   },
   "include": ["src", "test", "vite.config.ts"]

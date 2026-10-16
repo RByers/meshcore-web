@@ -12,4 +12,5 @@ registerPage({ path: '/device', title: 'Device', icon: '📟', tag: 'mc-device-p
 import './messaging/index.js';
 import './admin/index.js';
 import './packets/index.js';
+import './map/index.js';
 import './settings/index.js';

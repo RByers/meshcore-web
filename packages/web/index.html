@@ -4,7 +4,13 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
+    <meta name="description" content="MeshCore companion radio client for the browser: messaging, channels, map, packet inspector and node admin over USB or Bluetooth." />
+    <meta name="theme-color" content="#0b63c9" />
     <title>MeshCore Web</title>
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+    <link rel="icon" href="./icon-192.png" type="image/png" sizes="192x192" />
+    <link rel="apple-touch-icon" href="./icon-192.png" />
     <style>
       :root {
         color-scheme: light dark;
@@ -13,6 +19,18 @@
       body {
         margin: 0;
         background: light-dark(#f6f7f9, #111418);
+      }
+      @media (prefers-reduced-motion: reduce) {
+        html {
+          scroll-behavior: auto;
+        }
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+        }
       }
     </style>
     <script type="module" src="./src/main.ts"></script>

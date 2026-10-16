@@ -25,7 +25,7 @@ describe('<mc-app> shell', () => {
     await t.mount();
     expect(t.query('.brand')?.textContent).toBe('MeshCore Web');
     const nav = t.queryAll<HTMLAnchorElement>('nav a').map((a) => a.dataset['path']);
-    expect(nav).toEqual(['/', '/device', '/messages', '/contacts', '/channels', '/packets', '/settings']);
+    expect(nav).toEqual(['/', '/device', '/messages', '/contacts', '/channels', '/map', '/packets', '/settings']);
     expect(t.query('nav a[aria-current="page"]')?.dataset['path']).toBe('/');
     expect(t.query('mc-connect-page')).not.toBeNull();
     expect(t.query('.chip')?.textContent).toContain('Not connected');
@@ -201,7 +201,7 @@ describe('connect flows', () => {
       expect(r.height).toBeGreaterThan(0);
       const main = t.query('main')!.getBoundingClientRect();
       expect(r.top).toBeGreaterThanOrEqual(main.top);
-      expect(t.queryAll('nav a').length).toBe(7);
+      expect(t.queryAll('nav a').length).toBe(8);
     } finally {
       await page.viewport(1280, 800);
     }

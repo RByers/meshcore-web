@@ -119,6 +119,8 @@ type RemoteMatch<T> = { value: T } | { error: Error } | undefined;
 
 const MESSAGE_KINDS = ['contactMsg', 'channelMsg', 'channelData', 'noMoreMessages'] as const;
 const RECENT_ACKS = 64;
+/** Upper bound for a single transport write (covers an OS BLE pairing prompt). */
+const WRITE_TIMEOUT_MS = 60_000;
 /** SIGN_DATA chunk size: frame = 1 code byte + chunk ≤ 176. */
 const DEFAULT_SIGN_CHUNK = 160;
 
@@ -505,23 +507,27 @@ export class CompanionClient {
       return;
     }
     this.#active = job;
-    this.#armTimer(job);
+    // The reply timeout runs from write completion, not from queueing: a BLE write-with-response
+    // to a not-yet-bonded device blocks while the OS pairing (PIN) dialog is open, which easily
+    // exceeds the reply timeout. Until the write completes only a long write timeout applies.
+    this.#armTimer(job, Math.max(job.timeoutMs, WRITE_TIMEOUT_MS));
     this.#emit('frame', { direction: 'out', bytes: job.bytes, timestamp: this.clock.now(), command: job.cmd.kind });
     transport.send(job.bytes).then(
       () => {
         if (job.noReply) this.#settle(job, undefined, undefined);
+        else this.#armTimer(job);
       },
       (err: unknown) => this.#settle(job, err instanceof Error ? err : new Error(String(err))),
     );
   }
 
-  #armTimer(job: Job): void {
+  #armTimer(job: Job, ms = job.timeoutMs): void {
     if (job.done) return;
     this.#clearTimer(job.timer);
     job.timer = this.#setTimer(() => {
       if (job.timeoutOk) this.#settle(job, undefined, undefined);
-      else this.#settle(job, new RequestTimeoutError(job.cmd.kind, job.timeoutMs));
-    }, job.timeoutMs);
+      else this.#settle(job, new RequestTimeoutError(job.cmd.kind, ms));
+    }, ms);
   }
 
   #settle(job: Job, err: Error | undefined, value?: unknown): void {
@@ -677,7 +683,10 @@ export class CompanionClient {
    */
   async syncContacts(opts: { full?: boolean } = {}): Promise<ContactsResult> {
     const full = opts.full === true || this.#contactsSince === 0;
-    const r = await this.getContacts(full ? undefined : this.#contactsSince);
+    // The firmware filter is strict (`lastmod > since`, MyMesh.cpp L2397) at 1 s resolution, so a
+    // contact modified later in the same second as the previous mostRecentLastMod would be missed;
+    // re-ask for that boundary second (re-sent contacts just overwrite the cache).
+    const r = await this.getContacts(full ? undefined : this.#contactsSince - 1);
     const removed: Uint8Array[] = [];
     if (full) {
       const keep = new Set(r.contacts.map((c) => toHex(c.pubKey)));
@@ -723,7 +732,15 @@ export class CompanionClient {
     return c;
   }
 
+  /**
+   * ADD_UPDATE_CONTACT. lat/lon are always sent (the firmware leaves a new contact's coordinates
+   * uninitialised otherwise); when not given they are taken from the cached contact, else 0.
+   */
   async addOrUpdateContact(contact: ContactInput): Promise<void> {
+    if (contact.lat === undefined || contact.lon === undefined) {
+      const cached = this.#contacts.get(toHex(contact.pubKey));
+      contact = { ...contact, lat: contact.lat ?? cached?.lat ?? 0, lon: contact.lon ?? cached?.lon ?? 0 };
+    }
     await this.#ok({ kind: 'addUpdateContact', contact });
     await this.refreshContact(contact.pubKey);
   }
@@ -1069,8 +1086,15 @@ export class CompanionClient {
     }
   }
 
+  /**
+   * SET_RADIO_PARAMS. The firmware (MyMesh.cpp L1424-1458) sets client repeat from byte [11] on
+   * every call, treating an absent byte as "off", so an omitted `clientRepeat` keeps the device's
+   * current setting (DEVICE_INFO[80]) instead of silently disabling it.
+   */
   async setRadioParams(p: RadioParams): Promise<void> {
-    await this.#ok({ kind: 'setRadioParams', freqKhz: p.freqKhz, bwHz: p.bwHz, sf: p.sf, cr: p.cr, clientRepeat: p.clientRepeat ?? false });
+    const clientRepeat = p.clientRepeat ?? this.#deviceInfo?.clientRepeat ?? false;
+    await this.#ok({ kind: 'setRadioParams', freqKhz: p.freqKhz, bwHz: p.bwHz, sf: p.sf, cr: p.cr, clientRepeat });
+    if (this.#deviceInfo?.clientRepeat !== undefined) this.#deviceInfo = { ...this.#deviceInfo, clientRepeat };
     this.#updateSelf({ radioFreqKhz: p.freqKhz, radioBwHz: p.bwHz, radioSf: p.sf, radioCr: p.cr });
   }
 

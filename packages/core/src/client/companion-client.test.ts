@@ -282,20 +282,25 @@ describe('contacts', () => {
     expect(s.client.contactsSince).toBe(Math.max(...s.emu.contacts.map((c) => c.lastMod)));
     const changes = s.record('contactsChanged');
 
-    const none = await s.run(s.client.syncContacts());
-    expect(none.total).toBe(6);
-    expect(none.contacts).toHaveLength(0);
+    // since = previous mostRecentLastMod - 1: the firmware filter is strict `lastmod > since` at 1 s
+    // resolution, so the boundary second is re-fetched (only contacts modified in that second)
+    const since = s.client.contactsSince;
+    const boundary = await s.run(s.client.syncContacts());
+    expect(boundary.total).toBe(6);
+    expect(boundary.contacts.length).toBeGreaterThan(0);
+    expect(boundary.contacts.every((c) => c.lastMod === since)).toBe(true);
     const getContacts = s.frames.filter((f) => f.command === 'getContacts').at(-1)!;
-    expect(readU32LE(getContacts.bytes, 1)).toBe(s.client.contactsSince);
+    expect(readU32LE(getContacts.bytes, 1)).toBe(since - 1);
 
     s.clock.advance(5000);
     s.emu.injectAdvert({ pubKey: s.keys.carol, name: 'Carol 2', timestamp: START_SECS + 5 });
     await runFor(s.clock, 10);
     const r = await s.run(s.client.syncContacts());
-    expect(r.contacts.map((c) => c.name)).toEqual(['Carol 2']);
+    // Carol 2 plus the boundary-second contacts (lastMod === since) re-sent by the since-1 query
+    expect(r.contacts.filter((c) => c.lastMod > since).map((c) => c.name)).toEqual(['Carol 2']);
     expect(s.client.findContact(s.keys.carol)?.name).toBe('Carol 2');
     expect(s.client.contactsSince).toBe(r.mostRecentLastMod);
-    expect(changes.at(-1)!.updated.map((c) => c.name)).toEqual(['Carol 2']);
+    expect(changes.at(-1)!.updated.map((c) => c.name)).toContain('Carol 2');
     expect(changes.at(-1)!.full).toBe(false);
   });
 

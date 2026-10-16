@@ -20,6 +20,8 @@ Framework-agnostic state for the UI. No DOM: the web package injects browser obj
 | `chat-model.ts` | Phase 7/8: paging (`loadMore`), `send` / `retry` with status persisted (pending → sent → delivered / failed), `setActive` read tracking, `byteLimit`, `setReplyTo` / `quotedMessage` |
 | `channels-model.ts` | Phase 8: slot-synced list, add / edit / remove (clears the slot), mute, `freeSlot` |
 | `remote-admin-model.ts`, `remote-cli-commands.ts` | Phase 10: `RemoteAdminModel.node(key)` → `RemoteNodeModel` (login / remembered password, status fields, LPP telemetry, sensor min/max, neighbours, ACL, owner info, CLI transcript, trace, path discovery, reset path); firmware CLI command reference + autocomplete |
+| `geo.ts` | Phase 12: pure map maths — Web Mercator projection (`latLonToWorld` / `worldToLatLon`, `TILE_SIZE`), tile coordinates and `tileUrl` templating, `haversineMeters`, `bearingDegrees` / `compassPoint`, `formatDistance`, `boundsOf` / `boundsCenter` / `fitBoundsZoom`, `hasLocation` (0,0 = no location) |
+| `map-model.ts` | Phase 12: `MapModel` (`app.map`): markers for contacts with a location plus the own position from SELF_INFO (never browser GPS), kind and max-age filters, selection, distance / bearing from the own position, `withoutLocation` count; the tile URL template (default `OSM_TILE_URL`, `validateTileUrl`) and filters persist in preferences |
 | `conversations-model.ts` | Recent DMs + channels for the `/messages` overview |
 | `app-model.ts` | `AppModel` root: `notifications`, `connection`, `devices` (known radios), lazily created feature models, `createEmulatorTransportFactory()` |
 

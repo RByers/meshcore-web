@@ -641,7 +641,8 @@ export class McPacketsPage extends AppElement {
       </section>`;
     }
     const log = this.#log;
-    const split = this.wide && this.selected !== null;
+    // The inspector belongs to the tab its row came from: switching tabs hides it (and back shows it).
+    const split = this.wide && this.selected !== null && this.selected.tab === this.tab;
     return html`
       <div class="tabs" role="tablist" aria-label="Log">
         <button role="tab" data-tab="packets" aria-selected=${this.tab === 'packets' ? 'true' : 'false'} @click=${() => this.#setTab('packets')}>

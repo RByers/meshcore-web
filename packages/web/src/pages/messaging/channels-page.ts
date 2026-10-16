@@ -159,7 +159,7 @@ export class McChannelsPage extends AppElement {
             <input name="name" required maxlength="31" autocomplete="off" data-field="channel-name" />
           </label>
           <label>
-            Key ${editing ? html`<span class="hint">Leave empty to keep the current key.</span>` : html`<span class="hint">16 bytes as 32 hex digits or base64. Leave empty for a hashtag / Public channel or a new random key.</span>`}
+            Key ${editing ? html`<span class="hint">Leave empty to keep the current key (renaming to a different #hashtag switches to that hashtag's key).</span>` : html`<span class="hint">16 bytes as 32 hex digits or base64. Leave empty for a hashtag / Public channel or a new random key.</span>`}
             <input name="psk" autocomplete="off" spellcheck="false" class="key" data-field="channel-psk" />
           </label>
           ${editing ? html`<p class="hint muted">Current key: <span class="key">${base64Encode(editing.psk)}</span></p>` : nothing}
