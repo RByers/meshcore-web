@@ -141,6 +141,7 @@ function mergeContact(prev: ContactRecord | undefined, c: Contact, key: string, 
   const local: ContactLocalFields = prev
     ? { lastSeen: prev.lastSeen, unreadCount: prev.unreadCount, notes: prev.notes, favourite: prev.favourite, muted: prev.muted }
     : { ...DEFAULT_CONTACT_LOCAL };
+  if (prev?.smaz !== undefined) local.smaz = prev.smaz;
   const advertMs = c.lastAdvert * 1000;
   if (advertMs > local.lastSeen) local.lastSeen = advertMs;
   return { ...c, ...local, key, onDevice: true, updatedAt: now };

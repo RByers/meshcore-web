@@ -19,6 +19,8 @@ export interface ChannelView {
   slot: number | null;
   unread: number;
   muted: boolean;
+  /** SMAZ compression of outgoing messages (MeshCore Open compatible). */
+  smaz: boolean;
   lastMessage: MessageRecord | undefined;
 }
 
@@ -28,6 +30,8 @@ export interface ChannelInput {
   psk?: string;
   /** Device slot (default: the first free one). */
   slot?: number;
+  /** SMAZ-compress outgoing messages (local setting; default off). */
+  smaz?: boolean;
 }
 
 export class ChannelsModel extends StoreBoundModel {
@@ -50,6 +54,7 @@ export class ChannelsModel extends StoreBoundModel {
       slot: c.deviceIndex,
       unread: c.unread,
       muted: c.muted,
+      smaz: c.smaz === true,
       lastMessage: last.get(c.key),
     }));
   });
@@ -128,17 +133,27 @@ export class ChannelsModel extends StoreBoundModel {
     if (slot < 0 || slot >= this.slotCount.peek()) throw new Error(`Slot must be 0-${this.slotCount.peek() - 1}`);
     const rec = await this.#write(slot, name, psk);
     if (!rec) throw new Error('The radio did not store the channel');
-    return rec;
+    return input.smaz === undefined ? rec : this.#setSmaz(rec, input.smaz);
+  }
+
+  /** Stores the local SMAZ setting on `rec` (unchanged if it already matches). */
+  async #setSmaz(rec: ChannelRecord, smaz: boolean): Promise<ChannelRecord> {
+    if ((rec.smaz === true) === smaz) return rec;
+    const next = await this.store?.channels.update(rec.key, { smaz });
+    await this.reload();
+    return next ?? rec;
   }
 
   /**
    * Renames and/or re-keys a channel (a new PSK makes it a different conversation). Renaming to
    * a different "#hashtag" without an explicit key switches to that hashtag's derived key.
    */
-  async edit(key: string, patch: { name?: string; psk?: string }): Promise<ChannelRecord> {
+  async edit(key: string, patch: { name?: string; psk?: string; smaz?: boolean }): Promise<ChannelRecord> {
     const cur = this.find(key);
     if (!cur) throw new Error('Unknown channel');
     const name = (patch.name ?? cur.name).trim();
+    // a re-keyed channel is a new record; it keeps the setting being edited
+    const smaz = patch.smaz ?? cur.smaz === true;
     const err = channelNameError(name);
     if (err) throw new Error(err);
     // No explicit key: keep the current one, except that renaming to a different #hashtag joins
@@ -155,11 +170,11 @@ export class ChannelsModel extends StoreBoundModel {
       if (!store) throw new Error('Not connected');
       const rec = await store.channels.put({ name, psk, deviceIndex: null });
       await this.reload();
-      return rec;
+      return this.#setSmaz(rec, smaz);
     }
     const rec = await this.#write(cur.deviceIndex, name, psk);
     if (!rec) throw new Error('The radio did not store the channel');
-    return rec;
+    return this.#setSmaz(rec, smaz);
   }
 
   /**
@@ -179,5 +194,10 @@ export class ChannelsModel extends StoreBoundModel {
 
   async setMuted(key: string, muted: boolean): Promise<void> {
     await this.store?.channels.update(key, { muted });
+  }
+
+  /** Local SMAZ compression setting for outgoing messages (MeshCore Open compatible). */
+  async setSmaz(key: string, smaz: boolean): Promise<void> {
+    await this.store?.channels.update(key, { smaz });
   }
 }

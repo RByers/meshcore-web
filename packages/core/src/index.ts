@@ -1,6 +1,7 @@
 export const VERSION = '0.0.0';
 
 export * from './util/bytes.js';
+export * from './util/smaz.js';
 export * from './util/events.js';
 export * from './util/deferred.js';
 export * from './protocol/index.js';

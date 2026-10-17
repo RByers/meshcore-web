@@ -3,7 +3,7 @@ import 'fake-indexeddb/auto';
 import { ContactType, TxtType } from '../protocol/constants.js';
 import type { ChannelMsgFrame, ContactMsgFrame } from '../protocol/types.js';
 import type { MessageInput } from './messages.js';
-import { messageInputFromChannelFrame, messageInputFromContactFrame } from './messages.js';
+import { decodeReceivedText, messageInputFromChannelFrame, messageInputFromContactFrame } from './messages.js';
 import { hexKey, key32, makeContact, openStore } from './test-helpers.js';
 
 const PSK = Uint8Array.from({ length: 16 }, (_, i) => i);
@@ -192,5 +192,16 @@ describe('MessagesRepo', () => {
     await s.messages.markDeliveredByAck(1);
     expect(ev).toEqual(['add:pending', 'update:sent', 'update:delivered']);
     s.close();
+  });
+});
+
+describe('decodeReceivedText (MeshCore Open SMAZ envelope)', () => {
+  it('decodes "s:" envelopes on chat text types, never on CLI', () => {
+    const env = 's:/lRMOKw+rZg+w0Y='; // "This is a small string"
+    expect(decodeReceivedText(env, TxtType.PLAIN)).toEqual({ text: 'This is a small string', compressed: true });
+    expect(decodeReceivedText(env, TxtType.SIGNED_PLAIN)).toEqual({ text: 'This is a small string', compressed: true });
+    expect(decodeReceivedText(env, TxtType.CLI_DATA)).toEqual({ text: env });
+    expect(decodeReceivedText('s:test', TxtType.PLAIN)).toEqual({ text: 's:test' });
+    expect(decodeReceivedText('hello', TxtType.PLAIN)).toEqual({ text: 'hello' });
   });
 });

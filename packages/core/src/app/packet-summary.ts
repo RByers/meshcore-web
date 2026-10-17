@@ -5,6 +5,7 @@
  */
 
 import { toHex } from '../util/bytes.js';
+import { smazTryDecode } from '../util/smaz.js';
 import { ContactType, cmdName, decodePathLen, deviceFrameName, isValidPathLen } from '../protocol/constants.js';
 import { PayloadType, payloadTypeName, routeTypeName } from '../packet/constants.js';
 import { parsePacket, splitPath } from '../packet/packet.js';
@@ -187,7 +188,11 @@ export async function summarizePacket(rec: PacketRecord, ctx: SummaryContext = E
     }
     if (!pt) continue;
     try {
-      if (p.kind === 'grpTxt') return `${view.typeName} ${ch.name}: ${quote(parseGrpTxtPlaintext(pt).text)}`;
+      if (p.kind === 'grpTxt') {
+        const t = parseGrpTxtPlaintext(pt);
+        const smaz = smazTryDecode(t.message);
+        return `${view.typeName} ${ch.name}: ${quote(t.text)}${smaz === null ? '' : ` (SMAZ: ${quote(smaz)})`}`;
+      }
       const d = parseGrpDataPlaintext(pt);
       return `${view.typeName} ${ch.name}: data type 0x${d.dataType.toString(16).padStart(4, '0')}, ${d.dataLen} B`;
     } catch {

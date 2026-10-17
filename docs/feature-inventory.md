@@ -268,10 +268,56 @@ Over-the-air payload types (inside LOG_RX_DATA raw packets, `meshcore_protocol.d
 | Reaction | `r:<hash 4 hex>:<emoji idx 2 hex>` | docs chat-and-messaging |
 | GIF | `g:<giphy id>` | docs |
 | Location pin | `m:<lat>,<lon>\|<label>\|<type>` | docs map-and-location |
-| SMAZ compressed | `s:<base64>` (only if shorter) | docs additional-features |
+| SMAZ compressed | `s:<base64>` (only if shorter) — see §2.4a | `lib/helpers/smaz.dart` |
 | Community QR | JSON `{"v":1,"type":"meshcore_community","name":…,"k":<base64url secret>}` | docs channels |
 | Contact share | `meshcore://<hex advert packet>` | docs contacts |
 | Hop path bytes | `hops * width` bytes; width 1-3 per hop | docs routing-paths |
+
+### 2.4a SMAZ compression (implemented in MeshCore Web, issue #8)
+
+Derived from `lib/helpers/smaz.dart` and its callers (`connector/meshcore_connector.dart`
+`prepareContactOutboundText` / `prepareChannelOutboundText` / the CONTACT_MSG and GRP_TXT receive
+paths, `models/channel_message.dart`, `storage/{contact,channel}_settings_store.dart`,
+`screens/chat_screen.dart`, `screens/channels_screen.dart`). Web implementation:
+`packages/core/src/util/smaz.ts`.
+
+- **No protocol flag.** There is no txt_type value, flag byte or attempt bit for compression. The
+  message is an ordinary `TXT_TYPE_PLAIN` text whose content is `"s:" + base64(smaz(utf8(text)))`
+  (standard base64 alphabet with `=` padding). The firmware treats it as any other text (ACK hash,
+  160-byte limit and, for channels, the `"<name>: "` prefix all apply to the envelope).
+- **Codebook / stream.** The 254-entry antirez smaz codebook (`" "`, `"the"`, `"e"`, … `".com"`;
+  longest entry 7 bytes, `"http://"`). Byte 0..253 = codebook index; `254 b` = one verbatim byte;
+  `255 n b0..bn` = n+1 verbatim bytes (runs split at 256). Greedy longest match at each position.
+  Example: `"This is a small string"` (22 B) → `fe 54 4c 38 ac 3e ad 98 3e c3 46` (11 B) →
+  `s:/lRMOKw+rZg+w0Y=` (18 B).
+- **Send.** Only when the per-contact / per-channel setting is on, and only if the envelope is
+  strictly shorter in bytes than the plain text; otherwise the plain text is sent. Never applied
+  to empty text, text already starting with `s:`, or the structured payloads `g:` (GIF), `m:`
+  (location) and, for DMs, `V1|` (checked on the trimmed text). A reply's `@[name] ` prefix is
+  inside the compressed text (the whole outgoing text is compressed). For channels the app sends
+  the envelope and the firmware prepends `"<name>: "`, so on air it is `"<name>: s:…"`. The DM ACK
+  hash is over the envelope. Retries re-run the transform (MeshCore Web: a record sent compressed
+  is resent compressed).
+- **Receive.** Decoding is attempted on *every* incoming plain / signed DM and channel message,
+  regardless of the setting (CLI replies are excluded). For channels the `"<name>: "` prefix is
+  split off first and only the message part is decoded. `tryDecodePrefixed` ignores leading
+  whitespace, requires `s:` plus at least one character, accepts standard or URL-safe base64 with
+  optional padding, and only accepts a payload that decompresses to valid UTF-8, re-compresses to
+  the identical bytes, and whose envelope (`2 + base64 length`) is shorter than the decoded bytes.
+  Anything else (`"s:test"`, `"s: hello"`) is shown as typed. Very short ambiguous texts could
+  still match; this is accepted upstream.
+- **Settings.** Local only, default off: `contact_smaz_<pubkeyhex>` and `channel_smaz_<channel id>`.
+  DM toggle: chat screen → contact settings dialog, "SMAZ compression — Compress outgoing
+  messages", committed immediately. Channel toggle: edit-channel sheet, saved with the form.
+  SMAZ and Cyr2Lat are mutually exclusive in MeshCore Open (Cyr2Lat is not implemented here).
+- **Byte budget.** With the setting on, the composer counts the bytes of the transformed (on-air)
+  text against the limit.
+- **MeshCore Web.** `ContactRecord.smaz` / `ChannelRecord.smaz` (optional, absent = off, so no DB
+  migration; preserved across device syncs). `MessageRecord.text` is always the plain text;
+  `MessageRecord.compressed` marks messages sent or received as an envelope. Toggles: chat page
+  composer ("Compress messages (SMAZ, MeshCore Open compatible)", DMs and channels) and the
+  channel add/edit dialog. `ChatModel.byteLimit` no longer subtracts the reply prefix while
+  compression is on (the prefix is compressed with the text and counted in `budget().used`).
 
 ---
 

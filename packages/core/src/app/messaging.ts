@@ -8,7 +8,8 @@ import { MAX_TEXT_LEN, PATH_LEN_UNKNOWN, PUBLIC_CHANNEL_SECRET_HEX, ContactType,
 import { parsePacket } from '../packet/packet.js';
 import { hashtagChannelPsk, parseAdvertPayload } from '../packet/payloads.js';
 import { PayloadType } from '../packet/constants.js';
-import { fromHex, toHex, utf8Encode } from '../util/bytes.js';
+import { base64Decode, fromHex, toHex, utf8Encode } from '../util/bytes.js';
+import { smazEncodeIfSmaller } from '../util/smaz.js';
 
 // ---------------------------------------------------------------------------
 // Byte budgets
@@ -40,6 +41,30 @@ export interface ByteBudget {
 export function byteBudget(text: string, limit: number): ByteBudget {
   const used = textByteLength(text);
   return { used, limit, remaining: limit - used, over: used > limit };
+}
+
+// ---------------------------------------------------------------------------
+// SMAZ compression (MeshCore Open compatible, feature-inventory.md §2.4a)
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether `text` is one of MeshCore Open's structured payloads, which it never compresses:
+ * "g:" (GIF), "m:" (map/location) and, for DMs, "V1|". Checked on the trimmed text.
+ */
+export function isStructuredPayload(convType: 'contact' | 'channel', text: string): boolean {
+  const t = text.trim();
+  return t.startsWith('g:') || t.startsWith('m:') || (convType === 'contact' && t.startsWith('V1|'));
+}
+
+/**
+ * The text actually sent for `text` (MeshCore Open `prepareContactOutboundText` /
+ * `prepareChannelOutboundText`): with compression on, `"s:" + base64(smaz(text))` when that is
+ * shorter, else `text`. Channel texts are compressed without the sender name (the device adds
+ * "<name>: " in front of the envelope); a reply's "@[name] " prefix is part of `text`.
+ */
+export function outboundText(convType: 'contact' | 'channel', text: string, compress: boolean): string {
+  if (!compress || isStructuredPayload(convType, text)) return text;
+  return smazEncodeIfSmaller(text);
 }
 
 // ---------------------------------------------------------------------------
@@ -195,36 +220,7 @@ export function channelKind(name: string, psk: Uint8Array): ChannelKind {
   return 'private';
 }
 
-const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-
-/** Decodes standard or URL-safe base64 (padding optional); null if malformed. */
-export function base64Decode(s: string): Uint8Array | null {
-  const t = s.trim().replace(/-/g, '+').replace(/_/g, '/').replace(/=+$/, '');
-  if (!/^[A-Za-z0-9+/]*$/.test(t) || t.length % 4 === 1) return null;
-  const out: number[] = [];
-  let acc = 0;
-  let bits = 0;
-  for (const ch of t) {
-    acc = (acc << 6) | B64.indexOf(ch);
-    bits += 6;
-    if (bits >= 8) {
-      bits -= 8;
-      out.push((acc >> bits) & 0xff);
-    }
-  }
-  return Uint8Array.from(out);
-}
-
-export function base64Encode(bytes: Uint8Array): string {
-  let s = '';
-  for (let i = 0; i < bytes.length; i += 3) {
-    const n = (bytes[i]! << 16) | ((bytes[i + 1] ?? 0) << 8) | (bytes[i + 2] ?? 0);
-    s += B64[(n >> 18) & 63]! + B64[(n >> 12) & 63]!;
-    s += i + 1 < bytes.length ? B64[(n >> 6) & 63]! : '=';
-    s += i + 2 < bytes.length ? B64[n & 63]! : '=';
-  }
-  return s;
-}
+export { base64Decode, base64Encode } from '../util/bytes.js';
 
 /**
  * Parses a channel PSK as typed by a user: 32 hex digits (separators ignored) or base64 of 16

@@ -40,6 +40,7 @@ export class McChannelsPage extends AppElement {
     const ch = key ? this.app.channels.find(key) : undefined;
     if (form && ch) {
       (form.elements.namedItem('name') as HTMLInputElement).value = ch.name;
+      (form.elements.namedItem('smaz') as HTMLInputElement).checked = ch.smaz === true;
     }
     this.#dialog('channel-dialog')?.showModal();
   }
@@ -50,12 +51,13 @@ export class McChannelsPage extends AppElement {
     const data = new FormData(form);
     const name = String(data.get('name') ?? '');
     const psk = String(data.get('psk') ?? '');
+    const smaz = data.get('smaz') !== null;
     this.#busy = true;
     this.#error = '';
     this.requestUpdate();
     try {
       const m = this.app.channels;
-      const rec = this.#editKey ? await m.edit(this.#editKey, { name, psk }) : await m.add({ name, psk });
+      const rec = this.#editKey ? await m.edit(this.#editKey, { name, psk, smaz }) : await m.add({ name, psk, smaz });
       this.#dialog('channel-dialog')?.close();
       this.app.notifications.success(`${this.#editKey ? 'Saved' : 'Added'} ${rec.name}${rec.deviceIndex !== null ? ` (slot ${rec.deviceIndex})` : ''}`);
     } catch (err) {
@@ -117,6 +119,7 @@ export class McChannelsPage extends AppElement {
           <span class="row-title">
             <span class="name">${c.name}</span>
             ${c.muted ? html`<span title="Muted" aria-label="Muted">🔕</span>` : nothing}
+            ${c.smaz ? html`<span class="muted" title="Outgoing messages are SMAZ-compressed" data-field="smaz">SMAZ</span>` : nothing}
             <span class="when">${lm ? formatRelative(lm.receivedAt) : ''}</span>
           </span>
           <span class="row-sub">${TYPE_LABEL[c.kind]} · ${c.slot !== null ? `slot ${c.slot}` : 'not on radio'}</span>
@@ -162,6 +165,11 @@ export class McChannelsPage extends AppElement {
             Key ${editing ? html`<span class="hint">Leave empty to keep the current key (renaming to a different #hashtag switches to that hashtag's key).</span>` : html`<span class="hint">16 bytes as 32 hex digits or base64. Leave empty for a hashtag / Public channel or a new random key.</span>`}
             <input name="psk" autocomplete="off" spellcheck="false" class="key" data-field="channel-psk" />
           </label>
+          <label style="flex-direction: row; align-items: center; font-weight: 400">
+            <input type="checkbox" name="smaz" data-field="channel-smaz" />
+            Compress messages (SMAZ, MeshCore Open compatible)
+          </label>
+          <p class="hint muted">Only if everyone on the channel uses MeshCore Open or another client that decodes SMAZ; others see “s:…” text. Received compressed messages are always decoded.</p>
           ${editing ? html`<p class="hint muted">Current key: <span class="key">${base64Encode(editing.psk)}</span></p>` : nothing}
           ${!editing && free !== null ? html`<p class="muted">Will use slot ${free}.</p>` : nothing}
           ${this.#error ? html`<p class="form-error" role="alert">${this.#error}</p>` : nothing}

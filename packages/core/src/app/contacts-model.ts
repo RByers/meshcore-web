@@ -310,6 +310,11 @@ export class ContactsModel extends StoreBoundModel {
     await this.store?.contacts.updateLocal(key, { favourite });
   }
 
+  /** Local SMAZ compression setting for outgoing DMs (MeshCore Open compatible). */
+  async setSmaz(key: string, smaz: boolean): Promise<void> {
+    await this.store?.contacts.updateLocal(key, { smaz });
+  }
+
   /** Re-reads one contact from the device (path / advert changes). */
   async refreshOne(key: string): Promise<Contact | undefined> {
     const c = await this.#client().refreshContact(fromHex(key));

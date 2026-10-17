@@ -65,4 +65,18 @@ describe('ContactsRepo', () => {
     expect(ev).toEqual(['put:node-4', 'put:node-4', 'unread:2', 'delete:04']);
     s.close();
   });
+
+  it('keeps the optional local SMAZ setting across device syncs (absent = off, no migration)', async () => {
+    const s = await openStore();
+    const c = makeContact(0x42);
+    const first = await s.contacts.upsertFromDevice(c);
+    expect(first.smaz).toBeUndefined();
+    await s.contacts.updateLocal(c.pubKey, { smaz: true });
+    await s.contacts.upsertFromDevice({ ...c, name: 'Renamed' });
+    await s.contacts.syncFromDevice([c], { full: true });
+    expect(await s.contacts.get(c.pubKey)).toMatchObject({ smaz: true, name: c.name });
+    await s.contacts.updateLocal(c.pubKey, { smaz: false });
+    expect((await s.contacts.get(c.pubKey))?.smaz).toBe(false);
+    s.close();
+  });
 });

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
 import { toHex } from '../util/bytes.js';
+import { smazEncodeIfSmaller } from '../util/smaz.js';
 import { channelKeyForPsk } from '../store/channels.js';
 import type { MessageRecord, MessageStatus } from '../store/schema.js';
 import { hashtagChannelSecret, publicChannelSecret, scenarioKey } from '../emulator/scenarios.js';
@@ -387,5 +388,102 @@ describe('messagePreview', () => {
     expect(messagePreview(base)).toBe('You: hi');
     expect(messagePreview({ ...base, direction: 'in', senderName: 'Dave', text: 'yo' })).toBe('Dave: yo');
     expect(messagePreview({ ...base, text: '@[Alice] Yes, all day' })).toBe('You: ↪ Yes, all day');
+  });
+});
+
+describe('SMAZ compression (MeshCore Open compatible)', () => {
+  const LONG = 'the weather is fine here, meet at the station at ten';
+
+  it('DM: decodes incoming "s:" envelopes whatever the setting, compresses outgoing when on', async () => {
+    const { app, hex, s, store } = await connected();
+    const chat = app.chat('contact', hex.alice);
+    await chat.settled();
+    await vi.waitFor(() => expect(chat.contact.value?.name).toBe('Alice'));
+    expect(chat.compression.value).toBe(false);
+
+    // a virtual contact running MeshCore Open sends a compressed message over the mesh
+    const env = smazEncodeIfSmaller(LONG);
+    expect(env.startsWith('s:')).toBe(true);
+    s.nodes.alice.sendText(s.keys.self, env);
+    await vi.waitFor(() => expect(chat.messages.value.at(-1)).toMatchObject({ direction: 'in', text: LONG, compressed: true }), { timeout: 5000 });
+
+    // plain "s:" text that is not a valid envelope stays as it is
+    s.nodes.alice.sendText(s.keys.self, 's:test');
+    await vi.waitFor(() => expect(chat.messages.value.at(-1)?.text).toBe('s:test'), { timeout: 5000 });
+    expect(chat.messages.value.at(-1)?.compressed).toBeUndefined();
+
+    // budget: plain size while off, on-air size while on
+    expect(chat.budget(LONG)).toMatchObject({ used: LONG.length, limit: 160, compressed: false });
+    await chat.setCompression(true);
+    await vi.waitFor(() => expect(chat.compression.value).toBe(true));
+    expect((await store.contacts.get(hex.alice))?.smaz).toBe(true);
+    expect(chat.budget(LONG)).toMatchObject({ used: env.length, limit: 160, compressed: true });
+    expect(chat.budget('ok')).toMatchObject({ used: 2, compressed: false });
+
+    const h = await chat.send(LONG);
+    expect(h.record).toMatchObject({ text: LONG, compressed: true });
+    expect((await h.done).status).toBe('delivered'); // the ACK is computed over the envelope
+    expect(s.nodes.alice.inbox.at(-1)?.text).toBe(env);
+
+    // short texts are sent plain even with compression on
+    const short = await chat.send('ok');
+    expect(short.record.compressed).toBeUndefined();
+    await short.done;
+    expect(s.nodes.alice.inbox.at(-1)?.text).toBe('ok');
+
+    // the setting survives a device contact sync
+    await app.contacts.refresh();
+    expect((await store.contacts.get(hex.alice))?.smaz).toBe(true);
+  });
+
+  it('DM reply: the "@[name] " prefix is compressed with the text and not subtracted from the limit', async () => {
+    const { app, hex, s } = await connected();
+    const chat = app.chat('contact', hex.alice);
+    await chat.settled();
+    await vi.waitFor(() => expect(chat.contact.value).not.toBeNull());
+    await chat.setCompression(true);
+    await vi.waitFor(() => expect(chat.compression.value).toBe(true));
+    chat.setReplyTo(chat.messages.value[0]!);
+    expect(chat.byteLimit.value).toBe(160);
+    const env = smazEncodeIfSmaller(`@[Alice] ${LONG}`);
+    expect(env.startsWith('s:')).toBe(true);
+    expect(chat.budget(LONG).used).toBe(env.length);
+    const h = await chat.send(LONG);
+    expect(h.record.text).toBe(`@[Alice] ${LONG}`);
+    await h.done;
+    expect(s.nodes.alice.inbox.at(-1)?.text).toBe(env);
+  });
+
+  it('channel: "sender: s:…" decodes; outgoing is compressed and the device adds "name: "', async () => {
+    const { app, s, store } = await connected();
+    const pubKey = await channelKeyForPsk(publicChannelSecret());
+    const chat = app.chat('channel', pubKey);
+    await chat.settled();
+    await vi.waitFor(() => expect(chat.channel.value?.name).toBe('Public'));
+
+    const env = smazEncodeIfSmaller(LONG);
+    s.nodes.bob.sendChannelMessage('Public', env);
+    await vi.waitFor(() => expect(chat.messages.value.at(-1)).toMatchObject({ senderName: 'Bob', text: LONG, compressed: true }), { timeout: 5000 });
+
+    await app.channels.setSmaz(pubKey, true);
+    await vi.waitFor(() => expect(chat.compression.value).toBe(true));
+    await vi.waitFor(() => expect(app.channels.views.value.find((c) => c.key === pubKey)?.smaz).toBe(true));
+    expect(chat.byteLimit.value).toBe(160 - 'Emulator: '.length);
+    expect(chat.budget(LONG)).toMatchObject({ used: env.length, compressed: true });
+
+    const h = await chat.send(LONG);
+    expect((await h.done).status).toBe('sent');
+    await vi.waitFor(() => expect(s.nodes.alice.channelMessages.at(-1)?.text).toBe(`Emulator: ${env}`));
+
+    // structured payloads (GIF "g:", location "m:") are never compressed
+    const g = await chat.send('g:the the the the the the the the the the');
+    expect(g.record.compressed).toBeUndefined();
+    await g.done;
+
+    // a channel refresh from the device keeps the local setting; editing can turn it off
+    await app.channels.refresh();
+    expect((await store.channels.get(pubKey))?.smaz).toBe(true);
+    await app.channels.edit(pubKey, { smaz: false });
+    expect((await store.channels.get(pubKey))?.smaz).toBe(false);
   });
 });

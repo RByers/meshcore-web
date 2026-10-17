@@ -69,4 +69,18 @@ describe('ChannelsRepo', () => {
     expect(ev).toEqual(['put:A:2', 'put:A:null', 'put:B:2', 'put:A2:null', 'unread:1', 'delete']);
     s.close();
   });
+
+  it('keeps the optional local SMAZ setting across device upserts, syncs and puts', async () => {
+    const s = await openStore();
+    const pub = (await s.channels.upsertFromDevice(info(0, 'Public', PUBLIC)))!;
+    expect(pub.smaz).toBeUndefined();
+    await s.channels.update(pub.key, { smaz: true });
+    await s.channels.upsertFromDevice(info(0, 'Public', PUBLIC));
+    await s.channels.syncFromDevice([info(1, 'Public', PUBLIC)]);
+    await s.channels.put({ name: 'Public!', psk: PUBLIC, deviceIndex: null });
+    expect(await s.channels.get(pub.key)).toMatchObject({ smaz: true, name: 'Public!' });
+    await s.channels.update(pub.key, { smaz: false });
+    expect((await s.channels.get(pub.key))?.smaz).toBe(false);
+    s.close();
+  });
 });

@@ -26,6 +26,7 @@ export interface ChannelPatch {
   muted?: boolean;
   unread?: number;
   deviceIndex?: number | null;
+  smaz?: boolean;
 }
 
 export class ChannelsRepo {
@@ -78,6 +79,7 @@ export class ChannelsRepo {
           psk: info.secret,
           muted: prev?.muted ?? false,
           unread: prev?.unread ?? 0,
+          ...(prev?.smaz !== undefined ? { smaz: prev.smaz } : {}),
           updatedAt: now,
         };
         await s.put(next);
@@ -118,6 +120,7 @@ export class ChannelsRepo {
           psk: info.secret,
           muted: prev?.muted ?? false,
           unread: prev?.unread ?? 0,
+          ...(prev?.smaz !== undefined ? { smaz: prev.smaz } : {}),
           updatedAt: now,
         };
         await s.put(next);
@@ -145,6 +148,7 @@ export class ChannelsRepo {
         psk: o.psk,
         muted: o.muted ?? prev?.muted ?? false,
         unread: prev?.unread ?? 0,
+        ...(prev?.smaz !== undefined ? { smaz: prev.smaz } : {}),
         updatedAt: now,
       };
       await s.put(next);
@@ -166,6 +170,7 @@ export class ChannelsRepo {
       if (patch.muted !== undefined) next.muted = patch.muted;
       if (patch.unread !== undefined) next.unread = patch.unread;
       if (patch.deviceIndex !== undefined) next.deviceIndex = patch.deviceIndex;
+      if (patch.smaz !== undefined) next.smaz = patch.smaz;
       await s.put(next);
       return next;
     });

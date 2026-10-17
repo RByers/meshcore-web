@@ -15,6 +15,11 @@
       "types": "./dist/util/bytes.d.ts",
       "import": "./dist/util/bytes.js"
     },
+    "./util/smaz": {
+      "source": "./src/util/smaz.ts",
+      "types": "./dist/util/smaz.d.ts",
+      "import": "./dist/util/smaz.js"
+    },
     "./framing": {
       "source": "./src/framing/index.ts",
       "types": "./dist/framing/index.d.ts",

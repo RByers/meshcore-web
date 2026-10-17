@@ -128,6 +128,11 @@ export interface ContactLocalFields {
   notes: string;
   favourite: boolean;
   muted: boolean;
+  /**
+   * SMAZ-compress outgoing DMs (MeshCore Open compatible, feature-inventory.md §2.4a). Optional:
+   * records written before this field existed read as off, so no migration is needed.
+   */
+  smaz?: boolean;
 }
 
 export interface ContactRecord extends Contact, ContactLocalFields {
@@ -182,6 +187,8 @@ export interface MessageRecord {
   /** Epoch ms of the status change to delivered (for outgoing DMs). */
   deliveredAt?: number;
   roundTripMs?: number;
+  /** Sent / received SMAZ-compressed ("s:" envelope, feature-inventory.md §2.4a); `text` is plain. */
+  compressed?: boolean;
 }
 
 export interface ChannelRecord {
@@ -193,6 +200,8 @@ export interface ChannelRecord {
   psk: Uint8Array;
   muted: boolean;
   unread: number;
+  /** SMAZ-compress outgoing messages (MeshCore Open compatible). Optional; absent = off. */
+  smaz?: boolean;
   updatedAt: number;
 }
 

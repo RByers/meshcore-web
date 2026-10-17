@@ -220,10 +220,25 @@ export class McChatPage extends AppElement {
         min-height: 0;
         padding: 0 8px;
       }
+      .compose-foot {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 4px 12px;
+      }
+      .smaz-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 0.75rem;
+        color: var(--mc-text-muted);
+      }
       .bytes {
         font-size: 0.75rem;
         color: var(--mc-text-muted);
         text-align: end;
+        margin-inline-start: auto;
       }
       .bytes[data-over] {
         color: var(--mc-danger);
@@ -365,6 +380,14 @@ export class McChatPage extends AppElement {
     }
   }
 
+  async #setCompression(on: boolean): Promise<void> {
+    try {
+      await this.#chat?.setCompression(on);
+    } catch (err) {
+      this.app.notifications.error('Could not change compression', err);
+    }
+  }
+
   #status(m: MessageRecord) {
     if (m.direction !== 'out') return nothing;
     const attempts = (m.attempt ?? 0) + 1;
@@ -408,7 +431,8 @@ export class McChatPage extends AppElement {
       </div>
       <div class="meta">
         <time datetime=${new Date(m.receivedAt).toISOString()}>${formatTime(m.receivedAt)}</time>
-        ${extra.length ? html`<span>${extra.join(' · ')}</span>` : nothing} ${this.#status(m)}
+        ${extra.length ? html`<span>${extra.join(' · ')}</span>` : nothing}
+        ${m.compressed ? html`<span data-field="smaz" title="Sent over the air SMAZ-compressed">SMAZ</span>` : nothing} ${this.#status(m)}
         <button data-action="reply" aria-label="Reply" title="Reply" @click=${() => this.#reply(m)}>↩</button>
       </div>
     </li>`;
@@ -496,7 +520,21 @@ export class McChatPage extends AppElement {
           ></textarea>
           <button class="primary" type="submit" data-action="send" ?disabled=${!canSend || !this.#draft.trim() || budget.over}>Send</button>
         </div>
-        <div class="bytes" data-field="bytes" ?data-over=${budget.over} aria-live="polite">${budget.remaining} / ${limit} bytes left</div>
+        <div class="compose-foot">
+          <label class="smaz-toggle" title="Only turn this on if the recipient(s) use MeshCore Open or another client that decodes SMAZ; others see “s:…” text">
+            <input
+              type="checkbox"
+              data-action="smaz"
+              .checked=${chat.compression.value}
+              ?disabled=${!(channel ? ch : chat.contact.value)}
+              @change=${(e: Event) => void this.#setCompression((e.target as HTMLInputElement).checked)}
+            />
+            Compress messages (SMAZ, MeshCore Open compatible)
+          </label>
+          <div class="bytes" data-field="bytes" ?data-over=${budget.over} ?data-compressed=${budget.compressed} aria-live="polite">
+            ${budget.remaining} / ${limit} bytes left${budget.compressed ? ' (compressed)' : ''}
+          </div>
+        </div>
       </form>
     `;
   }

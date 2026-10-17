@@ -6,6 +6,7 @@
 import type { ChannelMsgFrame, ContactMsgFrame } from '../protocol/types.js';
 import { TxtType } from '../protocol/constants.js';
 import { toHex } from '../util/bytes.js';
+import { smazTryDecode } from '../util/smaz.js';
 import type { TypedEmitter } from '../util/events.js';
 import type { IdbDatabase, TxScope } from './idb.js';
 import {
@@ -42,6 +43,8 @@ export interface MessageInput {
   senderName?: string;
   senderPrefix?: string;
   rawFrameId?: number;
+  /** The text went over the air SMAZ-compressed ("s:" envelope); `text` is the plain text. */
+  compressed?: boolean;
 }
 
 export interface AppendOptions {
@@ -77,6 +80,17 @@ function isCli(txtType: number): boolean {
   return txtType === TxtType.CLI_DATA || txtType === TxtType.CLI_COMMAND;
 }
 
+/**
+ * Undoes MeshCore Open's SMAZ envelope ("s:" + base64, feature-inventory.md §2.4a) on received
+ * text. Like MeshCore Open, it is tried on every non-CLI message whatever the conversation's
+ * compression setting; CLI replies are left as they are.
+ */
+export function decodeReceivedText(text: string, txtType: number): { text: string; compressed?: true } {
+  if (isCli(txtType)) return { text };
+  const decoded = smazTryDecode(text);
+  return decoded === null ? { text } : { text: decoded, compressed: true };
+}
+
 /** Message input for a CONTACT_MSG_RECV(_V3) frame; `convKey` is the resolved contact key. */
 export function messageInputFromContactFrame(
   f: ContactMsgFrame,
@@ -87,7 +101,7 @@ export function messageInputFromContactFrame(
     convKey: convKey.toLowerCase(),
     convType: 'contact',
     direction: 'in',
-    text: f.text,
+    ...decodeReceivedText(f.text, f.txtType),
     timestamp: f.senderTimestamp,
     txtType: f.txtType,
     pathLen: f.route.pathLen,
@@ -108,7 +122,7 @@ export function messageInputFromChannelFrame(
     convKey: convKey.toLowerCase(),
     convType: 'channel',
     direction: 'in',
-    text: f.message,
+    ...decodeReceivedText(f.message, f.txtType),
     timestamp: f.senderTimestamp,
     txtType: f.txtType,
     pathLen: f.route.pathLen,
@@ -142,7 +156,7 @@ export class MessagesRepo {
       status: input.status ?? (input.direction === 'in' ? 'delivered' : 'pending'),
       pathLen: input.pathLen ?? 0xff,
     };
-    for (const k of ['ackCode', 'attempt', 'snr', 'senderName', 'senderPrefix', 'rawFrameId'] as const) {
+    for (const k of ['ackCode', 'attempt', 'snr', 'senderName', 'senderPrefix', 'rawFrameId', 'compressed'] as const) {
       if (input[k] !== undefined) (base as Record<string, unknown>)[k] = input[k];
     }
     const wantUnread = base.direction === 'in' && opts.countUnread !== false && !isCli(base.txtType);
@@ -225,7 +239,7 @@ export class MessagesRepo {
   async updateStatus(
     id: number,
     status: MessageStatus,
-    patch: { ackCode?: number; attempt?: number; roundTripMs?: number; deliveredAt?: number } = {},
+    patch: { ackCode?: number; attempt?: number; roundTripMs?: number; deliveredAt?: number; compressed?: boolean } = {},
   ): Promise<MessageRecord | undefined> {
     const rec = await this.db.transaction(STORE.messages, 'readwrite', async (t) => {
       const s = t.store<MessageRecord>(STORE.messages);
@@ -235,6 +249,8 @@ export class MessagesRepo {
       if (patch.ackCode !== undefined) next.ackCode = patch.ackCode >>> 0;
       if (patch.attempt !== undefined) next.attempt = patch.attempt;
       if (patch.roundTripMs !== undefined) next.roundTripMs = patch.roundTripMs;
+      if (patch.compressed === true) next.compressed = true;
+      else if (patch.compressed === false) delete next.compressed;
       if (patch.deliveredAt !== undefined) next.deliveredAt = patch.deliveredAt;
       else if (status === 'delivered' && prev.status !== 'delivered') next.deliveredAt = Date.now();
       await s.put(next);

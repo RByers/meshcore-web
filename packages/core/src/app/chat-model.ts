@@ -16,7 +16,7 @@ import { fromHex } from '../util/bytes.js';
 import { StoreBoundModel } from './store-bound.js';
 import type { ConnectionModel } from './connection.js';
 import { computed, signal, type ReadonlySignal } from './signal.js';
-import { byteBudget, messageByteLimit, parseReply, replyPrefix, type ByteBudget } from './messaging.js';
+import { messageByteLimit, outboundText, parseReply, replyPrefix, textByteLength, type ByteBudget } from './messaging.js';
 
 /** Retry tuning for DMs (the model supplies timestamp and onProgress). */
 export type ChatRetryOptions = Omit<RetryOptions, 'onProgress' | 'timestamp'>;
@@ -68,10 +68,25 @@ export class ChatModel extends StoreBoundModel {
   /** Our advert name (channel messages are sent as "<name>: <text>"). */
   readonly selfName: ReadonlySignal<string> = computed(() => this.connection.selfInfo.value?.name ?? '');
 
-  /** Text bytes available to the user (after the channel name and any reply prefix). */
-  readonly byteLimit: ReadonlySignal<number> = computed(() =>
-    messageByteLimit(this.convType, this.selfName.value, this.#replyTo.value ? replyPrefix(this.replyName(this.#replyTo.value)) : ''),
+  /**
+   * SMAZ compression of outgoing messages is on for this contact / channel (MeshCore Open
+   * compatible; local setting, feature-inventory.md §2.4a). Incoming compressed messages are
+   * decoded regardless.
+   */
+  readonly compression: ReadonlySignal<boolean> = computed(() =>
+    this.convType === 'contact' ? this.#contact.value?.smaz === true : this.#channel.value?.smaz === true,
   );
+
+  /**
+   * Bytes available for the text. Without compression: after the channel name and any reply
+   * prefix (the prefix is subtracted). With compression the reply prefix is compressed together
+   * with the text, so it is counted in {@link budget}'s `used` instead and not subtracted here.
+   */
+  readonly byteLimit: ReadonlySignal<number> = computed(() => {
+    const reply = this.#replyTo.value;
+    const prefix = reply && !this.compression.value ? replyPrefix(this.replyName(reply)) : '';
+    return messageByteLimit(this.convType, this.selfName.value, prefix);
+  });
 
   readonly pageSize: number;
   readonly #retry: ChatRetryOptions;
@@ -174,9 +189,36 @@ export class ChatModel extends StoreBoundModel {
 
   // ---- composing ----
 
-  /** Bytes used / left for `text` under the current limit. */
-  budget(text: string): ByteBudget {
-    return byteBudget(text, this.byteLimit.value);
+  /**
+   * Bytes used / left for `text` under the current limit. With compression on, `used` is the
+   * size of what goes on the air (the "s:" envelope of reply prefix + text, or the plain text when
+   * compressing would not make it shorter) and `compressed` says which.
+   */
+  budget(text: string): ByteBudget & { compressed: boolean } {
+    const limit = this.byteLimit.value;
+    let used = textByteLength(text);
+    let compressed = false;
+    if (this.compression.value) {
+      const reply = this.#replyTo.value;
+      const full = reply ? `${replyPrefix(this.replyName(reply))}${text}` : text;
+      const wire = this.#wire(full);
+      used = textByteLength(wire);
+      compressed = wire !== full;
+    }
+    return { used, limit, remaining: limit - used, over: used > limit, compressed };
+  }
+
+  /** The on-air text for the full message text `full` (reply prefix included). */
+  #wire(full: string): string {
+    return outboundText(this.convType, full, this.compression.peek());
+  }
+
+  /** Turns SMAZ compression of outgoing messages on or off for this contact / channel. */
+  async setCompression(on: boolean): Promise<void> {
+    const store = this.store;
+    if (!store) throw new Error('Not connected');
+    if (this.convType === 'contact') await store.contacts.updateLocal(this.convKey, { smaz: on });
+    else await store.channels.update(this.convKey, { smaz: on });
   }
 
   /** The display name a reply to `m` addresses. */
@@ -233,6 +275,7 @@ export class ChatModel extends StoreBoundModel {
     if (!store) throw new Error('Not connected');
     const client = this.#client();
     const full = this.#compose(text);
+    const compressed = this.#wire(full) !== full;
     const channelIdx = this.convType === 'channel' ? await this.#channelIndex(store) : -1;
     const now = client.clock.now();
     const record = await store.messages.append({
@@ -243,6 +286,7 @@ export class ChatModel extends StoreBoundModel {
       timestamp: Math.floor(now / 1000),
       receivedAt: now,
       status: 'pending',
+      ...(compressed ? { compressed } : {}),
       ...(this.convType === 'contact' ? { attempt: 0 } : { senderName: this.selfName.peek() }),
     });
     this.#replyTo.value = null;
@@ -259,7 +303,9 @@ export class ChatModel extends StoreBoundModel {
     if (!rec || rec.convKey !== this.convKey || rec.direction !== 'out') throw new Error('No such outgoing message');
     if (rec.status !== 'failed') throw new Error('Only failed messages can be retried');
     const channelIdx = this.convType === 'channel' ? await this.#channelIndex(store) : -1;
-    const record = (await store.messages.updateStatus(id, 'pending', { attempt: 0 })) ?? rec;
+    // the compression setting may have changed since the first attempt
+    const compressed = this.#wire(rec.text) !== rec.text;
+    const record = (await store.messages.updateStatus(id, 'pending', { attempt: 0, compressed })) ?? rec;
     const done = this.#track(this.#deliver(store, client, record, channelIdx, Math.floor(client.clock.now() / 1000)));
     return { record, done };
   }
@@ -283,9 +329,11 @@ export class ChatModel extends StoreBoundModel {
 
   async #deliver(store: RadioStore, client: CompanionClient, record: MessageRecord, channelIdx: number, timestamp = record.timestamp): Promise<MessageRecord> {
     const id = record.id;
+    // compressed ("s:" envelope) when the record says so; the ACK code is computed over this text
+    const wire = record.compressed ? outboundText(this.convType, record.text, true) : record.text;
     if (this.convType === 'channel') {
       try {
-        await client.sendChannelMessage(channelIdx, record.text, { timestamp });
+        await client.sendChannelMessage(channelIdx, wire, { timestamp });
         return (await store.messages.updateStatus(id, 'sent')) ?? record;
       } catch {
         return (await store.messages.markFailed(id)) ?? record;
@@ -307,7 +355,7 @@ export class ChatModel extends StoreBoundModel {
       });
     };
     try {
-      await client.sendTextMessageWithRetry(fromHex(this.convKey), record.text, { ...this.#retry, timestamp, onProgress: apply });
+      await client.sendTextMessageWithRetry(fromHex(this.convKey), wire, { ...this.#retry, timestamp, onProgress: apply });
     } catch {
       apply({ status: 'failed', attempt: last.attempt ?? 0 });
     }

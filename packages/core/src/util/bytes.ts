@@ -93,3 +93,34 @@ export function utf8Decode(bytes: Uint8Array, stopAtNul = false): string {
   }
   return textDecoder.decode(slice);
 }
+
+const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+/** Decodes standard or URL-safe base64 (padding optional); null if malformed. */
+export function base64Decode(s: string): Uint8Array | null {
+  const t = s.trim().replace(/-/g, '+').replace(/_/g, '/').replace(/=+$/, '');
+  if (!/^[A-Za-z0-9+/]*$/.test(t) || t.length % 4 === 1) return null;
+  const out: number[] = [];
+  let acc = 0;
+  let bits = 0;
+  for (const ch of t) {
+    acc = (acc << 6) | B64.indexOf(ch);
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out.push((acc >> bits) & 0xff);
+    }
+  }
+  return Uint8Array.from(out);
+}
+
+export function base64Encode(bytes: Uint8Array): string {
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 3) {
+    const n = (bytes[i]! << 16) | ((bytes[i + 1] ?? 0) << 8) | (bytes[i + 2] ?? 0);
+    s += B64[(n >> 18) & 63]! + B64[(n >> 12) & 63]!;
+    s += i + 1 < bytes.length ? B64[(n >> 6) & 63]! : '=';
+    s += i + 2 < bytes.length ? B64[n & 63]! : '=';
+  }
+  return s;
+}
