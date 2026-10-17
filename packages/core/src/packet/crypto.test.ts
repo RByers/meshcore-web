@@ -17,6 +17,7 @@ import {
   generateEd25519KeyPair,
   hmacSha256,
   macThenDecrypt,
+  normalizeSecret,
   sha256,
   sha512,
   x25519,
@@ -173,5 +174,27 @@ describe('X25519 / calcSharedSecret (ed25519_key_exchange)', () => {
     expect(ab.length).toBe(32);
     expect(toHex(ab)).toBe(toHex(ba));
     await expect(calcSharedSecret(new Uint8Array(10), b.publicKey)).rejects.toThrow(RangeError);
+  });
+});
+
+describe('normalizeSecret (mesh-packet-format.md §2: HMAC key = secret[0..32], a 16-byte PSK zero-padded)', () => {
+  const secret16 = Uint8Array.from({ length: 16 }, (_, i) => i);
+  const ct = new Uint8Array(16).fill(0xaa);
+
+  it('zero-pads a 16-byte PSK to 32 bytes and keeps a 32-byte secret as-is', () => {
+    expect(toHex(normalizeSecret(secret16))).toBe(toHex(secret16) + '00'.repeat(16));
+    const s32 = Uint8Array.from({ length: 32 }, (_, i) => 255 - i);
+    expect(normalizeSecret(s32)).toBe(s32);
+    expect(() => normalizeSecret(new Uint8Array(20))).toThrow(RangeError);
+  });
+
+  it('computeMac(secret16) equals computeMac(secret16 ‖ zeros16) and matches a python HMAC vector', async () => {
+    const padded = new Uint8Array(32);
+    padded.set(secret16);
+    // python: hmac.new(bytes(range(16)) + bytes(16), b'\xaa' * 16, sha256).hexdigest()
+    const full = 'f9d99d01116d33bc6b020c0165a0ae43c2a4771bd77c3ad8cf257fd8b11e2127';
+    expect(toHex(await hmacSha256(padded, ct))).toBe(full);
+    expect(toHex(await computeMac(secret16, ct))).toBe('f9d9');
+    expect(toHex(await computeMac(padded, ct))).toBe('f9d9');
   });
 });

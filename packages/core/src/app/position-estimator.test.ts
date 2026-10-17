@@ -1,5 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
+import { describe, expect, it, vi } from 'vitest';
 import { ContactType, encodePathLen } from '../protocol/constants.js';
 import { PayloadType, RouteType } from '../packet/constants.js';
 import { buildPacket } from '../packet/packet.js';
@@ -7,8 +6,7 @@ import { buildAdvertPayload } from '../packet/payloads.js';
 import { scenarioIdentity } from '../emulator/scenarios.js';
 import type { ContactRecord, MessageRecord, PacketRecord } from '../store/schema.js';
 import { fromHex, toHex } from '../util/bytes.js';
-import { AppModel, createEmulatorTransportFactory } from './app-model.js';
-import { memoryPreferences } from './connection.js';
+import { connectedApp } from './testing.js';
 import { haversineMeters } from './geo.js';
 import {
   ESTIMATE_DISTANCE_M,
@@ -162,22 +160,11 @@ describe('packetEvidence / messageEvidence', () => {
 });
 
 describe('PositionEstimatorModel (emulator + virtual mesh)', () => {
-  const apps: AppModel[] = [];
-  afterEach(async () => {
-    for (const a of apps.splice(0)) await a.dispose();
-  });
-
   it('a contact heard only through the repeater gets an estimate near it once the setting is on', async () => {
-    const emulator = createEmulatorTransportFactory();
-    const app = new AppModel({ indexedDB: new IDBFactory(), keyRange: IDBKeyRange, createEmulatorTransport: emulator, preferences: memoryPreferences() });
-    apps.push(app);
-    expect(await app.connection.connect('emulator')).toBe(true);
-    await app.connection.capture!.idle();
-    const s = emulator.scenario();
+    const { app, scenario: s } = await connectedApp();
     const carol = toHex(s.keys.carol);
     const sensor = toHex(s.keys.sensor);
     const repeater = { lat: 47.62, lon: -122.35 };
-    await app.contacts.settled();
     // Carol only reaches the repeater: her advert arrives with a 1-hop path
     s.nodes.carol.advertise();
     await vi.waitFor(async () => {

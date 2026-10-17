@@ -2,7 +2,9 @@
  * End-to-end test harness: an AppModel whose USB Serial and Bluetooth factories use the real
  * WebSerialTransport / WebBluetoothTransport over the navigator mocks, with a CompanionEmulator
  * (basicScenario) as the device, plus the in-page Emulator kind. Uses the browser's real
- * IndexedDB; `cleanup()` disposes the model and deletes every meshcore-web database.
+ * IndexedDB behind a per-harness name prefix, so test files can run in parallel iframes;
+ * `cleanup()` disposes the model and deletes this harness's databases. Scenarios default to
+ * `FAST_TIMING` (ms-scale node delays): tests wait on state, never on wall-clock time.
  *
  *   const h = createHarness();
  *   const el = await h.mount();             // <mc-app .app=${h.app}> at '#/'
@@ -14,7 +16,7 @@
  *   afterEach(() => h.cleanup());
  */
 import { AppModel, createEmulatorTransportFactory, type AppModelOptions } from '@meshcore-web/core/app';
-import { basicScenario, type BasicScenario, type BasicScenarioOptions } from '@meshcore-web/core/emulator';
+import { FAST_TIMING, basicScenario, type BasicScenario, type BasicScenarioOptions } from '@meshcore-web/core/emulator';
 import { DB_PREFIX } from '@meshcore-web/core/store';
 import { WebBluetoothTransport, WebSerialTransport } from '@meshcore-web/core/transport';
 import type { McApp } from '../mc-app.js';
@@ -22,7 +24,7 @@ import { createMockBluetooth, type MockBluetoothHandle } from './mock-bluetooth.
 import { createMockSerial, type MockSerialHandle } from './mock-serial.js';
 
 export interface HarnessOptions {
-  /** basicScenario options for all three devices. */
+  /** basicScenario options for all three devices (default timing: FAST_TIMING). */
   scenario?: BasicScenarioOptions;
   /** Drop the serial / BLE kinds (as in a browser without the APIs). */
   serial?: boolean;
@@ -33,6 +35,8 @@ export interface HarnessOptions {
 
 export interface Harness {
   app: AppModel;
+  /** The scoped IndexedDB factory `app` uses; pass it to open a second handle on the same databases. */
+  indexedDB: IDBFactory;
   /** Mocked navigator.serial with a basicScenario emulator behind it. */
   serial: MockSerialHandle;
   serialScenario: BasicScenario;
@@ -54,6 +58,8 @@ export interface Harness {
    * for the hash to settle there. Without `path` the app stays wherever it landed.
    */
   connectEmulator(path?: string, timeoutMs?: number): Promise<void>;
+  /** Navigates to `path` (hash route) and waits until `selector` is in the UI. */
+  go(path: string, selector: string, timeoutMs?: number): Promise<void>;
   /** Polls `cond` (every animation frame) until truthy; throws after `timeoutMs`. */
   until(cond: () => unknown, timeoutMs?: number, what?: string): Promise<void>;
   /** Text content of the whole UI, shadow roots included. */
@@ -68,13 +74,13 @@ export interface Harness {
   cleanup(): Promise<void>;
 }
 
-/** Deletes every IndexedDB database of this app. */
-export async function deleteAppDatabases(): Promise<void> {
+/** Deletes every IndexedDB database whose name starts with `prefix` (default: all of this app's). */
+export async function deleteAppDatabases(prefix = DB_PREFIX): Promise<void> {
   const dbs = await indexedDB.databases();
   await Promise.all(
     dbs
       .map((d) => d.name)
-      .filter((n): n is string => !!n && n.startsWith(DB_PREFIX))
+      .filter((n): n is string => !!n && n.startsWith(prefix))
       .map(
         (name) =>
           new Promise<void>((resolve) => {
@@ -83,6 +89,26 @@ export async function deleteAppDatabases(): Promise<void> {
           }),
       ),
   );
+}
+
+const RUN_ID = crypto.randomUUID().slice(0, 8);
+let harnessSeq = 0;
+
+/**
+ * An IDBFactory whose database names are prefixed, so each harness gets private databases even
+ * though every scenario shares the same emulator self key and vitest runs files in parallel iframes.
+ */
+function scopedIndexedDB(prefix: string): IDBFactory {
+  const idb = indexedDB;
+  return {
+    open: (name, version) => idb.open(prefix + name, version),
+    deleteDatabase: (name) => idb.deleteDatabase(prefix + name),
+    databases: async () =>
+      (await idb.databases())
+        .filter((d) => d.name?.startsWith(prefix))
+        .map((d) => ({ ...d, name: d.name!.slice(prefix.length) })),
+    cmp: (a, b) => idb.cmp(a, b),
+  } as IDBFactory;
 }
 
 function deepQueryAll(root: ParentNode, selector: string, out: Element[] = []): Element[] {
@@ -100,21 +126,24 @@ function deepText(node: Node): string {
 }
 
 export function createHarness(opts: HarnessOptions = {}): Harness {
-  const serialScenario = basicScenario(opts.scenario);
+  const scenarioOptions: BasicScenarioOptions = { timing: FAST_TIMING, ...opts.scenario };
+  const dbPrefix = `test-${RUN_ID}-${harnessSeq++}/`;
+  const idb = scopedIndexedDB(dbPrefix);
+  const serialScenario = basicScenario(scenarioOptions);
   const serial = createMockSerial({
     onFrameFromHost: (frame) => serialScenario.emulator.handleFrame(frame),
     info: { usbVendorId: 0x239a, usbProductId: 0x8029 },
   });
   serialScenario.emulator.onFrame((f) => serial.pushFrameToHost(f));
 
-  const bleScenario = basicScenario(opts.scenario);
+  const bleScenario = basicScenario(scenarioOptions);
   const ble = createMockBluetooth({
     name: 'MeshCore-Emulator',
     onFrameFromHost: (frame) => bleScenario.emulator.handleFrame(frame),
   });
   bleScenario.emulator.onFrame((f) => ble.pushFrameToHost(f));
 
-  const emulatorFactory = createEmulatorTransportFactory(opts.scenario);
+  const emulatorFactory = createEmulatorTransportFactory(scenarioOptions);
   const makeApp = (): AppModel => new AppModel({
     ...(opts.serial === false
       ? {}
@@ -130,12 +159,14 @@ export function createHarness(opts: HarnessOptions = {}): Harness {
     ...(opts.ble === false ? {} : { createBleTransport: () => new WebBluetoothTransport({ bluetooth: ble.bluetooth }) }),
     createEmulatorTransport: emulatorFactory,
     reconnectableKinds: ['emulator', 'serial'],
+    indexedDB: idb,
     ...opts.app,
   });
   const app = makeApp();
 
   const h: Harness = {
     app,
+    indexedDB: idb,
     serial,
     serialScenario,
     ble,
@@ -173,13 +204,23 @@ export function createHarness(opts: HarnessOptions = {}): Harness {
         if (location.hash !== target) location.hash = target;
         await h.until(() => location.hash === target && h.app.connection.phase.value === 'connected', timeoutMs, `route ${path}`);
       }
+      // let the capture pipeline finish the post-connect sync so the stores hold the device's state
+      await h.app.connection.capture?.idle();
       await h.el?.updateComplete;
+    },
+    async go(path, selector, timeoutMs = 5000) {
+      location.hash = `#${path}`;
+      await h.until(() => h.query(selector), timeoutMs, selector);
     },
     async until(cond, timeoutMs = 5000, what = 'condition') {
       const start = performance.now();
       while (!cond()) {
         if (performance.now() - start > timeoutMs) throw new Error(`timed out waiting for ${what}`);
-        await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+        // next frame, but never stall if the iframe is throttled / backgrounded
+        await new Promise((r) => {
+          const t = setTimeout(r, 16);
+          requestAnimationFrame(() => (clearTimeout(t), r(undefined)));
+        });
       }
     },
     text() {
@@ -204,7 +245,7 @@ export function createHarness(opts: HarnessOptions = {}): Harness {
       h.el?.remove();
       h.el = undefined;
       await h.app.dispose();
-      await deleteAppDatabases();
+      await deleteAppDatabases(dbPrefix);
       history.replaceState(null, '', '#/');
     },
   };

@@ -22,6 +22,7 @@ import { parseAdvertPayload, verifyAdvert } from '../packet/payloads.js';
 import { ed25519Verify } from '../packet/crypto.js';
 import type { RemoteNodeConfig } from './remote-node.js';
 import type { CompanionEmulatorOptions } from './types.js';
+import { settle } from '../client/testing.js'; // lets loopback microtask deliveries (both directions) complete
 
 // ---------------------------------------------------------------------------
 // Harness: the emulator behind a loopback pair, driven with encodeCommand / decodeFrame
@@ -40,9 +41,6 @@ const x = (s: string): Uint8Array => fromHex(s.replace(/\s+/g, ''));
 
 type Kind = DeviceFrame['kind'];
 type FrameOf<K extends Kind> = Extract<DeviceFrame, { kind: K }>;
-
-/** Lets loopback microtask deliveries (both directions) complete. */
-const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 
 async function setup(opts: CompanionEmulatorOptions = {}, connect = true) {
   const clock = new ManualClock(START);

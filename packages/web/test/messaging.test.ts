@@ -14,7 +14,8 @@ afterEach(async () => {
 });
 
 /** Short enough to fail quickly, long enough for an ACK over the virtual mesh under load. */
-const FAST_RETRY = { maxAttempts: 2, ackTimeoutMs: 1500, retryDelayMs: () => 0, lateAckGraceMs: 0 };
+// ACK timeout well above FAST_TIMING's ms-scale delays but short enough that the retry test stays quick
+const FAST_RETRY = { maxAttempts: 2, ackTimeoutMs: 300, retryDelayMs: () => 0, lateAckGraceMs: 0 };
 
 /** Mounts, connects via the Emulator and waits for the initial sync to be persisted. */
 async function connected(opts: HarnessOptions = {}, prepare?: (t: Harness) => void): Promise<Harness> {
@@ -25,11 +26,6 @@ async function connected(opts: HarnessOptions = {}, prepare?: (t: Harness) => vo
   await t.until(() => t.app.connection.phase.value === 'connected', 5000, 'connected');
   await t.app.connection.capture!.idle();
   return t;
-}
-
-async function go(t: Harness, path: string, selector: string): Promise<void> {
-  location.hash = `#${path}`;
-  await t.until(() => t.query(selector), 5000, selector);
 }
 
 function keys(t: Harness) {
@@ -55,7 +51,7 @@ describe('messages overview', () => {
 describe('contacts page', () => {
   it('lists the scenario contacts with types, paths and unread, and filters / searches', async () => {
     const t = await connected();
-    await go(t, '/contacts', 'mc-contacts-page');
+    await t.go('/contacts', 'mc-contacts-page');
     await t.until(() => t.queryAll('[data-contact]').length === 6, 5000, 'contacts');
     const types = Object.fromEntries(t.queryAll('[data-contact]').map((li) => [li.querySelector('.name')!.textContent, li.dataset['type']]));
     expect(types).toEqual({
@@ -86,7 +82,7 @@ describe('contacts page', () => {
 
   it('adds a contact by public key via the dialog and removes one via the menu', async () => {
     const t = await connected();
-    await go(t, '/contacts', '[data-contact]');
+    await t.go('/contacts', '[data-contact]');
     await t.click('[data-action="add-contact"]');
     expect(t.query<HTMLDialogElement>('#add-dialog')!.open).toBe(true);
     const dave = scenarioKey('dave');
@@ -110,7 +106,7 @@ describe('contacts page', () => {
   it('toggles a favourite with the star and lists favourites first', async () => {
     const t = await connected();
     const k = keys(t);
-    await go(t, '/contacts', '[data-contact]');
+    await t.go('/contacts', '[data-contact]');
     await t.fill('[data-field="sort"]', 'name');
     const order = () => t.queryAll('[data-contact]').map((li) => li.dataset['contact']);
     const star = (key: string) => t.query(`[data-contact="${key}"] [data-action="favourite"]`)!;
@@ -130,7 +126,7 @@ describe('contacts page', () => {
   it('shows a node summary for repeaters', async () => {
     const t = await connected();
     const k = keys(t);
-    await go(t, `/node/${k.repeater}`, '[data-field="header"]');
+    await t.go(`/node/${k.repeater}`, '[data-field="header"]');
     const page = t.query('mc-node-admin-page')!.shadowRoot!;
     expect(page.querySelector('[data-field="name"]')!.textContent).toBe('Hilltop Repeater');
     expect(page.querySelector('[data-field="path"]')!.textContent!.toLowerCase()).toContain('direct');
@@ -141,11 +137,12 @@ describe('direct chat', () => {
   it('sends "ping" to Alice: pending → sent → delivered, and "pong" arrives', async () => {
     const t = await connected();
     const k = keys(t);
-    await go(t, '/contacts', `[data-contact="${k.alice}"] a`);
+    await t.go('/contacts', `[data-contact="${k.alice}"] a`);
     await t.click(`[data-contact="${k.alice}"] a`);
     await t.until(() => location.hash === `#/chat/${k.alice}` && t.query('mc-chat-page')?.shadowRoot?.querySelector('[data-field="composer"]'), 3000, 'chat page');
-    expect(t.query('[data-field="title"]')!.textContent).toBe('Alice');
-    expect(t.text()).toContain('Hi! Are you on the mesh today?');
+    // the chat loads its contact + history from IndexedDB after the page renders
+    await expect.poll(() => t.query('[data-field="title"]')?.textContent, { timeout: 3000 }).toBe('Alice');
+    await expect.poll(() => t.queryAll('.msg [data-field="text"]').map((e) => e.textContent), { timeout: 3000 }).toContain('Hi! Are you on the mesh today?');
 
     const statuses: MessageStatus[] = [];
     t.app.connection.store.value!.events.on('message', (e) => {
@@ -167,7 +164,7 @@ describe('direct chat', () => {
   it('Enter sends, Shift+Enter does not, and the counter flags overflow', async () => {
     const t = await connected();
     const k = keys(t);
-    await go(t, `/chat/${k.alice}`, '[data-field="composer"]');
+    await t.go(`/chat/${k.alice}`, '[data-field="composer"]');
     await t.fill('[data-field="composer"]', 'x'.repeat(161));
     expect(t.query('[data-field="bytes"]')!.hasAttribute('data-over')).toBe(true);
     expect(t.query<HTMLButtonElement>('[data-action="send"]')!.disabled).toBe(true);
@@ -182,7 +179,7 @@ describe('direct chat', () => {
   it('replies with "@[name] text" and shows the quote', async () => {
     const t = await connected();
     const k = keys(t);
-    await go(t, `/chat/${k.alice}`, '.msg[data-dir="in"] [data-action="reply"]');
+    await t.go(`/chat/${k.alice}`, '.msg[data-dir="in"] [data-action="reply"]');
     await t.click('.msg[data-dir="in"] [data-action="reply"]');
     await t.until(() => t.query('[data-field="reply-banner"]'), 2000, 'reply banner');
     expect(t.query('[data-field="bytes"]')!.textContent).toContain(`/ ${160 - '@[Alice] '.length}`);
@@ -199,7 +196,7 @@ describe('direct chat', () => {
       x.emulatorScenario().nodes.bob.config.ackPolicy = 'never';
     });
     const k = keys(t);
-    await go(t, `/chat/${k.bob}`, '[data-field="composer"]');
+    await t.go(`/chat/${k.bob}`, '[data-field="composer"]');
     await t.fill('[data-field="composer"]', 'anyone there?');
     await t.click('[data-action="send"]');
     await t.until(() => t.query('.msg[data-dir="out"][data-status="failed"]'), 8000, 'failed');
@@ -214,7 +211,7 @@ describe('direct chat', () => {
 describe('channels', () => {
   it('lists Public and #test, opens Public, shows senders and sends a message', async () => {
     const t = await connected();
-    await go(t, '/channels', '[data-channel]');
+    await t.go('/channels', '[data-channel]');
     const names = t.queryAll('[data-channel] .name').map((e) => e.textContent);
     expect(names).toEqual(['Public', '#test']);
     const pub = await channelKeyForPsk(publicChannelSecret());
@@ -239,7 +236,7 @@ describe('channels', () => {
 
   it('adds a hashtag channel via the dialog: on the device and in the list', async () => {
     const t = await connected();
-    await go(t, '/channels', '[data-channel]');
+    await t.go('/channels', '[data-channel]');
     await t.click('[data-action="add-channel"]');
     expect(t.query<HTMLDialogElement>('#channel-dialog')!.open).toBe(true);
     await t.fill('[data-field="channel-name"]', '#web');
@@ -261,7 +258,7 @@ describe('channels', () => {
 
   it('mutes and deletes a channel from its menu', async () => {
     const t = await connected();
-    await go(t, '/channels', '[data-channel]');
+    await t.go('/channels', '[data-channel]');
     const pub = await channelKeyForPsk(publicChannelSecret());
     await t.click(`[data-menu="${pub}"]`);
     await t.click(`#menu-${pub} [data-action="mute"]`);
@@ -283,7 +280,7 @@ describe('unread and persistence', () => {
   it('bumps the unread badge on an incoming message and clears it when the chat opens', async () => {
     const t = await connected();
     const k = keys(t);
-    await go(t, '/contacts', `[data-contact="${k.bob}"]`);
+    await t.go('/contacts', `[data-contact="${k.bob}"]`);
     expect(t.query(`[data-contact="${k.bob}"] .badge`)).toBeNull();
     const s = t.emulatorScenario();
     s.emulator.injectContactMessage(s.keys.bob, 'are you around?');
@@ -296,14 +293,14 @@ describe('unread and persistence', () => {
     // while the chat is open new messages are read immediately
     s.emulator.injectContactMessage(s.keys.bob, 'hello?');
     await t.until(() => t.text().includes('hello?'), 5000, 'second message');
-    await go(t, '/contacts', `[data-contact="${k.bob}"]`);
+    await t.go('/contacts', `[data-contact="${k.bob}"]`);
     await t.until(() => !t.query(`[data-contact="${k.bob}"] .badge`), 3000, 'no badge');
   });
 
   it('keeps messages and their status across a reload', async () => {
     const t = await connected();
     const k = keys(t);
-    await go(t, `/chat/${k.alice}`, '[data-field="composer"]');
+    await t.go(`/chat/${k.alice}`, '[data-field="composer"]');
     await t.fill('[data-field="composer"]', 'ping');
     await t.click('[data-action="send"]');
     await t.until(() => t.query('.msg[data-dir="out"][data-status="delivered"]'), 8000, 'delivered');
@@ -313,7 +310,7 @@ describe('unread and persistence', () => {
     await t.reload();
     await t.click('[data-connect="emulator"]');
     await t.until(() => t.app.connection.phase.value === 'connected', 5000, 'reconnected');
-    await go(t, `/chat/${k.alice}`, '.msg[data-dir="out"]');
+    await t.go(`/chat/${k.alice}`, '.msg[data-dir="out"]');
     const texts = t.queryAll('.msg [data-field="text"]').map((e) => e.textContent);
     expect(texts).toEqual(['Hi! Are you on the mesh today?', 'ping', 'pong']);
     expect(t.query('.msg[data-dir="out"]')!.dataset['status']).toBe('delivered');

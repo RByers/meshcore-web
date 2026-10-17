@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fromHex, toHex } from '../util/bytes.js';
+import { Deferred } from '../util/deferred.js';
 import { LoopbackTransport, createLoopbackPair } from './loopback.js';
 import type { FrameTransport, TransportState } from './transport.js';
 
@@ -104,15 +105,20 @@ describe('LoopbackTransport', () => {
   });
 
   it('supports unsolicited pushes and async handlers', async () => {
+    const gate = new Deferred<void>();
+    const replied = new Deferred<void>();
     const t = new LoopbackTransport(async (_frame, device) => {
-      await new Promise((r) => setTimeout(r, 1));
+      await gate.promise; // the handler finishes asynchronously, after send() has returned
       device.send(fromHex('00'));
+      replied.resolve();
     });
     const got = collect(t);
     await t.connect();
     t.pushFromDevice(fromHex('83'));
     await t.send(fromHex('16'));
-    await new Promise((r) => setTimeout(r, 10));
+    gate.resolve();
+    await replied.promise;
+    await flush();
     expect(got).toEqual(['83', '00']);
   });
 

@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { toHex } from '@meshcore-web/core/util/bytes';
 import { computeReactionHash } from '@meshcore-web/core/app';
 import { channelKeyForPsk } from '@meshcore-web/core/store';
-import { publicChannelSecret } from '@meshcore-web/core/emulator';
+import { FAST_TIMING, publicChannelSecret } from '@meshcore-web/core/emulator';
 import '../src/mc-app.js';
 import '../src/pages/messaging/index.js';
 import { createHarness, type Harness } from '../src/testing/harness.js';
@@ -24,11 +24,6 @@ async function connected(): Promise<Harness> {
   return t;
 }
 
-async function go(t: Harness, path: string, selector: string): Promise<void> {
-  location.hash = `#${path}`;
-  await t.until(() => t.query(selector), 5000, selector);
-}
-
 const picker = (t: Harness) => t.query<HTMLDialogElement>('#reaction-picker');
 
 describe('emoji reactions', () => {
@@ -36,7 +31,7 @@ describe('emoji reactions', () => {
     const t = await connected();
     const s = t.emulatorScenario();
     const alice = toHex(s.keys.alice);
-    await go(t, `/chat/${alice}`, '.msg[data-dir="in"]');
+    await t.go(`/chat/${alice}`, '.msg[data-dir="in"]');
 
     // only incoming messages offer the react button
     const incoming = t.query('.msg[data-dir="in"]')!;
@@ -46,7 +41,7 @@ describe('emoji reactions', () => {
     expect(t.queryAll('[data-field="quick-emojis"] [data-emoji]').map((b) => b.dataset['emoji'])).toEqual(['👍', '❤️', '😂', '🎉', '👏', '🔥']);
     await t.click('[data-tab="hearts"]');
     await t.until(() => t.query('[data-field="emoji-grid"] [data-emoji="💜"]'), 3000, 'hearts tab');
-    s.nodes.alice.config.ackDelayMs = 1500; // keep the reaction pending for a moment
+    s.nodes.alice.config.ackDelayMs = 300; // keep the reaction pending long enough to observe the chip
     await t.click('[data-field="emoji-grid"] [data-emoji="💜"]');
     expect(picker(t)!.open).toBe(false);
     await t.until(() => t.query('.msg[data-dir="in"] [data-field="reaction"][data-emoji="💜"][data-state="pending"]'), 3000, 'pending chip');
@@ -61,7 +56,7 @@ describe('emoji reactions', () => {
     picker(t)!.close();
 
     // Alice reacts to our message: a chip with a tooltip naming her, and no "r:" bubble
-    s.nodes.alice.config.ackDelayMs = 300;
+    s.nodes.alice.config.ackDelayMs = FAST_TIMING.ackDelayMs;
     await t.fill('[data-field="composer"]', 'Lunch at noon?');
     await t.click('[data-action="send"]');
     await t.until(() => t.query('.msg[data-dir="out"][data-status="delivered"]'), 8000, 'delivered');
@@ -80,7 +75,7 @@ describe('emoji reactions', () => {
     const t = await connected();
     const s = t.emulatorScenario();
     const pub = await channelKeyForPsk(publicChannelSecret());
-    await go(t, `/channel/${pub}`, '.msg[data-dir="in"]');
+    await t.go(`/channel/${pub}`, '.msg[data-dir="in"]');
     const chat = t.app.chat('channel', pub);
     const dave = chat.messages.value[0]!;
     const hash = computeReactionHash(dave.timestamp, 'Dave', dave.text);

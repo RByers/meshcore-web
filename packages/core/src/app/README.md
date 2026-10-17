@@ -72,10 +72,11 @@ that talk to the device go through `connection.client.peek()` (a `CompanionClien
 4. Purely local data (favourites, notes, muted) goes straight to the repo (`store.contacts.updateLocal`).
 5. New models: subclass `StoreBoundModel` (or plain class for client-only state), add a lazy
    getter on `AppModel` that calls `.start()`, and dispose it in `AppModel.dispose()`.
-6. Test against the emulator in node: `new AppModel({ indexedDB: new IDBFactory(), keyRange:
-   IDBKeyRange, createEmulatorTransport: createEmulatorTransportFactory() })`, connect with
-   `app.connection.connect('emulator')`, then `await app.connection.capture!.idle()` and
-   `await model.settled()` before asserting (see `app-model.test.ts`).
+6. Test against the emulator in node with `connectedApp()` from `testing.ts`: an `AppModel` on a
+   `basicScenario({ timing: FAST_TIMING })` emulator (fake IndexedDB), connected, with the initial
+   sync captured and contacts loaded; it is disposed (and the emulator's timers cleared) when the
+   test finishes. Then `await model.settled()` before asserting, and wait for state transitions
+   (`vi.waitFor` on a predicate), never for a fixed time. `testApp()` gives an unconnected app.
 
 ## Conventions
 

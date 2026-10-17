@@ -1,28 +1,17 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
+import { describe, expect, it, vi } from 'vitest';
 import { toHex } from '../util/bytes.js';
 import { TypedEmitter } from '../util/events.js';
 import { channelKeyForPsk } from '../store/channels.js';
 import type { FrameTransport, TransportEvents } from '../transport/transport.js';
-import { publicChannelSecret } from '../emulator/scenarios.js';
-import { AppModel, createEmulatorTransportFactory, type AppModelOptions } from './app-model.js';
+import { FAST_TIMING, publicChannelSecret } from '../emulator/scenarios.js';
+import { createEmulatorTransportFactory, type AppModelOptions } from './app-model.js';
+import { testApp } from './testing.js';
 import { PREF_LAST_KIND, memoryPreferences, type ConnectionPhase } from './connection.js';
 import { NotificationsModel } from './notifications.js';
 import { effect } from './signal.js';
 
-const apps: AppModel[] = [];
-
 function makeApp(over: AppModelOptions = {}) {
-  const emulator = createEmulatorTransportFactory();
-  const prefs = memoryPreferences();
-  const app = new AppModel({
-    indexedDB: new IDBFactory(),
-    keyRange: IDBKeyRange,
-    createEmulatorTransport: emulator,
-    preferences: prefs,
-    ...over,
-  });
-  apps.push(app);
+  const { app, emulator, prefs } = testApp({ app: over });
   const phases: ConnectionPhase[] = [];
   effect(() => {
     phases.push(app.connection.phase.value);
@@ -42,10 +31,6 @@ function brokenTransport(err: Error): FrameTransport {
     send: () => Promise.reject(new Error('not connected')),
   };
 }
-
-afterEach(async () => {
-  for (const a of apps.splice(0)) await a.dispose();
-});
 
 describe('ConnectionModel with the emulator', () => {
   it('connects, handshakes and opens the store under the radio pubkey', async () => {
@@ -173,7 +158,7 @@ describe('ConnectionModel with the emulator', () => {
   it('cancels a connect in progress on disconnect()', async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
-    const emu = createEmulatorTransportFactory();
+    const emu = createEmulatorTransportFactory({ timing: FAST_TIMING });
     const { app } = makeApp({
       createEmulatorTransport: async (req) => {
         await gate;
@@ -255,11 +240,9 @@ describe('ConnectionModel errors', () => {
   });
 
   it('restores the last used kind from preferences', () => {
-    const app = new AppModel({ preferences: memoryPreferences({ [PREF_LAST_KIND]: 'serial' }), indexedDB: new IDBFactory(), keyRange: IDBKeyRange });
-    apps.push(app);
+    const { app } = testApp({ app: { preferences: memoryPreferences({ [PREF_LAST_KIND]: 'serial' }) } });
     expect(app.connection.lastKind.value).toBe('serial');
-    const bad = new AppModel({ preferences: memoryPreferences({ [PREF_LAST_KIND]: 'tcp' }), indexedDB: new IDBFactory(), keyRange: IDBKeyRange });
-    apps.push(bad);
+    const { app: bad } = testApp({ app: { preferences: memoryPreferences({ [PREF_LAST_KIND]: 'tcp' }) } });
     expect(bad.connection.lastKind.value).toBeNull();
   });
 });

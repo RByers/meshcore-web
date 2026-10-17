@@ -21,11 +21,6 @@ async function connected(): Promise<Harness> {
   return t;
 }
 
-async function go(t: Harness, path: string, selector: string): Promise<void> {
-  location.hash = `#${path}`;
-  await t.until(() => t.query(selector), 5000, selector);
-}
-
 function msgWith(t: Harness, text: string): HTMLElement | undefined {
   return t.queryAll('.msg').find((li) => li.querySelector('[data-field="text"]')?.textContent === text);
 }
@@ -34,7 +29,7 @@ describe('message signal', () => {
   it('shows the hop count, not the last-hop SNR, for a relayed channel message', async () => {
     const t = await connected();
     const pub = await channelKeyForPsk(publicChannelSecret());
-    await go(t, `/channel/${pub}`, '[data-field="sender"]');
+    await t.go(`/channel/${pub}`, '[data-field="sender"]');
     // Carol is only heard via the repeater
     t.emulatorScenario().nodes.carol.sendChannelMessage('Public', 'via the hill');
     await t.until(() => msgWith(t, 'via the hill'), 5000, 'Carol message');
@@ -49,7 +44,7 @@ describe('message signal', () => {
     const t = await connected();
     const s = t.emulatorScenario();
     const bob = toHex(s.keys.bob);
-    await go(t, `/chat/${bob}`, '[data-field="title"]');
+    await t.go(`/chat/${bob}`, '[data-field="title"]');
     // Bob has no path to us and is in range: the DM floods and arrives zero hop
     s.nodes.bob.sendText(s.keys.self, 'right here');
     await t.until(() => msgWith(t, 'right here'), 5000, 'Bob DM');
@@ -57,8 +52,8 @@ describe('message signal', () => {
     expect(li.querySelector('[data-field="path"]')!.textContent).toBe('zero hop');
     expect(li.querySelector('[data-field="snr"]')!.textContent).toBe('SNR 8 dB');
     await t.until(() => t.query('[data-field="subtitle"]')?.textContent?.includes('direct SNR 8 dB'), 3000, 'subtitle');
-    await go(t, '/contacts', `[data-contact="${bob}"]`);
-    expect(t.query(`[data-contact="${bob}"] [data-field="meta"]`)!.textContent).toContain('direct SNR 8 dB');
+    await t.go('/contacts', `[data-contact="${bob}"]`);
+    await expect.poll(() => t.query(`[data-contact="${bob}"] [data-field="meta"]`)?.textContent, { timeout: 3000 }).toContain('direct SNR 8 dB');
     // Carol has never been heard directly
     expect(t.query(`[data-contact="${toHex(s.keys.carol)}"] [data-field="meta"]`)!.textContent).not.toContain('SNR');
   });

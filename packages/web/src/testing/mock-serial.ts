@@ -58,6 +58,9 @@ export class MockSerialPort extends EventTarget implements SerialPortLike {
   #readController: ReadableStreamDefaultController<Uint8Array> | undefined;
   #writable: WritableStream<Uint8Array> | null = null;
   #writeController: WritableStreamDefaultController | undefined;
+  /** True while the host's reader is parked waiting for data (queue drained). */
+  #readerWaiting = false;
+  #readerIdleWaiters: Array<() => void> = [];
   /** Bytes pushed while no stream exists (as an OS buffer would hold them). */
   readonly #pending: Uint8Array[] = [];
   readonly #deframer = new SerialDeframer({ markers: [SERIAL_MARKER_HOST_TO_DEVICE] });
@@ -77,15 +80,24 @@ export class MockSerialPort extends EventTarget implements SerialPortLike {
   get readable(): ReadableStream<Uint8Array> | null {
     if (!this.#open || this.#fatal) return null;
     if (!this.#readable) {
-      this.#readable = new ReadableStream<Uint8Array>({
-        start: (controller) => {
-          this.#readController = controller;
+      this.#readable = new ReadableStream<Uint8Array>(
+        {
+          start: (controller) => {
+            this.#readController = controller;
+          },
+          // With highWaterMark 0, pull() fires exactly when the host awaits read() on an empty queue.
+          pull: () => {
+            this.#readerWaiting = true;
+            for (const w of this.#readerIdleWaiters.splice(0)) w();
+          },
+          cancel: () => {
+            this.#readable = null;
+            this.#readController = undefined;
+            this.#readerWaiting = false;
+          },
         },
-        cancel: () => {
-          this.#readable = null;
-          this.#readController = undefined;
-        },
-      });
+        { highWaterMark: 0 },
+      );
       for (const chunk of this.#pending.splice(0)) this.#readController!.enqueue(chunk);
     }
     return this.#readable;
@@ -146,9 +158,17 @@ export class MockSerialPort extends EventTarget implements SerialPortLike {
     const size = this.#options.chunkSize && this.#options.chunkSize > 0 ? this.#options.chunkSize : bytes.length;
     for (let off = 0; off < bytes.length; off += size) {
       const chunk = bytes.slice(off, off + size);
-      if (this.#readController) this.#readController.enqueue(chunk);
-      else this.#pending.push(chunk);
+      if (this.#readController) {
+        this.#readerWaiting = false;
+        this.#readController.enqueue(chunk);
+      } else this.#pending.push(chunk);
     }
+  }
+
+  /** Resolves once the host's read loop has consumed every byte delivered so far and is waiting for more. */
+  whenReaderIdle(): Promise<void> {
+    if (this.#readerWaiting) return Promise.resolve();
+    return new Promise((r) => this.#readerIdleWaiters.push(r));
   }
 
   /** Simulates unplugging the device. */

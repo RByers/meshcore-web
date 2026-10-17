@@ -13,17 +13,12 @@ afterEach(async () => {
 });
 
 async function connected(): Promise<Harness> {
-  const t = (h = createHarness({ app: { remoteAdmin: { timeoutMs: 2500 } } }));
+  const t = (h = createHarness({ app: { remoteAdmin: { timeoutMs: 400 } } }));
   await t.mount();
   await t.click('[data-connect="emulator"]');
   await t.until(() => t.app.connection.phase.value === 'connected', 5000, 'connected');
   await t.app.connection.capture!.idle();
   return t;
-}
-
-async function go(t: Harness, path: string, selector: string): Promise<void> {
-  location.hash = `#${path}`;
-  await t.until(() => t.query(selector), 5000, selector);
 }
 
 function key(t: Harness, name: 'repeater' | 'room' | 'sensor'): string {
@@ -40,10 +35,10 @@ describe('node admin page', () => {
     const t = await connected();
     const k = key(t, 'repeater');
     await t.until(() => location.hash === '#/messages', 5000, 'landing page');
-    await go(t, '/contacts', `[data-contact="${k}"] a`);
+    await t.go('/contacts', `[data-contact="${k}"] a`);
     t.query<HTMLAnchorElement>(`[data-contact="${k}"] a`)!.click();
     await t.until(() => location.hash === `#/node/${k}` && t.query('mc-node-admin-page') && t.query('[data-field="password"]'), 5000, 'admin page');
-    expect(t.query('[data-field="name"]')!.textContent).toBe('Hilltop Repeater');
+    await expect.poll(() => t.query('[data-field="name"]')?.textContent, { timeout: 3000 }).toBe('Hilltop Repeater');
     expect(t.query('[data-field="type"]')!.textContent).toBe('Repeater');
     await login(t, 'password');
     await t.until(() => t.query('[data-field="login-state"]')?.textContent?.includes('admin'), 8000, 'admin login');
@@ -55,7 +50,7 @@ describe('node admin page', () => {
 
   it('shows an error for a wrong password', async () => {
     const t = await connected();
-    await go(t, `/node/${key(t, 'repeater')}`, '[data-field="password"]');
+    await t.go(`/node/${key(t, 'repeater')}`, '[data-field="password"]');
     await login(t, 'nope');
     await t.until(() => t.query('[data-field="login-state"].error'), 10000, 'login error');
     expect(t.query('[data-field="login-state"]')!.textContent).toMatch(/wrong password/i);
@@ -64,10 +59,10 @@ describe('node admin page', () => {
   it('runs a CLI command and shows the reply in the transcript', async () => {
     const t = await connected();
     const k = key(t, 'repeater');
-    await go(t, `/node/${k}`, '[data-field="password"]');
+    await t.go(`/node/${k}`, '[data-field="password"]');
     await login(t, 'password');
     await t.until(() => t.app.remoteAdmin.node(k).isAdmin.value, 8000, 'admin');
-    await go(t, `/node/${k}/cli`, '[data-field="cli-input"]');
+    await t.go(`/node/${k}/cli`, '[data-field="cli-input"]');
     await t.fill('[data-field="cli-input"]', 've');
     await t.until(() => t.query('[data-suggestion="ver"]'), 2000, 'autocomplete');
     await t.fill('[data-field="cli-input"]', 'ver');
@@ -79,7 +74,7 @@ describe('node admin page', () => {
 
   it('shows sensor telemetry readings', async () => {
     const t = await connected();
-    await go(t, `/node/${key(t, 'sensor')}/telemetry`, '[data-action="refresh-telemetry"]');
+    await t.go(`/node/${key(t, 'sensor')}/telemetry`, '[data-action="refresh-telemetry"]');
     await t.click('[data-action="refresh-telemetry"]');
     await t.until(() => t.queryAll('[data-reading]').length === 3, 8000, 'readings');
     const rows = t.queryAll('[data-reading]').map((r) => [r.children[0]!.textContent, r.querySelector('[data-field="value"]')!.textContent]);
@@ -93,7 +88,7 @@ describe('node admin page', () => {
   it('traces via the repeater and shows the hop SNR', async () => {
     const t = await connected();
     const k = key(t, 'repeater');
-    await go(t, `/node/${k}/tools`, '[data-action="trace"]');
+    await t.go(`/node/${k}/tools`, '[data-action="trace"]');
     expect(t.query<HTMLInputElement>('[data-field="trace-path"]')!.value).toBe(k.slice(0, 2));
     await t.click('[data-action="trace"]');
     await t.until(() => t.query(`[data-trace-hop="${k.slice(0, 2)}"]`), 8000, 'trace hop');
@@ -105,12 +100,12 @@ describe('node admin page', () => {
   it('logs in to the room server as guest and links to the room chat', async () => {
     const t = await connected();
     const k = key(t, 'room');
-    await go(t, `/node/${k}`, '[data-field="password"]');
+    await t.go(`/node/${k}`, '[data-field="password"]');
     expect(t.query('[data-field="type"]')!.textContent).toBe('Room server');
     await login(t, '');
     await t.until(() => t.query('[data-field="login-state"]')?.textContent?.includes('guest'), 8000, 'guest login');
     await t.until(() => t.query('[data-stat="posted"]'), 8000, 'room status');
-    await go(t, `/node/${k}/messages`, '[data-action="open-chat"]');
+    await t.go(`/node/${k}/messages`, '[data-action="open-chat"]');
     expect(t.query<HTMLAnchorElement>('[data-action="open-chat"]')!.getAttribute('href')).toBe(`#/chat/${k}`);
   });
 });

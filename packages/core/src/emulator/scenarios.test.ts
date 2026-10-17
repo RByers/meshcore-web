@@ -5,8 +5,7 @@ import { encodeCommand } from '../protocol/encode.js';
 import type { Command, DeviceFrame } from '../protocol/types.js';
 import { ManualClock } from './clock.js';
 import { basicScenario, emptyScenario, hashtagChannelSecret, scenarioKey } from './scenarios.js';
-
-const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
+import { settle } from '../client/testing.js';
 
 async function connect(s: ReturnType<typeof basicScenario>, clock: ManualClock) {
   const host = s.emulator.createLoopbackTransport();

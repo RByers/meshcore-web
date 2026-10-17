@@ -1,22 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { concatBytes, fromHex, toHex } from '@meshcore-web/core/util/bytes';
 import { encodeSerialFrame } from '@meshcore-web/core/framing';
-import { WebSerialTransport, type FrameTransport, type TransportState } from '@meshcore-web/core/transport';
+import { WebSerialTransport, type TransportState } from '@meshcore-web/core/transport';
 import { createMockSerial } from '../src/testing/mock-serial.js';
 
-function collectFrames(t: FrameTransport): string[] {
-  const out: string[] = [];
-  t.events.on('frame', (f) => out.push(toHex(f)));
-  return out;
-}
-
-async function until(cond: () => boolean, timeoutMs = 1000): Promise<void> {
-  const start = performance.now();
-  while (!cond()) {
-    if (performance.now() - start > timeoutMs) throw new Error('timed out');
-    await new Promise((r) => setTimeout(r, 1));
-  }
-}
+import { collectFrames, stateReached } from './transport-helpers.js';
 
 describe('WebSerialTransport + mock serial', () => {
   it('opens at 115200, sends "<" framed commands and receives ">" frames', async () => {
@@ -35,8 +23,8 @@ describe('WebSerialTransport + mock serial', () => {
     await t.send(fromHex('1603'));
     await t.send(fromHex('0a'));
     expect(toHex(Uint8Array.from(mock.port.bytesFromHost))).toBe('3c020016033c01000a');
-    await until(() => frames.length === 2);
-    expect(frames).toEqual(['9603', '8a']);
+    await frames.count(2);
+    expect(frames.hex).toEqual(['9603', '8a']);
     await t.disconnect();
     expect(states).toEqual(['connecting', 'connected', 'disconnected']);
     expect(mock.port.isOpen).toBe(false);
@@ -53,8 +41,8 @@ describe('WebSerialTransport + mock serial', () => {
     mock.pushFrameToHost(fromHex('0501020304'));
     mock.pushFrameToHost(big);
     mock.pushFrameToHost(fromHex('83'));
-    await until(() => frames.length === 3);
-    expect(frames).toEqual(['0501020304', toHex(big), '83']);
+    await frames.count(3);
+    expect(frames.hex).toEqual(['0501020304', toHex(big), '83']);
     await t.disconnect();
   });
 
@@ -65,8 +53,8 @@ describe('WebSerialTransport + mock serial', () => {
     await t.connect();
     const payloads = [fromHex('00'), fromHex('0c112233445566778899aa'), fromHex('8a' + 'ee'.repeat(40))];
     mock.pushBytesToHost(concatBytes(...payloads.map((p) => encodeSerialFrame(p, { marker: 0x3e }))));
-    await until(() => frames.length === 3);
-    expect(frames).toEqual(payloads.map(toHex));
+    await frames.count(3);
+    expect(frames.hex).toEqual(payloads.map(toHex));
     await t.disconnect();
   });
 
@@ -94,13 +82,13 @@ describe('WebSerialTransport + mock serial', () => {
     const frames = collectFrames(t);
     await t.connect();
     mock.pushBytesToHost(fromHex('3e0500aabb')); // partial frame, then disconnect
-    await new Promise((r) => setTimeout(r, 5));
+    await mock.port.whenReaderIdle(); // the transport has consumed the partial frame
     await t.disconnect();
     await t.disconnect(); // idempotent
     await t.connect();
     mock.pushFrameToHost(fromHex('01'));
-    await until(() => frames.length === 1);
-    expect(frames).toEqual(['01']);
+    await frames.count(1);
+    expect(frames.hex).toEqual(['01']);
     expect(mock.port.openCount).toBe(2);
     await t.disconnect();
   });
@@ -133,8 +121,9 @@ describe('WebSerialTransport + mock serial', () => {
     const errors: string[] = [];
     t.events.on('error', (e) => errors.push(e.message));
     await t.connect();
+    const disconnected = stateReached(t, 'disconnected');
     mock.unplug();
-    await until(() => t.state === 'disconnected');
+    await disconnected;
     expect(errors).toEqual(['serial device disconnected']);
     await expect(t.send(fromHex('01'))).rejects.toThrow(/not connected/);
     await t.disconnect();

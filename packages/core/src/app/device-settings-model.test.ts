@@ -1,10 +1,10 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
+import { describe, expect, it, vi } from 'vitest';
 import { regionKey } from '../packet/packet.js';
 import { toHex } from '../util/bytes.js';
-import { AppModel, createEmulatorTransportFactory, type AppModelOptions } from './app-model.js';
+import type { AppModelOptions } from './app-model.js';
+import { settle } from '../client/testing.js';
+import { connectedApp } from './testing.js';
 import type { BasicScenarioOptions } from '../emulator/scenarios.js';
-import { memoryPreferences } from './connection.js';
 import {
   DeviceSettingsModel,
   PRIVATE_KEY_SETTING,
@@ -21,34 +21,16 @@ import {
 import { RADIO_PRESETS, findRadioPreset } from './radio-presets.js';
 import { PREF_APPROXIMATE_POSITIONS, PREF_PACKET_RETENTION_DAYS, PREF_PATH_NAMES, PREF_THEME, AppSettingsModel } from './app-settings-model.js';
 
-const apps: AppModel[] = [];
-afterEach(async () => {
-  for (const a of apps.splice(0)) await a.dispose();
-});
-
 /** Hex with spaces removed (layouts written as in docs/companion-protocol.md §4). */
 const h = (s: string): string => s.replace(/\s+/g, '');
 
 async function connected(scenario: BasicScenarioOptions = {}, over: AppModelOptions = {}) {
-  const emulatorFactory = createEmulatorTransportFactory(scenario);
-  const prefs = memoryPreferences();
-  const app = new AppModel({
-    indexedDB: new IDBFactory(),
-    keyRange: IDBKeyRange,
-    createEmulatorTransport: emulatorFactory,
-    preferences: prefs,
-    ...over,
-  });
-  apps.push(app);
-  expect(await app.connection.connect('emulator')).toBe(true);
-  await app.connection.capture!.idle();
-  const emu = emulatorFactory.scenario().emulator;
-  const client = app.connection.client.value!;
+  const { app, client, prefs, scenario: sc } = await connectedApp({ scenario, app: over });
   const out: string[] = [];
   client.events.on('frame', (f) => {
     if (f.direction === 'out') out.push(toHex(f.bytes));
   });
-  return { app, emu, client, out, prefs, model: app.deviceSettings, scenario: emulatorFactory.scenario() };
+  return { app, emu: sc.emulator, client, out, prefs, model: app.deviceSettings, scenario: sc };
 }
 
 async function rejectsValidation(p: Promise<unknown>, field: string): Promise<void> {
@@ -284,9 +266,12 @@ describe('DeviceSettingsModel against the emulator', () => {
       await vi.waitFor(() => expect(out.filter((f) => f.startsWith('38'))).toHaveLength(3));
       await vi.waitFor(() => expect(timers).toHaveLength(2)); // rescheduled
       stop();
+      const [stats1, battery1] = [model.stats.value, app.connection.battery.value];
       timers[1]!.fn(); // a tick racing with stop still runs once…
       await vi.waitFor(() => expect(out.filter((f) => f.startsWith('38'))).toHaveLength(6));
-      await new Promise((r) => setTimeout(r, 10));
+      // both refreshes of that tick have landed; the reschedule decision runs in their `.finally`
+      await vi.waitFor(() => expect(model.stats.value !== stats1 && app.connection.battery.value !== battery1).toBe(true));
+      await settle(); // let the Promise.all / finally continuation run
       expect(timers).toHaveLength(2); // …but does not reschedule
     } finally {
       model.dispose();

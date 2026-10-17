@@ -38,6 +38,7 @@ import {
   parseNeighbours,
   parseOwnerInfo,
   parsePathPlaintext,
+  parseControlPayload,
   parsePayload,
   parseReqPlaintext,
   parseResponsePlaintext,
@@ -173,6 +174,28 @@ describe('ACK / MULTIPART / TRACE / CONTROL / RAW (§3.4, §3.10-3.13)', () => {
     expect(toHex(resp)).toBe(h('92 f6 07000000 0102030405060708'));
     expect(parsePayload(PayloadType.CONTROL, resp)).toMatchObject({ subType: 0x90, nodeType: 2, snr: -2.5, tag: 7 });
     expect(parsePayload(PayloadType.CONTROL, x('a0 01'))).toMatchObject({ subType: 0xa0, flags: 0xa0 });
+  });
+
+  it('CONTROL discover req without since (6–9 bytes) and a truncated resp fall back (§3.12)', () => {
+    // [0]=0x80|prefix_only [1]type_filter [2..5]tag u32 — [6..9]since omitted
+    const req = buildDiscoverReqPayload({ typeFilter: 0x02, tag: 0x01020304 });
+    expect(toHex(req)).toBe(h('80 02 04030201'));
+    const p = parseControlPayload(req);
+    expect(p).toEqual({ kind: 'control', subType: 0x80, flags: 0x80, prefixOnly: false, typeFilter: 2, tag: 0x01020304, rest: new Uint8Array(0) });
+    expect('since' in p).toBe(false);
+    // 8 bytes: too short for since, the 2 trailing bytes land in rest
+    const p8 = parseControlPayload(x('81 06 04030201 aabb'));
+    expect(p8).toMatchObject({ subType: 0x80, prefixOnly: true, typeFilter: 6, tag: 0x01020304 });
+    expect('since' in p8).toBe(false);
+    if (p8.subType === ControlType.NODE_DISCOVER_REQ && 'rest' in p8) expect(toHex(p8.rest)).toBe('aabb');
+    else throw new Error('expected a discover req');
+    // 10 bytes: since present, nothing left over
+    expect(parseControlPayload(x('80 02 04030201 05000000'))).toMatchObject({ since: 5, rest: new Uint8Array(0) });
+    // DISCOVER_RESP needs ≥ 6 bytes ([0] [1]snr [2..5]tag); 5 bytes → generic {subType, flags, data}
+    expect(parseControlPayload(x('92 f6 070000'))).toEqual({ kind: 'control', subType: 0x90, flags: 0x92, data: x('f6 070000') });
+    // a 5-byte req is generic too
+    expect(parseControlPayload(x('80 02 040302'))).toEqual({ kind: 'control', subType: 0x80, flags: 0x80, data: x('02 040302') });
+    expect(() => parseControlPayload(new Uint8Array(0))).toThrow(PayloadError);
   });
 
   it('RAW_CUSTOM and reserved types are opaque', () => {

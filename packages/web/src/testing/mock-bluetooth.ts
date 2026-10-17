@@ -48,7 +48,22 @@ export interface MockBluetoothOptions {
   advertisesService?: boolean;
 }
 
-const tick = (ms = 0) => new Promise<void>((r) => setTimeout(r, ms));
+/**
+ * Resolves on the next macrotask (`ms` 0) or after a simulated delay. A MessageChannel hop is used
+ * for the zero case: nested `setTimeout(0)` chains get clamped to ≥4 ms by browsers, which would make
+ * a burst of notifications take tens of ms for no reason.
+ */
+const tick = (ms = 0): Promise<void> =>
+  ms > 0
+    ? new Promise<void>((r) => setTimeout(r, ms))
+    : new Promise<void>((r) => {
+        const ch = new MessageChannel();
+        ch.port1.onmessage = () => {
+          ch.port1.close();
+          r();
+        };
+        ch.port2.postMessage(0);
+      });
 const networkError = (msg: string) => new DOMException(msg, 'NetworkError');
 
 function toBytes(value: BufferSource): Uint8Array {

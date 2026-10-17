@@ -1,10 +1,8 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
+import { describe, expect, it } from 'vitest';
 import { decodeLpp } from '../packet/lpp.js';
 import type { RepeaterStats, ServerStats } from '../protocol/types.js';
 import { concatBytes, toHex, u32le } from '../util/bytes.js';
-import { AppModel, createEmulatorTransportFactory } from './app-model.js';
-import { memoryPreferences } from './connection.js';
+import { connectedApp } from './testing.js';
 import {
   REMOTE_CLI_COMMANDS,
   RemoteAdminModel,
@@ -18,27 +16,10 @@ import {
   type RemoteAdminOptions,
 } from './remote-admin-model.js';
 
-const apps: AppModel[] = [];
-afterEach(async () => {
-  for (const a of apps.splice(0)) await a.dispose();
-});
-
-async function connected(remoteAdmin: RemoteAdminOptions = { timeoutMs: 4000 }) {
-  const factory = createEmulatorTransportFactory();
-  const app = new AppModel({
-    indexedDB: new IDBFactory(),
-    keyRange: IDBKeyRange,
-    createEmulatorTransport: factory,
-    preferences: memoryPreferences(),
-    remoteAdmin,
-  });
-  apps.push(app);
-  expect(await app.connection.connect('emulator')).toBe(true);
-  await app.connection.capture!.idle();
-  await app.contacts.settled();
-  const scenario = factory.scenario();
-  const k = Object.fromEntries(Object.entries(scenario.keys).map(([n, v]) => [n, toHex(v)])) as Record<keyof typeof scenario.keys, string>;
-  return { app, scenario, k, admin: app.remoteAdmin };
+/** Remote request timeouts for the emulator's fast timing (≥ 10× its per-hop delays). */
+async function connected(remoteAdmin: RemoteAdminOptions = { timeoutMs: 500 }) {
+  const { app, scenario, keys } = await connectedApp({ app: { remoteAdmin } });
+  return { app, scenario, k: keys, admin: app.remoteAdmin };
 }
 
 const COMMON = {
@@ -108,7 +89,7 @@ describe('pure helpers', () => {
 
 describe('RemoteNodeModel against the emulator', () => {
   it('logs in as admin and guest to the repeater; wrong password times out', async () => {
-    const { admin, k } = await connected({ timeoutMs: 1500 });
+    const { admin, k } = await connected({ timeoutMs: 200 });
     const rep = admin.node(k.repeater);
     expect(rep.contact.value?.name).toBe('Hilltop Repeater');
     expect(rep.kind.value).toBe('repeater');
@@ -240,7 +221,7 @@ describe('RemoteNodeModel against the emulator', () => {
   });
 
   it('surfaces errors and timeouts, and resets on disconnect', async () => {
-    const { app, admin, k } = await connected({ timeoutMs: 1500 });
+    const { app, admin, k } = await connected({ timeoutMs: 200 });
     const sensor = admin.node(k.sensor);
     // sensors do not answer GET_STATUS
     await expect(sensor.refreshStatus()).rejects.toThrow();

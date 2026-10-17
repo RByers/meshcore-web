@@ -21,11 +21,6 @@ async function connected(): Promise<Harness> {
   return t;
 }
 
-async function go(t: Harness, path: string, selector: string): Promise<void> {
-  location.hash = `#${path}`;
-  await t.until(() => t.query(selector), 5000, selector);
-}
-
 function msgWith(t: Harness, text: string): HTMLElement | undefined {
   return t.queryAll('.msg').find((li) => li.querySelector('[data-field="text"]')?.textContent === text);
 }
@@ -40,7 +35,7 @@ describe('channel senders', () => {
     const t = await connected();
     const s = t.emulatorScenario();
     const pub = await channelKeyForPsk(publicChannelSecret());
-    await go(t, `/channel/${pub}`, '[data-field="sender"]');
+    await t.go(`/channel/${pub}`, '[data-field="sender"]');
     // history sender "Dave" is not a contact
     const dave = t.query('[data-sender]')!;
     expect(dave.textContent).toBe('Dave');
@@ -64,7 +59,7 @@ describe('channel senders', () => {
     const s = t.emulatorScenario();
     await t.app.contacts.add(toHex(scenarioKey('bob2')), { name: 'Bob' });
     const pub = await channelKeyForPsk(publicChannelSecret());
-    await go(t, `/channel/${pub}`, '[data-field="sender"]');
+    await t.go(`/channel/${pub}`, '[data-field="sender"]');
     s.nodes.bob.sendChannelMessage('Public', 'which bob?');
     await t.until(() => msgWith(t, 'which bob?'), 5000, 'Bob message');
     const btn = msgWith(t, 'which bob?')!.querySelector<HTMLButtonElement>('button[data-field="sender"]')!;
@@ -81,7 +76,7 @@ describe('DM header', () => {
     const t = await connected();
     const s = t.emulatorScenario();
     const bob = toHex(s.keys.bob);
-    await go(t, `/chat/${bob}`, '[data-field="title"] a');
+    await t.go(`/chat/${bob}`, '[data-field="title"] a');
     s.nodes.bob.sendText(s.keys.self, 'right here');
     await t.until(() => msgWith(t, 'right here'), 5000, 'Bob DM');
     const title = t.query<HTMLAnchorElement>('[data-field="title"] a')!;
@@ -96,7 +91,7 @@ describe('DM header', () => {
   it('offers contact info from the contacts list menu', async () => {
     const t = await connected();
     const rep = toHex(t.emulatorScenario().keys.repeater);
-    await go(t, '/contacts', `[data-menu="${rep}"]`);
+    await t.go('/contacts', `[data-menu="${rep}"]`);
     expect(t.query(`#menu-${rep} [data-action="info"]`)!.getAttribute('href')).toBe(`#/contact/${rep}`);
   });
 });

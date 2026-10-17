@@ -10,7 +10,6 @@ afterEach(async () => {
   h = undefined;
   delete document.documentElement.dataset['theme'];
   document.documentElement.style.colorScheme = '';
-  localStorage.clear();
 });
 
 async function openSettings(opts: HarnessOptions = {}): Promise<Harness> {

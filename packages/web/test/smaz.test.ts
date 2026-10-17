@@ -24,11 +24,6 @@ async function connected(): Promise<Harness> {
   return t;
 }
 
-async function go(t: Harness, path: string, selector: string): Promise<void> {
-  location.hash = `#${path}`;
-  await t.until(() => t.query(selector), 5000, selector);
-}
-
 const LONG = 'the weather is fine here, meet at the station at ten';
 
 describe('SMAZ compression', () => {
@@ -36,7 +31,7 @@ describe('SMAZ compression', () => {
     const t = await connected();
     const s = t.emulatorScenario();
     const alice = toHex(s.keys.alice);
-    await go(t, `/chat/${alice}`, '[data-field="composer"]');
+    await t.go(`/chat/${alice}`, '[data-field="composer"]');
     await t.until(() => !t.query<HTMLInputElement>('[data-action="smaz"]')!.disabled, 3000, 'toggle enabled');
     expect(t.query<HTMLInputElement>('[data-action="smaz"]')!.checked).toBe(false);
 
@@ -64,7 +59,7 @@ describe('SMAZ compression', () => {
     const t = await connected();
     const s = t.emulatorScenario();
     const pub = await channelKeyForPsk(publicChannelSecret());
-    await go(t, '/channels', `[data-channel="${pub}"]`);
+    await t.go('/channels', `[data-channel="${pub}"]`);
     await t.click(`[data-menu="${pub}"]`);
     await t.click(`#menu-${pub} [data-action="edit"]`);
     await t.until(() => t.query<HTMLDialogElement>('#channel-dialog')!.open, 3000, 'dialog open');
@@ -81,7 +76,7 @@ describe('SMAZ compression', () => {
     await t.until(() => t.query<HTMLInputElement>('[data-field="channel-smaz"]')!.checked, 3000, 'checked on reopen');
     t.query<HTMLDialogElement>('#channel-dialog')!.close();
 
-    await go(t, `/channel/${pub}`, '[data-field="composer"]');
+    await t.go(`/channel/${pub}`, '[data-field="composer"]');
     await t.until(() => t.query<HTMLInputElement>('[data-action="smaz"]')!.checked, 3000, 'toggle on in chat');
     await t.fill('[data-field="composer"]', LONG);
     await t.click('[data-action="send"]');

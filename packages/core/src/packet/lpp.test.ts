@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { fromHex } from '../util/bytes.js';
-import { LppType, decodeAvgMinMax, decodeLpp, lppHelperDataSize, lppValueSize } from './lpp.js';
+import { LppType, decodeAvgMinMax, decodeLpp, lppHelperDataSize, lppTypeName, lppValueSize } from './lpp.js';
 
 const x = (s: string): Uint8Array => fromHex(s.replace(/\s+/g, ''));
 
@@ -58,5 +58,43 @@ describe('CayenneLPP decoder (mesh-packet-format.md §4)', () => {
       ],
     });
     expect(decodeAvgMinMax(x('0100'))).toBeNull();
+  });
+});
+
+// docs/mesh-packet-format.md §4 (end): sensor AVG_MIN_MAX reply body `[tag u32][now u32]` then
+// {channel u8, lpp_type u8, min, max, avg}, each getDataSize(type) bytes big-endian, / getMultiplier(type),
+// two's complement if isSigned(type). LPPDataHelpers.h `LPPData::getFloat` accumulates into a uint32,
+// so values wider than 4 bytes keep only their low 32 bits.
+describe('decodeAvgMinMax value sizes (mesh-packet-format.md §4, LPPData::getFloat)', () => {
+  const header = '2a000000 64000000'; // tag 42, now 100
+
+  it('4-byte unsigned ENERGY ×1000', () => {
+    const r = decodeAvgMinMax(x(`${header} 03 83 00003039 0001e240 00000000`));
+    expect(r).toEqual({ tag: 42, now: 100, entries: [{ channel: 3, type: LppType.ENERGY, name: 'ENERGY', min: 12.345, max: 123.456, avg: 0 }] });
+  });
+
+  it('>4-byte GPS (9 bytes): only the low 32 bits count', () => {
+    const r = decodeAvgMinMax(x(`${header} 01 88 ffffffffff0000002a 00000000000000002a 123456789a00000001`));
+    expect(r!.entries).toEqual([{ channel: 1, type: LppType.GPS, name: 'GPS', min: 42, max: 42, avg: 1 }]);
+  });
+
+  it("signed 6-byte ACCELEROMETER: two's complement of the low 32 bits", () => {
+    const r = decodeAvgMinMax(x(`${header} 02 71 fffffffffffe 000000000005 0000ffffff9c  0000`));
+    expect(r!.entries).toEqual([{ channel: 2, type: LppType.ACCELEROMETER, name: 'ACCELEROMETER', min: -2, max: 5, avg: -100 }]);
+  });
+
+  it('unknown types are unnamed with size 1; a truncated entry ends the list', () => {
+    const r = decodeAvgMinMax(x(`${header} 04 c8 01 02 03  05 83 00000001`));
+    expect(r!.entries).toEqual([{ channel: 4, type: 200, min: 1, max: 2, avg: 3 }]);
+  });
+});
+
+describe('lppTypeName', () => {
+  it('maps known codes to names, unknown to undefined', () => {
+    expect(lppTypeName(116)).toBe('VOLTAGE');
+    expect(lppTypeName(LppType.GPS)).toBe('GPS');
+    expect(lppTypeName(0)).toBe('DIGITAL_INPUT');
+    expect(lppTypeName(200)).toBeUndefined();
+    for (const [name, code] of Object.entries(LppType)) expect(lppTypeName(code)).toBe(name);
   });
 });

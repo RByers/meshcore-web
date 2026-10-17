@@ -1,31 +1,18 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
+import { describe, expect, it, vi } from 'vitest';
 import { PATH_LEN_UNKNOWN, encodePathLen } from '../protocol/constants.js';
 import { RouteType } from '../packet/constants.js';
 import { parsePacket } from '../packet/packet.js';
 import type { PathHistoryEntry } from '../store/schema.js';
 import { toHex } from '../util/bytes.js';
-import { AppModel, createEmulatorTransportFactory, type AppModelOptions } from './app-model.js';
-import { memoryPreferences } from './connection.js';
+import type { AppModelOptions } from './app-model.js';
+import { FAST_RETRY, connectedApp } from './testing.js';
 import { MAX_PATH_HISTORY, encodeHops, pathCandidates, pathId, resolvePathHops, updateHistory, type PathCandidate } from './path-history.js';
 
-const apps: AppModel[] = [];
-const FAST_RETRY = { maxAttempts: 2, ackTimeoutMs: 800, retryDelayMs: () => 0, lateAckGraceMs: 0 };
-
 async function connected(over: AppModelOptions = {}) {
-  const emulator = createEmulatorTransportFactory();
-  const app = new AppModel({ indexedDB: new IDBFactory(), keyRange: IDBKeyRange, createEmulatorTransport: emulator, preferences: memoryPreferences(), ...over });
-  apps.push(app);
-  expect(await app.connection.connect('emulator')).toBe(true);
-  await app.connection.capture!.idle();
-  const s = emulator.scenario();
+  const { app, scenario, keys, store } = await connectedApp({ app: over });
   await vi.waitFor(() => expect(app.contacts.contacts.value).toHaveLength(6));
-  return { app, s, bob: toHex(s.keys.bob), repeater: toHex(s.keys.repeater), store: app.connection.store.value! };
+  return { app, s: scenario, bob: keys.bob, repeater: keys.repeater, store };
 }
-
-afterEach(async () => {
-  for (const a of apps.splice(0)) await a.dispose();
-});
 
 const cand = (name: string, key: number[]): PathCandidate => ({
   key: toHex(Uint8Array.from(key)),

@@ -3,24 +3,11 @@ import { fromHex, toHex } from '@meshcore-web/core/util/bytes';
 import {
   NUS_SERVICE_UUID,
   WebBluetoothTransport,
-  type FrameTransport,
   type TransportState,
 } from '@meshcore-web/core/transport';
 import { createMockBluetooth } from '../src/testing/mock-bluetooth.js';
 
-function collectFrames(t: FrameTransport): string[] {
-  const out: string[] = [];
-  t.events.on('frame', (f) => out.push(toHex(f)));
-  return out;
-}
-
-async function until(cond: () => boolean, timeoutMs = 1000): Promise<void> {
-  const start = performance.now();
-  while (!cond()) {
-    if (performance.now() - start > timeoutMs) throw new Error('timed out');
-    await new Promise((r) => setTimeout(r, 1));
-  }
-}
+import { collectFrames } from './transport-helpers.js';
 
 describe('WebBluetoothTransport + mock bluetooth', () => {
   it('requestDevice filters by NUS service or "MeshCore" name prefix', async () => {
@@ -53,8 +40,8 @@ describe('WebBluetoothTransport + mock bluetooth', () => {
     await t.send(fromHex('0a'));
     expect(mock.framesFromHost.map(toHex)).toEqual(['1603', '0a']);
     expect(mock.writeModes).toEqual(['with-response', 'with-response']); // firmware RX is WRITE only
-    await until(() => frames.length === 2);
-    expect(frames).toEqual(['9603', '8a']);
+    await frames.count(2);
+    expect(frames.hex).toEqual(['9603', '8a']);
     await t.disconnect();
     expect(states).toEqual(['connecting', 'connected', 'disconnected']);
     expect(mock.device.gatt.connected).toBe(false);
@@ -68,8 +55,8 @@ describe('WebBluetoothTransport + mock bluetooth', () => {
     const burst = [fromHex('83'), fromHex('88' + '11'.repeat(20)), new Uint8Array(176).fill(0x8a), fromHex('80')];
     for (const f of burst) mock.pushFrameToHost(f);
     mock.tx.notify(new Uint8Array(0)); // empty notification is ignored
-    await until(() => frames.length === 4);
-    expect(frames).toEqual(burst.map(toHex));
+    await frames.count(4);
+    expect(frames.hex).toEqual(burst.map(toHex));
     await t.disconnect();
   });
 
@@ -122,7 +109,7 @@ describe('WebBluetoothTransport + mock bluetooth', () => {
     await t.connect();
     expect(mock.device.gatt.connectCount).toBe(2);
     mock.pushFrameToHost(fromHex('82'));
-    await until(() => frames.length === 1);
+    await frames.count(1);
     await t.disconnect();
     expect(errors).toHaveLength(1); // requested disconnect is not an error
   });
@@ -147,6 +134,6 @@ describe('WebBluetoothTransport + mock bluetooth', () => {
     mock.tx.notifying = true;
     mock.device.gatt.connected = true;
     mock.tx.notify(fromHex('83'));
-    expect(frames).toEqual([]);
+    expect(frames.hex).toEqual([]);
   });
 });

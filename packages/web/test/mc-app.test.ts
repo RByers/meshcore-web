@@ -115,7 +115,8 @@ describe('connect flows', () => {
     await t.until(() => t.app.connection.phase.value === 'disconnected', 3000, 'disconnected');
     await t.until(() => t.query('[data-connect="emulator"]'), 3000, 'connect options back');
     expect(t.query('[data-section="current"]')).toBeNull();
-    expect(t.query('[data-reconnect]')).not.toBeNull();
+    // the known-radios list is read back from IndexedDB after the device record is written
+    await t.until(() => t.query('[data-reconnect]'), 3000, 'reconnect option');
   });
 
   it('connects via mocked Bluetooth', async () => {
@@ -181,7 +182,7 @@ describe('connect flows', () => {
     await t.app.connection.capture!.idle();
     const pub = t.app.connection.pubKey.value!;
     // a second, independent handle on the same database
-    const store = await RadioStore.open(pub);
+    const store = await RadioStore.open(pub, { factory: t.indexedDB });
     try {
       const frames = await store.frames.query({ limit: 500 });
       expect(frames.items.length).toBeGreaterThan(10);

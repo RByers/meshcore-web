@@ -1,19 +1,13 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
+import { describe, expect, it, vi } from 'vitest';
 import { toHex } from '../util/bytes.js';
 import { channelKeyForPsk } from '../store/channels.js';
-import { publicChannelSecret } from '../emulator/scenarios.js';
+import { publicChannelSecret, type BasicScenario } from '../emulator/scenarios.js';
 import { PayloadType, RouteType } from '../packet/constants.js';
 import type { AnnotationNode } from '../packet/annotate.js';
-import { AppModel, createEmulatorTransportFactory } from './app-model.js';
-import { memoryPreferences } from './connection.js';
+import type { AppModel } from './app-model.js';
+import { effect } from './signal.js';
+import { testApp, connectedApp } from './testing.js';
 import type { PacketLogModel } from './packet-log-model.js';
-
-const apps: AppModel[] = [];
-
-afterEach(async () => {
-  for (const a of apps.splice(0)) await a.dispose();
-});
 
 /** Leaves (ignoring bit fields and decrypted overlays) must tile the node exactly. */
 function checkTiling(n: AnnotationNode): void {
@@ -37,34 +31,43 @@ function find(n: AnnotationNode, pred: (n: AnnotationNode) => boolean): Annotati
   return undefined;
 }
 
-async function connected(): Promise<{ app: AppModel; log: PacketLogModel; scenario: ReturnType<ReturnType<typeof createEmulatorTransportFactory>['scenario']> }> {
-  const emulator = createEmulatorTransportFactory();
-  const app = new AppModel({ indexedDB: new IDBFactory(), keyRange: IDBKeyRange, createEmulatorTransport: emulator, preferences: memoryPreferences() });
-  apps.push(app);
+async function connected(): Promise<{ app: AppModel; log: PacketLogModel; scenario: BasicScenario }> {
+  const { app, scenario } = await connectedApp();
   const log = app.packetLog;
-  expect(await app.connection.connect('emulator')).toBe(true);
-  await app.connection.capture!.idle();
   await log.settled();
-  return { app, log, scenario: emulator.scenario() };
+  return { app, log, scenario };
 }
 
-/** Alice adverts, Bob posts on Public, Alice DMs the radio; waits until all are logged. */
-async function traffic(app: AppModel, log: PacketLogModel, scenario: Awaited<ReturnType<typeof connected>>['scenario']): Promise<void> {
+/**
+ * Alice adverts, Bob posts on Public, Alice DMs the radio (which ACKs); waits until every packet
+ * the radio hears is logged: each original plus the repeater's forwarded copy, and the
+ * repeater's forward of our ACK.
+ */
+async function traffic(app: AppModel, log: PacketLogModel, scenario: BasicScenario): Promise<void> {
   scenario.nodes.alice.advertise();
   scenario.nodes.bob.sendChannelMessage('Public', 'hello mesh');
   scenario.nodes.alice.sendText(scenario.keys.self, 'hi there');
+  const expected = [
+    // advert and channel message: heard from the sender (path 0) and re-flooded by the repeater (path 1)
+    `${PayloadType.ADVERT}/0`,
+    `${PayloadType.ADVERT}/1`,
+    `${PayloadType.GRP_TXT}/0`,
+    `${PayloadType.GRP_TXT}/1`,
+    // Alice's DM is routed via the repeater: overheard with 1 hop left, then forwarded to us
+    `${PayloadType.TXT_MSG}/1`,
+    `${PayloadType.TXT_MSG}/0`,
+    // our ACK, forwarded back by the repeater
+    `${PayloadType.ACK}/0`,
+  ];
   await vi.waitFor(
     async () => {
       await app.connection.capture!.idle();
       const items = (await app.connection.store.value!.packets.query({ limit: 1000 })).items;
-      const types = new Set(items.map((r) => r.payloadType));
-      expect(types.has(PayloadType.ADVERT) && types.has(PayloadType.GRP_TXT) && types.has(PayloadType.TXT_MSG)).toBe(true);
-      // the repeater's re-flooded copies (forwarded after a short delay)
-      expect(items.filter((r) => r.payloadType === PayloadType.ADVERT && r.pathLen === 1).length).toBeGreaterThan(0);
+      const seen = new Set(items.filter((r) => r.direction === 'rx').map((r) => `${r.payloadType}/${r.pathLen}`));
+      expect(expected.filter((k) => !seen.has(k))).toEqual([]);
     },
     { timeout: 3000 },
   );
-  await new Promise((r) => setTimeout(r, 200));
   await app.connection.capture!.idle();
   await log.settled();
 }
@@ -156,9 +159,7 @@ describe('PacketLogModel — packets', () => {
   });
 
   it('pages and counts; live tail off counts missed packets', async () => {
-    const emulator = createEmulatorTransportFactory();
-    const app = new AppModel({ indexedDB: new IDBFactory(), keyRange: IDBKeyRange, createEmulatorTransport: emulator });
-    apps.push(app);
+    const { app, emulator } = testApp();
     // a small page size to exercise paging (the AppModel getter uses the default of 100)
     const { PacketLogModel } = await import('./packet-log-model.js');
     const log = new PacketLogModel(app.connection, { pageSize: 2 }).start();
@@ -176,11 +177,19 @@ describe('PacketLogModel — packets', () => {
     expect(log.packets.page.value).toBe(1);
     expect(log.packets.rows.value.map((r) => r.id)).not.toEqual(first);
     await log.packets.setLive(false);
+    // Bob's advert also updates his contact, and the resulting context reload re-queries the page and
+    // zeroes `missed` again; whether that lands before or after the repeater's copy is a race, so
+    // assert on the highest count seen rather than the current one
+    let maxMissed = 0;
+    const off = effect(() => {
+      maxMissed = Math.max(maxMissed, log.packets.missed.value);
+    });
     emulator.scenario().nodes.bob.advertise();
     await vi.waitFor(async () => {
       await app.connection.capture!.idle();
-      expect(log.packets.missed.value).toBeGreaterThan(0);
+      expect(maxMissed).toBeGreaterThan(0);
     });
+    off();
     await log.packets.setLive(true);
     expect(log.packets.page.value).toBe(0);
     expect(log.packets.missed.value).toBe(0);

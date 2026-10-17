@@ -32,10 +32,8 @@ export default defineConfig({
   },
   test: {
     include: ['test/**/*.test.ts', 'src/**/*.test.ts'],
-    // Test files share the browser's IndexedDB (every harness radio has the same emulator key, and
-    // cleanup deletes all meshcore-web databases), so files running in parallel iframes corrupt
-    // each other's stores. Run them one at a time.
-    fileParallelism: false,
+    // Files run in parallel iframes: each harness scopes its IndexedDB names (see src/testing/harness.ts),
+    // so tests must not touch shared origin state (localStorage etc.) outside the harness.
     browser: {
       enabled: true,
       provider: playwright(),

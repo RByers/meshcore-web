@@ -18,6 +18,9 @@ find a doc error, fix the doc in the same change).
 - Bytes are `Uint8Array`; integers little-endian unless the doc says otherwise; use helpers in
   `src/util/bytes.ts`.
 - No `any`. Discriminated unions for frames. `noUncheckedIndexedAccess` is on.
+- Tests never sleep: no hardcoded `setTimeout(r, N)` / `tick(ms)` waits. Await the actual state transition
+  (a signal predicate, event, returned promise, or DOM change) and drive injectable clocks for timeout paths.
+  A `setTimeout(0)` flush is a smell to justify, not a default.
 - Core must not touch `navigator`, `window`, `document`; transports receive the Web API objects
   via injectable factories so tests can mock them.
 - Keep the UI thin: logic lives in `packages/core/src/app` models; Lit components render state and

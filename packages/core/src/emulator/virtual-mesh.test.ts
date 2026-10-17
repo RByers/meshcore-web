@@ -14,10 +14,10 @@ import { CompanionEmulator, computeAckCode } from './companion-emulator.js';
 import { basicScenario, hashtagChannelSecret, publicChannelSecret, scenarioIdentity } from './scenarios.js';
 import type { BasicScenarioOptions } from './scenarios.js';
 import { VirtualMesh, meshIdentityFromSeed } from './virtual-mesh.js';
+import { settle } from '../client/testing.js';
 
 const START = Date.UTC(2026, 9, 15, 12, 0, 0);
 const NOW = START / 1000;
-const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 
 type Kind = DeviceFrame['kind'];
 type FrameOf<K extends Kind> = Extract<DeviceFrame, { kind: K }>;
