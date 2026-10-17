@@ -125,11 +125,17 @@ export function hBarPath(x0: number, x1: number, y: number, h: number, r = 4): s
   return `M${x0},${y}H${x1 - rr}A${rr},${rr} 0 0 1 ${x1},${y + rr}V${y + h - rr}A${rr},${rr} 0 0 1 ${x1 - rr},${y + h}H${x0}Z`;
 }
 
-/** Legend list; `kind` mirrors the mark (rect for bars/areas, line for lines, dot for dots). */
-export function legend(entries: readonly LegendEntry[], kind: 'rect' | 'line' | 'dot' = 'rect'): TemplateResult {
+/** Hover text for a series key (e.g. what a packet type means), or undefined for none. */
+export type Describe = (key: string) => string | undefined;
+
+/**
+ * Legend list; `kind` mirrors the mark (rect for bars/areas, line for lines, dot for dots).
+ * `describe` gives an entry a hover tooltip when it stands for a single key.
+ */
+export function legend(entries: readonly LegendEntry[], kind: 'rect' | 'line' | 'dot' = 'rect', describe?: Describe): TemplateResult {
   return html`<ul class="legend" data-legend>
     ${entries.map(
-      (e) => html`<li data-legend-key=${e.key}>
+      (e) => html`<li data-legend-key=${e.key} title=${(e.keys.length === 1 && describe?.(e.key)) || nothing}>
         <span class="key ${kind}" style="--c:${e.color}"></span><span>${e.label}</span>
       </li>`,
     )}

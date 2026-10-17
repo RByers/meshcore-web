@@ -1,7 +1,7 @@
 /** The Stats tab of /packets (docs/packet-stats.md §3). */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { page } from 'vitest/browser';
-import { buildPacket, PayloadType, RouteType } from '@meshcore-web/core/packet';
+import { buildPacket, packetTypeNameDescription, PayloadType, RouteType } from '@meshcore-web/core/packet';
 import '../src/mc-app.js';
 import '../src/pages/packets/index.js';
 import { createHarness, type Harness } from '../src/testing/harness.js';
@@ -91,6 +91,10 @@ describe('/packets Stats tab', () => {
     expect(yLabel()).toBe('SNR (dB)');
     const typeLegend = legend();
     expect(typeLegend).toContain('ADVERT');
+    const legendTitle = (key: string) =>
+      inChart(el, 'dots', 'mc-dot-plot', '[data-legend] li').find((li) => li.dataset['legendKey'] === key)?.title;
+    expect(legendTitle('ADVERT')).toBe(packetTypeNameDescription('ADVERT'));
+    expect(legendTitle('ADVERT')).toBeTruthy();
 
     select(t.query('[data-select="y"]')!, 'rssi');
     await settle(t, el);
@@ -101,6 +105,18 @@ describe('/packets Stats tab', () => {
     const alice = t.app.contacts.contacts.value.find((c) => c.name === 'Alice')!;
     expect(legend()).not.toContain('ADVERT');
     expect(legend()).toContain(alice.key);
+    // sources are not packet types: no type description tooltip
+    expect(legendTitle(alice.key)).toBe('');
+  });
+
+  it('packet and route type breakdown legends explain each type on hover', async () => {
+    const { el } = await openStats();
+    const title = (label: string, key: string) =>
+      inChart(el, 'utilization', `mc-breakdown[label="${label}"]`, '[data-legend] li').find((li) => li.dataset['legendKey'] === key)?.title;
+    expect(title('Packet type', 'GRP_TXT')).toBe(packetTypeNameDescription('GRP_TXT'));
+    expect(title('Packet type', 'GRP_TXT')).toBeTruthy();
+    expect(title('Route type', 'FLOOD')).toBe(packetTypeNameDescription('FLOOD'));
+    expect(title('Direction', 'Received') ?? '').toBe('');
   });
 
   it('a date preset narrows the packets counted', async () => {

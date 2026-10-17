@@ -117,6 +117,24 @@ const ROUTE_PURPOSE: Record<number, string> = {
     'TRANSPORT_DIRECT (3): routed like DIRECT (the path is the hops still to travel; each forwarder removes itself), but with transport codes after the header. Repeaters route it by the path, not by region. A zero-hop TRANSPORT_DIRECT advert with codes {0,0} is a "Share contact" re-broadcast, which receivers must not treat as having heard the node directly. §1.2',
 };
 
+/** Description of a route type (§1.1-1.3), or undefined for an unknown value. */
+export function routeTypeDescription(type: number): string | undefined {
+  return ROUTE_PURPOSE[type];
+}
+
+/**
+ * Plain description of a route or payload type given its name ("TRANSPORT_FLOOD", "REQ"), for
+ * tooltips on stats labels: the leading "NAME (n): " and trailing "§" references are dropped.
+ * Undefined for any other string.
+ */
+export function packetTypeNameDescription(name: string): string | undefined {
+  const route = Object.hasOwn(RouteType, name) ? RouteType[name as keyof typeof RouteType] : undefined;
+  const payload = Object.hasOwn(PayloadType, name) ? PayloadType[name as keyof typeof PayloadType] : undefined;
+  const text = route !== undefined ? ROUTE_PURPOSE[route] : payload !== undefined ? PAYLOAD_PURPOSE[payload] : undefined;
+  if (!text) return undefined;
+  return text.replace(/^[A-Z_]+ \(\d+\): /, '').replace(/\s*§[\d.,\s§]*$/, '');
+}
+
 /** Number in a node's value ("12", "0x0c"), or NaN. */
 function num(n: AnnotationNode): number {
   return Number(n.value);

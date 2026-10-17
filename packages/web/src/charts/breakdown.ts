@@ -5,7 +5,7 @@
  * segment shows its value, share and optional `title`.
  */
 import { css, html, nothing, type TemplateResult } from 'lit';
-import { ChartBase, chartStyles, formatNumber, formatPercent } from './chart-base.js';
+import { ChartBase, chartStyles, formatNumber, formatPercent, type Describe } from './chart-base.js';
 import { assignSlots, colorOf, MAX_SERIES, OTHER_KEY, type SeriesPalette } from './palette.js';
 
 export interface BreakdownSegment {
@@ -23,6 +23,7 @@ export class McBreakdown extends ChartBase {
     format: { attribute: false },
     palette: { attribute: false },
     label: { type: String },
+    describe: { attribute: false },
     hover: { state: true },
   };
 
@@ -61,6 +62,8 @@ export class McBreakdown extends ChartBase {
   declare palette: SeriesPalette | undefined;
   /** Optional caption above the bar (the dimension name). */
   declare label: string;
+  /** Hover text for a legend label (e.g. what a packet type means). */
+  declare describe: Describe | undefined;
   declare hover: number | null;
 
   constructor() {
@@ -147,7 +150,7 @@ export class McBreakdown extends ChartBase {
       </div>
       <ul class="legend" data-legend>
         ${segs.map(
-          (s) => html`<li data-legend-key=${s.label}>
+          (s) => html`<li data-legend-key=${s.label} title=${this.describe?.(s.label) || nothing}>
             <span class="key rect" style="--c:${colorOf(palette, s.label)}"></span><span>${s.label}</span
             ><span class="share">${formatPercent(s.value / total)}</span>
           </li>`,

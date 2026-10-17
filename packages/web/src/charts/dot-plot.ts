@@ -12,7 +12,7 @@ import { css, html, nothing, svg, type SVGTemplateResult, type TemplateResult } 
 import { guard } from 'lit/directives/guard.js';
 import { scaleLinear, scaleSqrt, scaleTime } from 'd3-scale';
 import { extent, max } from 'd3-array';
-import { ChartBase, chartStyles, formatDateTime, formatNumber, legend, MIN_HIT, tickCount, xTimeAxis, yAxis } from './chart-base.js';
+import { ChartBase, chartStyles, formatDateTime, formatNumber, legend, type Describe, MIN_HIT, tickCount, xTimeAxis, yAxis } from './chart-base.js';
 import { assignSlots, colorOf, keysByCount, legendFor, type SeriesPalette } from './palette.js';
 
 export interface DotPoint {
@@ -61,6 +61,7 @@ export class McDotPlot extends ChartBase {
     yFormat: { attribute: false },
     palette: { attribute: false },
     seriesLabel: { type: String, attribute: 'series-label' },
+    describe: { attribute: false },
     noun: { type: String },
     missingLabel: { type: String, attribute: 'missing-label' },
     height: { type: Number },
@@ -72,12 +73,6 @@ export class McDotPlot extends ChartBase {
     css`
       circle.dot {
         fill-opacity: 0.8;
-        stroke: var(--chart-surface);
-        stroke-width: 1;
-      }
-      circle.focus {
-        stroke: var(--chart-surface);
-        stroke-width: 2;
       }
       svg {
         cursor: default;
@@ -97,6 +92,8 @@ export class McDotPlot extends ChartBase {
   declare palette: SeriesPalette | undefined;
   /** Name of what the colour encodes, for the tooltip (e.g. "Packet type"). */
   declare seriesLabel: string;
+  /** Hover text for a legend entry's series key (e.g. what a packet type means). */
+  declare describe: Describe | undefined;
   /** Singular noun for the dropped-points note (plural adds "s"). */
   declare noun: string;
   /** Text after "without" in the note; default `yLabel`. */
@@ -272,7 +269,7 @@ export class McDotPlot extends ChartBase {
         </svg>
         ${this.renderTip()}
       </div>
-      ${shown.length >= 2 ? legend(shown, 'dot') : nothing}
+      ${shown.length >= 2 ? legend(shown, 'dot', this.describe) : nothing}
       ${l.nulls > 0
         ? html`<p class="note" data-field="nulls">${formatNumber(l.nulls, 0)} ${nounText} without ${this.missingLabel ?? this.yLabel}</p>`
         : nothing}

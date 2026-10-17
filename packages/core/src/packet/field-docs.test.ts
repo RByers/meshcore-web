@@ -5,7 +5,26 @@ import { calcSharedSecret, ed25519KeyPairFromSeed } from './crypto.js';
 import { buildPacket } from './packet.js';
 import { buildAdvertPayload, buildDiscoverReqPayload, buildPeerDatagramPayload, buildReqPlaintext } from './payloads.js';
 import { annotatePacket, annotatePacketSync, annotatePayloadSync, type AnnotationNode } from './annotate.js';
-import { describeNodes, PACKET_FIELD_DOCS, PACKET_VALUE_DOCS } from './field-docs.js';
+import { describeNodes, PACKET_FIELD_DOCS, PACKET_VALUE_DOCS, packetTypeNameDescription } from './field-docs.js';
+
+describe('packetTypeNameDescription', () => {
+  it('describes route and payload types by name, without the name prefix or § references', () => {
+    const tf = packetTypeNameDescription('TRANSPORT_FLOOD');
+    expect(tf).toMatch(/^a flood scoped to a region\./);
+    expect(tf).not.toContain('§');
+    const req = packetTypeNameDescription('REQ');
+    expect(req).toBeTruthy();
+    expect(req).not.toMatch(/^REQ \(/);
+    expect(req).not.toContain('§');
+    expect(packetTypeNameDescription('FLOOD')).toMatch(/^an unscoped flood/);
+  });
+
+  it('is undefined for other strings', () => {
+    expect(packetTypeNameDescription('UNKNOWN')).toBeUndefined();
+    expect(packetTypeNameDescription('toString')).toBeUndefined();
+    expect(packetTypeNameDescription('')).toBeUndefined();
+  });
+});
 
 const a = await ed25519KeyPairFromSeed(Uint8Array.from({ length: 32 }, (_, i) => i + 1));
 const b = await ed25519KeyPairFromSeed(Uint8Array.from({ length: 32 }, (_, i) => 0x80 + i));

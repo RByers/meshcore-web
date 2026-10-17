@@ -7,6 +7,7 @@
  */
 import { css, html, nothing, type TemplateResult } from 'lit';
 import { formatDistance, nodeId, type Breakdown, type HopCount, type LoraParams, type NodeRef, type SourceStats, type StatPacket, type Timeline } from '@meshcore-web/core/app';
+import { packetTypeNameDescription } from '@meshcore-web/core/packet';
 import { AppElement } from '../../app-context.js';
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
@@ -321,6 +322,7 @@ export class McPacketStats extends AppElement {
           y-label=${yOpt.label}
           .yFormat=${yOpt.format}
           .palette=${dots.palette}
+          .describe=${this.colorField === 'type' || this.colorField === 'route' ? packetTypeNameDescription : undefined}
           series-label=${COLOR_OPTIONS.find((o) => o.id === this.colorField)?.label ?? ''}
           missing-label=${yOpt.missing}
           @dot-select=${this.#onDot}
@@ -361,8 +363,8 @@ export class McPacketStats extends AppElement {
           ${airtimeKnown ? `Share of estimated airtime. ${radioText(radio)}.` : 'Radio parameters unknown: shares below are by bytes, not airtime.'}
         </p>
         <div class="breakdowns">
-          <mc-breakdown label="Packet type" .segments=${breakdownSegments(util.byType, airtimeKnown)} .palette=${typePalette} .format=${fmtShare}></mc-breakdown>
-          <mc-breakdown label="Route type" .segments=${breakdownSegments(util.byRoute, airtimeKnown)} .format=${fmtShare}></mc-breakdown>
+          <mc-breakdown label="Packet type" .describe=${packetTypeNameDescription} .segments=${breakdownSegments(util.byType, airtimeKnown)} .palette=${typePalette} .format=${fmtShare}></mc-breakdown>
+          <mc-breakdown label="Route type" .describe=${packetTypeNameDescription} .segments=${breakdownSegments(util.byRoute, airtimeKnown)} .format=${fmtShare}></mc-breakdown>
           <mc-breakdown
             label="Direction"
             .segments=${breakdownSegments(util.byDirection, airtimeKnown, (n) => DIRECTION_LABEL[n] ?? n)}
