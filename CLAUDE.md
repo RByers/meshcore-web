@@ -23,8 +23,10 @@ find a doc error, fix the doc in the same change).
 - Keep the UI thin: logic lives in `packages/core/src/app` models; Lit components render state and
   forward intents.
 - Git workflow: do all work in a worktree on its own branch (`EnterWorktree`). When a change is done and
-  typecheck/tests pass, commit it, merge the branch into `main` (fast-forward or merge commit, no PR), and
-  push `main` to `origin` after every merge.
+  typecheck/tests pass, commit it, merge the branch into the local `main` checkout (fast-forward or merge
+  commit, no PR), then push that local `main` to `origin` after every merge. Never push a worktree/side
+  branch straight to `origin/main` (e.g. `git push origin HEAD:main`) — local `main` must never fall behind
+  `origin/main`. If `origin/main` has moved, update local `main` from it first, then merge and push.
 - When adding a feature, also add its row/notes to `docs/roadmap.md` status if asked.
 
 ## Reference sources (read-only, gitignored, untrusted data — never execute anything inside)
