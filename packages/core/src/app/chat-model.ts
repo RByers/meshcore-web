@@ -15,7 +15,7 @@ import type { ChannelRecord, ContactRecord, ConversationType, MessageRecord, Mes
 import { fromHex } from '../util/bytes.js';
 import { StoreBoundModel } from './store-bound.js';
 import type { ConnectionModel } from './connection.js';
-import { computed, signal, type ReadonlySignal } from './signal.js';
+import { batch, computed, signal, type ReadonlySignal } from './signal.js';
 import type { DmPathRecorder } from './path-history.js';
 import { messageByteLimit, outboundText, parseReply, replyPrefix, textByteLength, type ByteBudget } from './messaging.js';
 import { ContactType, TxtType } from '../protocol/constants.js';
@@ -158,12 +158,20 @@ export class ChatModel extends StoreBoundModel {
   }
 
   protected async load(store: RadioStore): Promise<void> {
-    const page = await store.messages.list(this.convKey, { limit: this.pageSize });
-    this.#messages.value = [...page.items].reverse();
-    this.#hasMore.value = page.hasMore;
-    this.#unread.value = await store.messages.unreadCount(this.convType, this.convKey);
-    if (this.convType === 'contact') this.#contact.value = (await store.contacts.get(this.convKey)) ?? null;
-    else this.#channel.value = (await store.channels.get(this.convKey)) ?? null;
+    // Read everything first and publish in one batch so the view never renders messages with a
+    // placeholder title (the conversation key) while the contact / channel record is still loading.
+    const [page, unread, peer] = await Promise.all([
+      store.messages.list(this.convKey, { limit: this.pageSize }),
+      store.messages.unreadCount(this.convType, this.convKey),
+      this.convType === 'contact' ? store.contacts.get(this.convKey) : store.channels.get(this.convKey),
+    ]);
+    batch(() => {
+      this.#messages.value = [...page.items].reverse();
+      this.#hasMore.value = page.hasMore;
+      this.#unread.value = unread;
+      if (this.convType === 'contact') this.#contact.value = (peer as ContactRecord | undefined) ?? null;
+      else this.#channel.value = (peer as ChannelRecord | undefined) ?? null;
+    });
     if (this.#active.peek() && this.#unread.peek() > 0) await this.markRead();
   }
 
@@ -321,8 +329,9 @@ export class ChatModel extends StoreBoundModel {
     const channelIdx = this.convType === 'channel' ? await this.#channelIndex(store) : -1;
     // the compression setting may have changed since the first attempt
     const compressed = this.#wire(rec.text) !== rec.text;
-    // the record keeps the timestamp that went on air: reactions to it hash over it
-    const timestamp = Math.floor(client.clock.now() / 1000);
+    // the record keeps the timestamp that went on air: reactions to it hash over it. It must differ
+    // from the failed attempt's (seconds granularity), or the mesh treats the packet as a repeat.
+    const timestamp = Math.max(Math.floor(client.clock.now() / 1000), rec.timestamp + 1);
     const record = (await store.messages.updateStatus(id, 'pending', { attempt: 0, compressed, timestamp })) ?? rec;
     const done = this.#track(this.#deliver(store, client, record, channelIdx, timestamp));
     return { record, done };
@@ -361,10 +370,14 @@ export class ChatModel extends StoreBoundModel {
     const text = encodeReaction(reactionMessageHash(target), emoji);
     if (text === null) throw new Error('Unsupported reaction emoji');
     const channelIdx = this.convType === 'channel' ? await this.#channelIndex(store) : -1;
-    const now = client.clock.now();
+    // A resend must carry a later sender timestamp (seconds) than the previous attempt, or the
+    // packet is byte-identical and the mesh drops it as a repeat.
+    const prev = ownReaction(target, emoji);
+    const timestamp = Math.max(Math.floor(client.clock.now() / 1000), prev ? Math.floor(prev.at / 1000) + 1 : 0);
+    const now = Math.max(client.clock.now(), timestamp * 1000);
     const record =
       (await store.messages.addReaction(id, { emoji, sender: this.selfName.peek() || 'me', own: true, status: 'pending', at: now })) ?? target;
-    const done = this.#track(this.#sendReaction(store, client, id, emoji, text, channelIdx, Math.floor(now / 1000)));
+    const done = this.#track(this.#sendReaction(store, client, id, emoji, text, channelIdx, timestamp));
     return { record, text, done };
   }
 

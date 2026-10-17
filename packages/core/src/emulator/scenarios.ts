@@ -13,7 +13,7 @@ import type { MeshIdentity } from './mesh-packets.js';
 import { lppTemperature, lppVoltage } from './remote-node.js';
 import type { CompanionEmulatorOptions, ContactSeed } from './types.js';
 import { VirtualMesh, meshIdentityFromSeed } from './virtual-mesh.js';
-import type { MeshNode, VirtualMeshOptions } from './virtual-mesh.js';
+import type { MeshNode, MeshNodeConfig, VirtualMeshOptions } from './virtual-mesh.js';
 
 const identities = new Map<string, MeshIdentity & { seed: Uint8Array }>();
 
@@ -64,9 +64,24 @@ export interface BasicScenario {
   nodes: { alice: MeshNode; bob: MeshNode; carol: MeshNode; repeater: MeshNode; room: MeshNode; sensor: MeshNode };
 }
 
+/** Delays every node in a scenario uses (per-node config still wins). */
+export interface ScenarioTiming {
+  /** Delay before a node's reply arrives (default 300 ms). */
+  responseDelayMs?: number;
+  /** Chat peers' ACK delay (default 300 ms); also the emulator's `defaultAckDelayMs`. */
+  ackDelayMs?: number;
+  /** Delay before a repeater re-sends a forwarded packet (default 50 ms). */
+  forwardDelayMs?: number;
+}
+
+/** Fast scenario timing for tests: a few ms per hop so real-time waits stay short but ordering is preserved. */
+export const FAST_TIMING: Required<ScenarioTiming> = { responseDelayMs: 5, ackDelayMs: 5, forwardDelayMs: 2 };
+
 export interface BasicScenarioOptions extends CompanionEmulatorOptions {
   /** Queue some message history (default true). */
   history?: boolean;
+  /** Node delays applied to every node (tests pass `FAST_TIMING`). */
+  timing?: ScenarioTiming;
   /** VirtualMesh options (the clock is always the emulator's). */
   meshOptions?: Omit<VirtualMeshOptions, 'clock'>;
 }
@@ -84,7 +99,8 @@ export interface BasicScenarioOptions extends CompanionEmulatorOptions {
  * Alice auto-replies "pong" to "ping". Alice, Bob and Carol are members of both channels.
  */
 export function basicScenario(options: BasicScenarioOptions = {}): BasicScenario {
-  const { history = true, meshOptions, ...emuOptions } = options;
+  const { history = true, meshOptions, timing, ...emuOptions } = options;
+  if (timing?.ackDelayMs !== undefined) emuOptions.defaultAckDelayMs ??= timing.ackDelayMs;
   const ids = {
     self: scenarioIdentity('self'),
     alice: scenarioIdentity('alice'),
@@ -112,8 +128,9 @@ export function basicScenario(options: BasicScenarioOptions = {}): BasicScenario
   const viaRepeater = keys.repeater.slice(0, 1);
 
   const mesh = new VirtualMesh({ ...meshOptions, clock });
+  const addNode = (c: MeshNodeConfig): MeshNode => mesh.addNode({ ...timing, ...c });
   const nodes = {
-    alice: mesh.addNode({
+    alice: addNode({
       id: 'alice',
       type: 'chat',
       name: 'Alice',
@@ -123,9 +140,9 @@ export function basicScenario(options: BasicScenarioOptions = {}): BasicScenario
       channels,
       autoReply: (text) => (text.toLowerCase().startsWith('ping') ? 'pong' : null),
     }),
-    bob: mesh.addNode({ id: 'bob', type: 'chat', name: 'Bob', privateKey: ids.bob.privateKey, channels }),
-    carol: mesh.addNode({ id: 'carol', type: 'chat', name: 'Carol', privateKey: ids.carol.privateKey, channels }),
-    repeater: mesh.addNode({
+    bob: addNode({ id: 'bob', type: 'chat', name: 'Bob', privateKey: ids.bob.privateKey, channels }),
+    carol: addNode({ id: 'carol', type: 'chat', name: 'Carol', privateKey: ids.carol.privateKey, channels }),
+    repeater: addNode({
       id: 'repeater',
       type: 'repeater',
       name: 'Hilltop Repeater',
@@ -141,8 +158,8 @@ export function basicScenario(options: BasicScenarioOptions = {}): BasicScenario
       acl: [{ prefix: keys.self.slice(0, 6), permissions: 3 }],
       ownerInfo: 'Emulated repeater',
     }),
-    room: mesh.addNode({ id: 'room', type: 'room', name: 'Town Square', privateKey: ids.room.privateKey, password: 'password', guestPassword: '' }),
-    sensor: mesh.addNode({
+    room: addNode({ id: 'room', type: 'room', name: 'Town Square', privateKey: ids.room.privateKey, password: 'password', guestPassword: '' }),
+    sensor: addNode({
       id: 'sensor',
       type: 'sensor',
       name: 'Weather Station',
