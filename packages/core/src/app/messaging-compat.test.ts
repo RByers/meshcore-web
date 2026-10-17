@@ -7,8 +7,8 @@ import { FAST_RETRY, connectedApp } from './testing.js';
 import { computeReactionHash, reactionMessageHash } from './reactions.js';
 
 async function connected(over: AppModelOptions = {}) {
-  const { app, scenario, keys, store } = await connectedApp({ app: over });
-  return { app, s: scenario, hex: keys, store };
+  const t = await connectedApp({ app: over });
+  return { t, app: t.app, s: t.scenario, hex: t.keys, store: t.store };
 }
 
 describe('SMAZ compression (MeshCore Open compatible)', () => {
@@ -146,13 +146,16 @@ describe('emoji reactions (MeshCore Open compatible)', () => {
   });
 
   it('DM: an unacknowledged reaction fails and can be retried', async () => {
-    const { app, hex, s, store } = await connected({ messaging: { retry: FAST_RETRY } });
+    const { t, app, hex, s, store } = await connected({ messaging: { retry: FAST_RETRY } });
     const chat = app.chat('contact', hex.alice);
     await chat.settled();
     await vi.waitFor(() => expect(chat.messages.value.length).toBeGreaterThan(0));
     const theirs = chat.messages.value.find((m) => m.direction === 'in')!;
     s.nodes.alice.config.ackPolicy = 'never';
-    expect(await (await chat.react(theirs.id, '😂')).done).toBe('failed');
+    const h = await chat.react(theirs.id, '😂');
+    await t.missAck(); // attempt 0
+    await t.missAck(); // attempt 1 (the last)
+    expect(await h.done).toBe('failed');
     await vi.waitFor(() => expect(chat.reactions(chat.messages.value.find((m) => m.id === theirs.id)!)[0]?.state).toBe('failed'));
     s.nodes.alice.config.ackPolicy = 'auto';
     expect(await (await chat.retryReaction(theirs.id, '😂')).done).toBe('delivered');

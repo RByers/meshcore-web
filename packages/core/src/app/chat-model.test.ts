@@ -3,13 +3,13 @@ import { toHex } from '../util/bytes.js';
 import { PayloadType } from '../packet/constants.js';
 import { channelKeyForPsk } from '../store/channels.js';
 import type { MessageRecord, MessageStatus } from '../store/schema.js';
-import { publicChannelSecret } from '../emulator/scenarios.js';
+import { FAST_TIMING, publicChannelSecret } from '../emulator/scenarios.js';
 import type { AppModelOptions } from './app-model.js';
 import { FAST_RETRY, connectedApp } from './testing.js';
 
 async function connected(over: AppModelOptions = {}) {
-  const { app, scenario, keys, store } = await connectedApp({ app: over });
-  return { app, s: scenario, hex: keys, store };
+  const t = await connectedApp({ app: over });
+  return { t, app: t.app, s: t.scenario, hex: t.keys, store: t.store };
 }
 
 describe('ChatModel: direct messages', () => {
@@ -27,7 +27,7 @@ describe('ChatModel: direct messages', () => {
     const done = await h.done;
     expect(done.status).toBe('delivered');
     expect(done.ackCode).toBeGreaterThan(0);
-    expect(done.roundTripMs).toBeGreaterThanOrEqual(0);
+    expect(done.roundTripMs).toBeGreaterThanOrEqual(FAST_TIMING.ackDelayMs); // the shared clock times the emulated ACK delay
     expect(done.deliveredAt).toBeGreaterThan(0);
     expect(statuses[0]).toBe('pending');
     expect(statuses).toContain('sent');
@@ -40,11 +40,14 @@ describe('ChatModel: direct messages', () => {
   });
 
   it('marks a message failed when the peer never ACKs, and retry delivers it', async () => {
-    const { app, hex, s } = await connected({ messaging: { retry: FAST_RETRY } });
+    const { t, app, hex, s } = await connected({ messaging: { retry: FAST_RETRY } });
     s.nodes.bob.config.ackPolicy = 'never';
     const chat = app.chat('contact', hex.bob);
     await chat.settled();
-    const failed = await (await chat.send('anyone?')).done;
+    const h = await chat.send('anyone?');
+    await t.missAck(); // attempt 0
+    await t.missAck(); // attempt 1 (the last)
+    const failed = await h.done;
     expect(failed.status).toBe('failed');
     expect(failed.attempt).toBe(1);
     expect(s.nodes.bob.inbox.filter((x) => x.text === 'anyone?')).toHaveLength(2);

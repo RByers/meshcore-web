@@ -41,11 +41,14 @@ describe('emoji reactions', () => {
     expect(t.queryAll('[data-field="quick-emojis"] [data-emoji]').map((b) => b.dataset['emoji'])).toEqual(['👍', '❤️', '😂', '🎉', '👏', '🔥']);
     await t.click('[data-tab="hearts"]');
     await t.until(() => t.query('[data-field="emoji-grid"] [data-emoji="💜"]'), 3000, 'hearts tab');
-    s.nodes.alice.config.ackDelayMs = 300; // keep the reaction pending long enough to observe the chip
+    s.nodes.alice.config.ackDelayMs = 60_000; // the reaction stays pending until the test elapses the ACK delay
     await t.click('[data-field="emoji-grid"] [data-emoji="💜"]');
     expect(picker(t)!.open).toBe(false);
     await t.until(() => t.query('.msg[data-dir="in"] [data-field="reaction"][data-emoji="💜"][data-state="pending"]'), 3000, 'pending chip');
     expect(getComputedStyle(t.query('[data-field="reaction"][data-state="pending"]')!).opacity).toBe('0.5');
+    // Alice has the reaction (and so armed her ACK timer): elapse the ACK delay
+    await t.until(() => s.nodes.alice.inbox.at(-1)?.text.startsWith('r:'), 3000, 'reaction received');
+    await t.elapse(60_000);
     await t.until(() => t.query('.msg[data-dir="in"] [data-field="reaction"][data-emoji="💜"][data-state="done"]'), 8000, 'delivered chip');
     const m = t.app.chat('contact', alice).messages.value.find((x) => x.direction === 'in')!;
     expect(s.nodes.alice.inbox.at(-1)?.text).toBe(`r:${computeReactionHash(m.timestamp, null, m.text)}:6c`); // 💜 = 6 + 64 + 33 + 5 = 0x6c
@@ -85,7 +88,7 @@ describe('emoji reactions', () => {
     expect(t.query('[data-field="reaction"][data-emoji="🔥"]')!.title).toBe('🔥 Bob, Carol');
 
     // our reaction fails (stored as failed), the chip becomes a retry button
-    await t.app.connection.store.value!.messages.addReaction(dave.id, { emoji: '🎉', sender: 'Emulator', own: true, status: 'failed', at: Date.now() });
+    await t.app.connection.store.value!.messages.addReaction(dave.id, { emoji: '🎉', sender: 'Emulator', own: true, status: 'failed', at: t.app.clock.now() });
     await t.until(() => t.query('[data-action="retry-reaction"][data-emoji="🎉"]'), 3000, 'retry chip');
     await t.click('[data-action="retry-reaction"][data-emoji="🎉"]');
     await t.until(() => t.query('[data-field="reaction"][data-emoji="🎉"][data-state="done"]'), 5000, 'resent');

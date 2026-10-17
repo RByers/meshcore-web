@@ -4,7 +4,10 @@
  * (basicScenario) as the device, plus the in-page Emulator kind. Uses the browser's real
  * IndexedDB behind a per-harness name prefix, so test files can run in parallel iframes;
  * `cleanup()` disposes the model and deletes this harness's databases. Scenarios default to
- * `FAST_TIMING` (ms-scale node delays): tests wait on state, never on wall-clock time.
+ * `FAST_TIMING` (ms-scale node delays): tests wait on state, never on wall-clock time. One
+ * `SkippableClock` (`h.clock`) drives the app and all three scenarios, so a test reaches a timeout
+ * path (ACK timeout, remote-admin timeout, cooldown) by observing the armed state and then calling
+ * `h.elapse(ms)` instead of waiting.
  *
  *   const h = createHarness();
  *   const el = await h.mount();             // <mc-app .app=${h.app}> at '#/'
@@ -18,6 +21,7 @@
 import { AppModel, createEmulatorTransportFactory, type AppModelOptions } from '@meshcore-web/core/app';
 import { FAST_TIMING, basicScenario, type BasicScenario, type BasicScenarioOptions } from '@meshcore-web/core/emulator';
 import { DB_PREFIX } from '@meshcore-web/core/store';
+import { SkippableClock } from '@meshcore-web/core/util/clock';
 import { WebBluetoothTransport, WebSerialTransport } from '@meshcore-web/core/transport';
 import type { McApp } from '../mc-app.js';
 import { createMockBluetooth, type MockBluetoothHandle } from './mock-bluetooth.js';
@@ -31,10 +35,20 @@ export interface HarnessOptions {
   ble?: boolean;
   /** Extra AppModel options (override the defaults below). */
   app?: AppModelOptions;
+  /** The clock to use (default: a fresh SkippableClock); pass one to derive scenario options from it. */
+  clock?: SkippableClock;
 }
 
 export interface Harness {
   app: AppModel;
+  /** The one clock behind `app` (unless `opts.app.clock` overrides it) and every scenario. */
+  clock: SkippableClock;
+  /**
+   * Jumps the clock `ms` forward, synchronously firing every timer that falls due (timers must
+   * already be armed: wait for the state that proves it first), then lets Lit and one macrotask
+   * settle.
+   */
+  elapse(ms: number): Promise<void>;
   /** The scoped IndexedDB factory `app` uses; pass it to open a second handle on the same databases. */
   indexedDB: IDBFactory;
   /** Mocked navigator.serial with a basicScenario emulator behind it. */
@@ -126,7 +140,8 @@ function deepText(node: Node): string {
 }
 
 export function createHarness(opts: HarnessOptions = {}): Harness {
-  const scenarioOptions: BasicScenarioOptions = { timing: FAST_TIMING, ...opts.scenario };
+  const clock = opts.clock ?? new SkippableClock();
+  const scenarioOptions: BasicScenarioOptions = { timing: FAST_TIMING, ...opts.scenario, clock };
   const dbPrefix = `test-${RUN_ID}-${harnessSeq++}/`;
   const idb = scopedIndexedDB(dbPrefix);
   const serialScenario = basicScenario(scenarioOptions);
@@ -160,12 +175,20 @@ export function createHarness(opts: HarnessOptions = {}): Harness {
     createEmulatorTransport: emulatorFactory,
     reconnectableKinds: ['emulator', 'serial'],
     indexedDB: idb,
+    clock,
     ...opts.app,
   });
   const app = makeApp();
 
   const h: Harness = {
     app,
+    clock,
+    async elapse(ms) {
+      clock.skip(ms);
+      await h.el?.updateComplete;
+      await new Promise((r) => setTimeout(r, 0));
+      await h.el?.updateComplete;
+    },
     indexedDB: idb,
     serial,
     serialScenario,
@@ -245,6 +268,7 @@ export function createHarness(opts: HarnessOptions = {}): Harness {
       h.el?.remove();
       h.el = undefined;
       await h.app.dispose();
+      clock.clearAll();
       await deleteAppDatabases(dbPrefix);
       history.replaceState(null, '', '#/');
     },

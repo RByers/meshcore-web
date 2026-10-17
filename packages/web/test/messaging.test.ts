@@ -13,9 +13,9 @@ afterEach(async () => {
   h = undefined;
 });
 
-/** Short enough to fail quickly, long enough for an ACK over the virtual mesh under load. */
-// ACK timeout well above FAST_TIMING's ms-scale delays but short enough that the retry test stays quick
-const FAST_RETRY = { maxAttempts: 2, ackTimeoutMs: 300, retryDelayMs: () => 0, lateAckGraceMs: 0 };
+/** A realistic ACK timeout; the retry test elapses it on the harness clock instead of waiting. */
+const ACK_TIMEOUT_MS = 3000;
+const TWO_TRIES = { maxAttempts: 2, ackTimeoutMs: ACK_TIMEOUT_MS, retryDelayMs: () => 0, lateAckGraceMs: 0 };
 
 /** Mounts, connects via the Emulator and waits for the initial sync to be persisted. */
 async function connected(opts: HarnessOptions = {}, prepare?: (t: Harness) => void): Promise<Harness> {
@@ -192,19 +192,36 @@ describe('direct chat', () => {
   });
 
   it('shows a failed message with retry when the peer never ACKs, and retry delivers', async () => {
-    const t = await connected({ app: { messaging: { retry: FAST_RETRY } } }, (x) => {
+    const t = await connected({ app: { messaging: { retry: TWO_TRIES } } }, (x) => {
       x.emulatorScenario().nodes.bob.config.ackPolicy = 'never';
     });
     const k = keys(t);
     await t.go(`/chat/${k.bob}`, '[data-field="composer"]');
+    const statuses: MessageStatus[] = [];
+    t.app.connection.store.value!.events.on('message', (e) => {
+      if (e.type !== 'delete' && e.record.direction === 'out') statuses.push(e.record.status);
+    });
     await t.fill('[data-field="composer"]', 'anyone there?');
     await t.click('[data-action="send"]');
-    await t.until(() => t.query('.msg[data-dir="out"][data-status="failed"]'), 8000, 'failed');
-    expect(t.query('.msg[data-dir="out"] [data-field="attempt"]')!.textContent).toBe('attempt 2');
+    // 'sent' is stored after the client armed the attempt's ACK timer; elapse it for each attempt
+    const out = '.msg[data-dir="out"]';
+    await t.until(() => t.query(`${out}[data-status="sent"]`) && !t.query(`${out} [data-field="attempt"]`), 3000, 'attempt 1 sent');
+    await t.elapse(ACK_TIMEOUT_MS);
+    await t.until(() => t.query(`${out}[data-status="sent"] [data-field="attempt"]`)?.textContent === 'attempt 2', 3000, 'attempt 2 sent');
+    expect(t.query(`${out}[data-status="failed"]`)).toBeNull();
+    await t.elapse(ACK_TIMEOUT_MS);
+    await t.until(() => t.query(`${out}[data-status="failed"]`), 3000, 'failed');
+    expect(t.query(`${out} [data-field="attempt"]`)!.textContent).toBe('attempt 2');
+    // (consecutive repeats collapsed: the stored record is re-written with each attempt's details)
+    expect(statuses.filter((x, i) => x !== statuses[i - 1])).toEqual(['pending', 'sent', 'pending', 'sent', 'failed']);
     t.emulatorScenario().nodes.bob.config.ackPolicy = 'auto';
-    await t.click('.msg[data-dir="out"] [data-action="retry"]');
-    await t.until(() => t.query('.msg[data-dir="out"][data-status="delivered"]'), 8000, 'delivered after retry');
+    statuses.length = 0;
+    await t.click(`${out} [data-action="retry"]`);
+    await t.until(() => t.query(`${out}[data-status="delivered"]`), 3000, 'delivered after retry');
     expect(t.query('[data-action="retry"]')).toBeNull();
+    expect(statuses[0]).toBe('pending');
+    expect(statuses).toContain('sent');
+    expect(statuses.at(-1)).toBe('delivered');
   });
 });
 

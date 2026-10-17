@@ -6,12 +6,14 @@ import type { PathHistoryEntry } from '../store/schema.js';
 import { toHex } from '../util/bytes.js';
 import type { AppModelOptions } from './app-model.js';
 import { FAST_RETRY, connectedApp } from './testing.js';
+import { FAST_TIMING } from '../emulator/scenarios.js';
 import { MAX_PATH_HISTORY, encodeHops, pathCandidates, pathId, resolvePathHops, updateHistory, type PathCandidate } from './path-history.js';
 
 async function connected(over: AppModelOptions = {}) {
-  const { app, scenario, keys, store } = await connectedApp({ app: over });
+  const t = await connectedApp({ app: over });
+  const { app, scenario, keys, store } = t;
   await vi.waitFor(() => expect(app.contacts.contacts.value).toHaveLength(6));
-  return { app, s: scenario, bob: keys.bob, repeater: keys.repeater, store };
+  return { t, app, s: scenario, bob: keys.bob, repeater: keys.repeater, store };
 }
 
 const cand = (name: string, key: number[]): PathCandidate => ({
@@ -97,7 +99,7 @@ describe('ContactPathsModel', () => {
     await vi.waitFor(() => expect(app.contactPaths.history(bob)[0]).toMatchObject({ id: '1:' + toHex(hop), current: true }));
     const e = app.contactPaths.history(bob)[0]!.entry;
     expect(e).toMatchObject({ attempts: 1, successes: 1, failures: 0, lastResult: 'success' });
-    expect(e.roundTripMs).toBeGreaterThanOrEqual(0);
+    expect(e.roundTripMs).toBeGreaterThanOrEqual(FAST_TIMING.ackDelayMs); // the shared clock times the emulated ACK delay
 
     await app.contactPaths.setPath(bob, 'flood');
     expect((await store.contacts.get(bob))!.outPathLen).toBe(PATH_LEN_UNKNOWN);
@@ -105,14 +107,19 @@ describe('ContactPathsModel', () => {
   });
 
   it('records failures on timeout (per path used, including the flood fallback) and success on retry', async () => {
-    const { app, s, bob } = await connected({ messaging: { retry: FAST_RETRY } });
+    const { t, app, s, bob } = await connected({ messaging: { retry: FAST_RETRY } });
     const hop = s.keys.repeater.slice(0, 1);
     await app.contactPaths.setPath(bob, [hop]);
     s.nodes.bob.config.ackPolicy = 'never';
     const chat = app.chat('contact', bob);
     await chat.settled();
-    const failed = await (await chat.send('anyone?')).done;
+    const h = await chat.send('anyone?');
+    await t.missAck(); // attempt 0, direct via the repeater
+    await t.missAck(); // attempt 1, the flood fallback
+    const failed = await h.done;
     expect(failed.status).toBe('failed');
+    const routes = s.emulator.airLog.filter((e) => e.type === 'txtMsg').map((e) => parsePacket((e as unknown as { raw: Uint8Array }).raw).routeType);
+    expect(routes.slice(-2)).toEqual([RouteType.DIRECT, RouteType.FLOOD]);
     await app.contactPaths.idle();
     await vi.waitFor(() => expect(app.contactPaths.history(bob).find((h) => h.id === 'flood')?.entry.failures).toBe(1));
     const byId = () => new Map(app.contactPaths.history(bob).map((h) => [h.id, h.entry]));

@@ -12,8 +12,11 @@ afterEach(async () => {
   h = undefined;
 });
 
+/** A realistic remote-request timeout; the wrong-password test elapses it on the harness clock. */
+const REMOTE_TIMEOUT_MS = 5000;
+
 async function connected(): Promise<Harness> {
-  const t = (h = createHarness({ app: { remoteAdmin: { timeoutMs: 400 } } }));
+  const t = (h = createHarness({ app: { remoteAdmin: { timeoutMs: REMOTE_TIMEOUT_MS } } }));
   await t.mount();
   await t.click('[data-connect="emulator"]');
   await t.until(() => t.app.connection.phase.value === 'connected', 5000, 'connected');
@@ -51,8 +54,17 @@ describe('node admin page', () => {
   it('shows an error for a wrong password', async () => {
     const t = await connected();
     await t.go(`/node/${key(t, 'repeater')}`, '[data-field="password"]');
+    // the client arms the timeout when the device answers SEND_LOGIN with SENT
+    let sent = false;
+    t.app.connection.client.value!.events.on('frame', (f) => {
+      if (f.direction === 'in' && f.frame?.kind === 'sent') sent = true;
+    });
     await login(t, 'nope');
-    await t.until(() => t.query('[data-field="login-state"].error'), 10000, 'login error');
+    await t.until(() => sent && t.query<HTMLButtonElement>('[data-action="login"]')?.disabled, 3000, 'login in flight');
+    expect(t.query('[data-action="login"]')!.textContent).toContain('Logging in');
+    // a wrong password gets no reply: the request times out
+    await t.elapse(REMOTE_TIMEOUT_MS);
+    await t.until(() => t.query('[data-field="login-state"].error'), 3000, 'login error');
     expect(t.query('[data-field="login-state"]')!.textContent).toMatch(/wrong password/i);
   });
 

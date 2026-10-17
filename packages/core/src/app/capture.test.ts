@@ -3,28 +3,26 @@
  * DMs from senders that are not contacts, and the direct-signal (zero-hop SNR) bookkeeping.
  */
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
+import { describe, expect, it, vi } from 'vitest';
 import { toHex } from '../util/bytes.js';
 import { channelKeyForPsk } from '../store/channels.js';
 import { PayloadType } from '../packet/constants.js';
 import { CMD, encodePathLen } from '../protocol/constants.js';
 import { hashtagChannelSecret, scenarioKey } from '../emulator/scenarios.js';
 import type { RadioStore } from '../store/radio-store.js';
-import { AppModel, createEmulatorTransportFactory } from './app-model.js';
+import type { AppModel } from './app-model.js';
+import { testApp } from './testing.js';
 import { unknownChannelKey } from './capture.js';
-import { memoryPreferences, type TransportFactory } from './connection.js';
-
-const apps: AppModel[] = [];
+import type { TransportFactory } from './connection.js';
 
 /**
  * Connects the app to the basic scenario. With `failGetChannel`, a GET_CHANNEL for that slot is
  * rewritten on the wire to an out-of-range index, so the device answers ERR_NOT_FOUND.
  */
 async function connected(opts: { failGetChannel?: number } = {}) {
-  const emulator = createEmulatorTransportFactory({ defaultAckDelayMs: 0 });
+  let emulator: TransportFactory | undefined;
   const factory: TransportFactory = async (req) => {
-    const t = await emulator(req);
+    const t = await emulator!(req);
     const fail = opts.failGetChannel;
     if (fail === undefined) return t;
     const send = t.send.bind(t);
@@ -32,17 +30,14 @@ async function connected(opts: { failGetChannel?: number } = {}) {
       send: (f: Uint8Array) => send(f[0] === CMD.GET_CHANNEL && f[1] === fail ? Uint8Array.of(CMD.GET_CHANNEL, 200) : f),
     });
   };
-  const app = new AppModel({ indexedDB: new IDBFactory(), keyRange: IDBKeyRange, createEmulatorTransport: factory, preferences: memoryPreferences() });
-  apps.push(app);
+  const t = testApp({ scenario: { defaultAckDelayMs: 0 }, app: { createEmulatorTransport: factory } });
+  emulator = t.emulator;
+  const { app } = t;
   expect(await app.connection.connect('emulator')).toBe(true);
   await app.connection.capture!.idle();
-  const s = emulator.scenario();
-  return { app, s, emu: s.emulator, store: app.connection.store.value! };
+  const s = t.emulator.scenario();
+  return { app, clock: t.clock, s, emu: s.emulator, store: app.connection.store.value! };
 }
-
-afterEach(async () => {
-  for (const a of apps.splice(0)) await a.dispose();
-});
 
 /** Waits (via the capture queue) until `convKey` holds a message with `text`. */
 async function messageArrives(app: AppModel, store: RadioStore, convKey: string, text: string) {
@@ -130,10 +125,10 @@ describe('direct signal (zero-hop SNR, issue #11)', () => {
   });
 
   it('never moves backwards in time: a newer stored reading survives a zero-hop advert', async () => {
-    const { app, s, store } = await connected();
+    const { app, clock, s, store } = await connected();
     const bob = toHex(s.keys.bob);
     const alice = toHex(s.keys.alice);
-    const future = Date.now() + 3_600_000;
+    const future = clock.now() + 3_600_000;
     await store.contacts.updateLocal(bob, { directSnr: -3, directSnrAt: future });
     const adverts = () => store.packets.count({ payloadType: PayloadType.ADVERT });
     const before = await adverts();

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { regionKey } from '../packet/packet.js';
 import { toHex } from '../util/bytes.js';
-import { systemClock, type Clock } from '../util/clock.js';
+import type { Clock } from '../util/clock.js';
 import type { AppModelOptions } from './app-model.js';
 import { settle } from '../client/testing.js';
 import { connectedApp } from './testing.js';
@@ -25,12 +25,13 @@ import { PREF_APPROXIMATE_POSITIONS, PREF_PACKET_RETENTION_DAYS, PREF_PATH_NAMES
 const h = (s: string): string => s.replace(/\s+/g, '');
 
 async function connected(scenario: BasicScenarioOptions = {}, over: AppModelOptions = {}) {
-  const { app, client, prefs, scenario: sc } = await connectedApp({ scenario, app: over });
+  const t = await connectedApp({ scenario, app: over });
+  const { app, client, prefs, scenario: sc } = t;
   const out: string[] = [];
   client.events.on('frame', (f) => {
     if (f.direction === 'out') out.push(toHex(f.bytes));
   });
-  return { app, emu: sc.emulator, client, out, prefs, model: app.deviceSettings, scenario: sc };
+  return { t, app, emu: sc.emulator, client, out, prefs, model: app.deviceSettings, scenario: sc };
 }
 
 async function rejectsValidation(p: Promise<unknown>, field: string): Promise<void> {
@@ -200,14 +201,16 @@ describe('DeviceSettingsModel against the emulator', () => {
   });
 
   it('syncTime sets a lagging clock and skips when within the threshold', async () => {
-    const now = Math.floor(Date.now() / 1000);
-    const { model, emu, out } = await connected({ rtcEpochSecs: now - 3600 }, { clientOptions: { timeSync: 'never' } });
+    const { t, model, emu, out } = await connected({}, { clientOptions: { timeSync: 'never' } });
+    const nowSecs = (): number => Math.floor(t.clock.now() / 1000);
+    emu.setRtc(nowSecs() - 3600);
     const r = await model.syncTime();
     expect(r.status).toBe('set');
-    expect(r.driftSecs).toBeLessThan(-3500);
+    expect(r.driftSecs).toBe(-3600);
     expect(out.some((f) => f.startsWith('06'))).toBe(true); // SET_DEVICE_TIME
-    expect(Math.abs(emu.rtcSecs - Math.floor(Date.now() / 1000))).toBeLessThanOrEqual(2);
-    expect(Math.abs(model.deviceTime.value!.driftSecs)).toBeLessThanOrEqual(2);
+    // the emulator and the app share one clock, so a synced RTC reads exactly host time
+    expect(emu.rtcSecs).toBe(nowSecs());
+    expect(model.deviceTime.value!.driftSecs).toBe(0);
     out.length = 0;
     const again = await model.syncTime(5);
     expect(again.status).toBe('inSync');
@@ -216,24 +219,28 @@ describe('DeviceSettingsModel against the emulator', () => {
   });
 
   it('syncTime reports a device clock ahead of the host (it cannot go backwards)', async () => {
-    const now = Math.floor(Date.now() / 1000);
-    const { model, out } = await connected({ rtcEpochSecs: now + 3600 }, { clientOptions: { timeSync: 'never' } });
+    const { t, model, emu, out } = await connected({}, { clientOptions: { timeSync: 'never' } });
+    emu.setRtc(Math.floor(t.clock.now() / 1000) + 3600);
     const r = await model.syncTime();
-    expect(r.status).toBe('deviceAhead');
+    expect(r).toEqual({ status: 'deviceAhead', driftSecs: 3600 });
     expect(out.some((f) => f.startsWith('06'))).toBe(false);
   });
 
   it('sendAdvert transmits flood / zero-hop adverts with a cooldown', async () => {
-    let now = 1_000_000;
-    const { app, emu, out } = await connected();
-    const model = new DeviceSettingsModel(app.connection, { clock: { ...systemClock, now: () => now }, advertCooldownMs: 5000 });
+    const { t, app, emu, out } = await connected();
+    const model = new DeviceSettingsModel(app.connection, { advertCooldownMs: 5000 });
     try {
       await model.sendAdvert('flood');
       expect(out).toContain('0701');
       await vi.waitFor(() => expect(emu.airLog.some((e) => e.type === 'advert' && e.flood)).toBe(true));
       await rejectsValidation(model.sendAdvert('zeroHop'), 'advert');
-      expect(model.advertCooldownRemaining()).toBe(5000);
-      now += 5000;
+      const until = model.advertCooldownUntil.value;
+      expect(until).toBe(model.lastAdvert.value!.at + 5000);
+      expect(model.advertCooldownRemaining(model.lastAdvert.value!.at)).toBe(5000);
+      await t.elapse(until - t.clock.now());
+      // the cooldown timer re-notifies so the UI re-enables its buttons
+      expect(model.advertCooldownUntil.value).toBe(0);
+      expect(model.advertCooldownRemaining()).toBe(0);
       await model.sendAdvert('zeroHop');
       expect(out.filter((f) => f.startsWith('07'))).toEqual(['0701', '0700']);
       await vi.waitFor(() => expect(emu.airLog.some((e) => e.type === 'advert' && !e.flood)).toBe(true));
@@ -244,10 +251,11 @@ describe('DeviceSettingsModel against the emulator', () => {
   });
 
   it('refreshStats reads core / radio / packets; pollStats refreshes periodically until stopped', async () => {
-    const { app, out } = await connected();
+    const { t, app, out } = await connected();
+    // hand-run timers: the race below fires a tick after stop(), which a real clock cannot
     const timers: Array<{ fn: () => void; ms: number }> = [];
     const fake: Clock = {
-      now: () => Date.now(),
+      now: () => t.clock.now(),
       setTimeout: (fn, ms) => timers.push({ fn, ms }) - 1,
       clearTimeout: () => undefined,
     };
@@ -367,9 +375,10 @@ describe('AppSettingsModel', () => {
     expect(prefs.getItem(PREF_APPROXIMATE_POSITIONS)).toBe('true');
 
     const store = app.connection.store.value!;
-    const old = Date.now() - 40 * 86_400_000;
+    const now = app.clock.now();
+    const old = now - 40 * 86_400_000;
     await store.packets.append({ ts: old, direction: 'rx', bytes: Uint8Array.of(0x11, 0x00, 1, 2, 3, 4) });
-    await store.packets.append({ ts: Date.now(), direction: 'rx', bytes: Uint8Array.of(0x11, 0x00, 1, 2, 3, 4) });
+    await store.packets.append({ ts: now, direction: 'rx', bytes: Uint8Array.of(0x11, 0x00, 1, 2, 3, 4) });
     const before = (await store.packets.query({ limit: 1000 })).items.length;
     expect(await s.setPacketRetentionDays(30)).toBeGreaterThanOrEqual(1);
     expect((await store.packets.query({ limit: 1000 })).items.length).toBe(before - 1);

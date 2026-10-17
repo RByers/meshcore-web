@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { toHex } from '@meshcore-web/core/util/bytes';
+import { SkippableClock } from '@meshcore-web/core/util/clock';
 import '../src/mc-app.js';
 import { createHarness, type Harness, type HarnessOptions } from '../src/testing/harness.js';
 
@@ -93,7 +94,7 @@ describe('settings page', () => {
     expect(t.emulatorScenario().emulator.prefs.radio).toEqual(before);
   });
 
-  it('send advert puts an advert on the air and starts a cooldown', async () => {
+  it('send advert puts an advert on the air and starts a 10 s cooldown', async () => {
     const t = await openSettings();
     const emu = t.emulatorScenario().emulator;
     const before = emu.airLog.filter((e) => e.type === 'advert').length;
@@ -101,15 +102,21 @@ describe('settings page', () => {
     await t.until(() => emu.airLog.filter((e) => e.type === 'advert' && e.flood).length > 0 && emu.airLog.filter((e) => e.type === 'advert').length > before, 3000, 'advert');
     await t.until(() => t.query('[data-field="advert-cooldown"]'), 2000, 'cooldown');
     expect(t.query<HTMLButtonElement>('[data-action="advert-zero-hop"]')!.disabled).toBe(true);
+    await t.elapse(9_000);
+    expect(t.query('[data-field="advert-cooldown"]')).not.toBeNull();
+    await t.elapse(1_000);
+    await t.until(() => !t.query('[data-field="advert-cooldown"]'), 2000, 'cooldown over');
+    expect(t.query<HTMLButtonElement>('[data-action="advert-zero-hop"]')!.disabled).toBe(false);
   });
 
   it('time sync button sets a lagging device clock', async () => {
-    const now = Math.floor(Date.now() / 1000);
-    const t = await openSettings({ scenario: { rtcEpochSecs: now - 3600 }, app: { clientOptions: { timeSync: 'never' } } });
+    const clock = new SkippableClock();
+    const now = Math.floor(clock.now() / 1000);
+    const t = await openSettings({ clock, scenario: { rtcEpochSecs: now - 3600 }, app: { clientOptions: { timeSync: 'never' } } });
     await t.until(() => t.query('[data-field="time-drift"]')!.textContent!.includes('behind'), 3000, 'drift shown');
     await t.click('[data-action="sync-time"]');
     const emu = t.emulatorScenario().emulator;
-    await t.until(() => Math.abs(emu.rtcSecs - Math.floor(Date.now() / 1000)) <= 2, 3000, 'clock set');
+    await t.until(() => Math.abs(emu.rtcSecs - Math.floor(t.app.clock.now() / 1000)) <= 2, 3000, 'clock set');
     await t.until(() => t.text().includes('Device clock set'), 2000, 'toast');
   });
 

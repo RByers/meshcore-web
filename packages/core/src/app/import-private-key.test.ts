@@ -1,22 +1,13 @@
 /** DeviceSettingsModel.importPrivateKey success path (the reject path is in device-settings-model.test.ts). */
 
-import { afterEach, describe, expect, it } from 'vitest';
-import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
+import { describe, expect, it } from 'vitest';
 import { bytesEqual, toHex } from '../util/bytes.js';
 import { scenarioIdentity } from '../emulator/scenarios.js';
-import { AppModel, createEmulatorTransportFactory } from './app-model.js';
-import { memoryPreferences } from './connection.js';
-
-const apps: AppModel[] = [];
-afterEach(async () => {
-  for (const a of apps.splice(0)) await a.dispose();
-});
+import { testApp } from './testing.js';
 
 describe('DeviceSettingsModel.importPrivateKey', () => {
   it('replaces the identity on the radio, then disconnects cleanly; reconnecting opens the new identity', async () => {
-    const emulator = createEmulatorTransportFactory();
-    const app = new AppModel({ indexedDB: new IDBFactory(), keyRange: IDBKeyRange, createEmulatorTransport: emulator, preferences: memoryPreferences() });
-    apps.push(app);
+    const { app, emulator } = testApp();
     expect(await app.connection.connect('emulator')).toBe(true);
     await app.connection.capture!.idle();
     const emu = emulator.scenario().emulator;

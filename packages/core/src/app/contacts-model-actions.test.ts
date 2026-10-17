@@ -1,33 +1,20 @@
 /** ContactsModel actions not covered by messaging-models.test.ts: favourites, share, refreshOne, remove keeping history. */
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
+import { describe, expect, it, vi } from 'vitest';
 import { bytesEqual, toHex } from '../util/bytes.js';
 import { parsePacket } from '../packet/packet.js';
 import { parseAdvertPayload } from '../packet/payloads.js';
 import { PayloadType, RouteType } from '../packet/constants.js';
 import type { AirPacket } from '../emulator/virtual-mesh.js';
-import { AppModel, createEmulatorTransportFactory } from './app-model.js';
-import { memoryPreferences } from './connection.js';
-
-const apps: AppModel[] = [];
+import { connectedApp } from './testing.js';
 
 async function connected() {
-  const emulator = createEmulatorTransportFactory({ defaultAckDelayMs: 0 });
-  const app = new AppModel({ indexedDB: new IDBFactory(), keyRange: IDBKeyRange, createEmulatorTransport: emulator, preferences: memoryPreferences() });
-  apps.push(app);
-  expect(await app.connection.connect('emulator')).toBe(true);
-  await app.connection.capture!.idle();
-  const s = emulator.scenario();
+  const { app, scenario: s } = await connectedApp({ scenario: { defaultAckDelayMs: 0 } });
   const m = app.contacts;
   await vi.waitFor(() => expect(m.views.value).toHaveLength(6));
   await m.settled();
   return { app, s, m, store: app.connection.store.value!, hex: { alice: toHex(s.keys.alice), bob: toHex(s.keys.bob), carol: toHex(s.keys.carol) } };
 }
-
-afterEach(async () => {
-  for (const a of apps.splice(0)) await a.dispose();
-});
 
 describe('ContactsModel actions', () => {
   it('setFavourite is local and survives refresh() and a device sync', async () => {

@@ -151,8 +151,12 @@ describe('PacketLogModel — packets', () => {
     expect(act.buckets.at(-1)!.count).toBe(fromAlice.length);
     expect(act.hashOnly).toBe(fromAlice.filter((r) => r.typeName === 'TXT_MSG').length);
 
-    await log.packets.setFilter({ from: Date.now() + 60_000 }, { replace: true });
+    // packets are stamped with the app clock, so "now" bounds them exactly
+    const now = app.clock.now();
+    await log.packets.setFilter({ from: now + 1 }, { replace: true });
     expect(log.packets.rows.value).toEqual([]);
+    await log.packets.setFilter({ to: now }, { replace: true });
+    expect(log.packets.matching.value).toBeGreaterThanOrEqual(all);
 
     await log.packets.clearFilter();
     expect(log.packets.rows.value.length).toBe(all);

@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { fromHex, toHex } from '../util/bytes.js';
 import { Deferred } from '../util/deferred.js';
+import { ManualClock } from '../util/clock.js';
 import { LoopbackTransport, createLoopbackPair } from './loopback.js';
 import type { FrameTransport, TransportState } from './transport.js';
 
@@ -44,21 +45,17 @@ describe('createLoopbackPair', () => {
   });
 
   it('honours latencyMs', async () => {
-    vi.useFakeTimers();
-    try {
-      const [a, b] = createLoopbackPair({ latencyMs: 50 });
-      await a.connect();
-      await b.connect();
-      const got = collect(b);
-      await a.send(fromHex('01'));
-      await a.send(fromHex('02'));
-      vi.advanceTimersByTime(49);
-      expect(got).toEqual([]);
-      vi.advanceTimersByTime(1);
-      expect(got).toEqual(['01', '02']);
-    } finally {
-      vi.useRealTimers();
-    }
+    const clock = new ManualClock();
+    const [a, b] = createLoopbackPair({ latencyMs: 50, clock });
+    await a.connect();
+    await b.connect();
+    const got = collect(b);
+    await a.send(fromHex('01'));
+    await a.send(fromHex('02'));
+    clock.advance(49);
+    expect(got).toEqual([]);
+    clock.advance(1);
+    expect(got).toEqual(['01', '02']);
   });
 
   it('rejects send when disconnected or the frame is empty / too large', async () => {

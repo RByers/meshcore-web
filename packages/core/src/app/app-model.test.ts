@@ -8,15 +8,17 @@ import { createEmulatorTransportFactory, type AppModelOptions } from './app-mode
 import { testApp } from './testing.js';
 import { PREF_LAST_KIND, memoryPreferences, type ConnectionPhase } from './connection.js';
 import { NotificationsModel } from './notifications.js';
+import { ManualClock } from '../util/clock.js';
 import { effect } from './signal.js';
 
 function makeApp(over: AppModelOptions = {}) {
-  const { app, emulator, prefs } = testApp({ app: over });
+  const t = testApp({ app: over });
+  const { app, emulator, prefs } = t;
   const phases: ConnectionPhase[] = [];
   effect(() => {
     phases.push(app.connection.phase.value);
   });
-  return { app, emulator, prefs, phases };
+  return { t, app, emulator, prefs, phases };
 }
 
 /** A transport that fails to connect. */
@@ -212,8 +214,7 @@ describe('ConnectionModel errors', () => {
   });
 
   it('fails the handshake when the device never answers', async () => {
-    const { app } = makeApp({
-      clientOptions: { requestTimeoutMs: 20 },
+    const { t, app } = makeApp({
       createSerialTransport: () => {
         const ev = new TypedEmitter<TransportEvents>();
         let state: FrameTransport['state'] = 'disconnected';
@@ -234,7 +235,12 @@ describe('ConnectionModel errors', () => {
         };
       },
     });
-    expect(await app.connection.connect('serial')).toBe(false);
+    const connecting = app.connection.connect('serial');
+    // the client's default 5 s request timeout (armed once the write lands): DEVICE_QUERY's is
+    // tolerated (very old firmware), APP_START's fails the handshake
+    await t.elapsePending(5000);
+    await t.elapsePending(5000);
+    expect(await connecting).toBe(false);
     expect(app.connection.phase.value).toBe('error');
     expect(app.connection.error.value?.name).toBe('RequestTimeoutError');
   });
@@ -249,28 +255,27 @@ describe('ConnectionModel errors', () => {
 
 describe('NotificationsModel', () => {
   it('auto-dismisses by kind, keeps errors, caps the list', () => {
-    vi.useFakeTimers();
-    try {
-      const n = new NotificationsModel(undefined, 3);
-      n.info('a');
-      n.error('b', new Error('why'));
-      n.warning('c');
-      expect(n.toasts.value.map((t) => t.message)).toEqual(['a', 'b', 'c']);
-      expect(n.toasts.value[1]).toMatchObject({ kind: 'error', detail: 'why', timeoutMs: 0 });
-      vi.advanceTimersByTime(5000);
-      expect(n.toasts.value.map((t) => t.message)).toEqual(['b', 'c']);
-      vi.advanceTimersByTime(3000);
-      expect(n.toasts.value.map((t) => t.message)).toEqual(['b']);
-      n.success('d');
-      n.info('e');
-      n.info('f');
-      expect(n.toasts.value.map((t) => t.message)).toEqual(['d', 'e', 'f']);
-      n.dismiss(n.toasts.value[0]!.id);
-      expect(n.toasts.value.map((t) => t.message)).toEqual(['e', 'f']);
-      n.clear();
-      expect(n.toasts.value).toEqual([]);
-    } finally {
-      vi.useRealTimers();
-    }
+    const clock = new ManualClock();
+    const n = new NotificationsModel(clock, 3);
+    n.info('a');
+    n.error('b', new Error('why'));
+    n.warning('c');
+    expect(n.toasts.value.map((t) => t.message)).toEqual(['a', 'b', 'c']);
+    expect(n.toasts.value[0]).toMatchObject({ kind: 'info', createdAt: clock.now() });
+    expect(n.toasts.value[1]).toMatchObject({ kind: 'error', detail: 'why', timeoutMs: 0 });
+    clock.advance(4999);
+    expect(n.toasts.value).toHaveLength(3);
+    clock.advance(1);
+    expect(n.toasts.value.map((t) => t.message)).toEqual(['b', 'c']);
+    clock.advance(3000);
+    expect(n.toasts.value.map((t) => t.message)).toEqual(['b']);
+    n.success('d');
+    n.info('e');
+    n.info('f');
+    expect(n.toasts.value.map((t) => t.message)).toEqual(['d', 'e', 'f']);
+    n.dismiss(n.toasts.value[0]!.id);
+    expect(n.toasts.value.map((t) => t.message)).toEqual(['e', 'f']);
+    n.clear();
+    expect(n.toasts.value).toEqual([]);
   });
 });

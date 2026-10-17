@@ -16,10 +16,10 @@ import {
   type RemoteAdminOptions,
 } from './remote-admin-model.js';
 
-/** Remote request timeouts for the emulator's fast timing (≥ 10× its per-hop delays). */
-async function connected(remoteAdmin: RemoteAdminOptions = { timeoutMs: 500 }) {
-  const { app, scenario, keys } = await connectedApp({ app: { remoteAdmin } });
-  return { app, scenario, k: keys, admin: app.remoteAdmin };
+/** Remote requests use the client's default timeout (est_timeout + grace); tests elapse it with `missResponse`. */
+async function connected(remoteAdmin: RemoteAdminOptions = {}) {
+  const t = await connectedApp({ app: { remoteAdmin } });
+  return { t, app: t.app, scenario: t.scenario, k: t.keys, admin: t.app.remoteAdmin };
 }
 
 const COMMON = {
@@ -89,7 +89,7 @@ describe('pure helpers', () => {
 
 describe('RemoteNodeModel against the emulator', () => {
   it('logs in as admin and guest to the repeater; wrong password times out', async () => {
-    const { admin, k } = await connected({ timeoutMs: 200 });
+    const { t, admin, k } = await connected();
     const rep = admin.node(k.repeater);
     expect(rep.contact.value?.name).toBe('Hilltop Repeater');
     expect(rep.kind.value).toBe('repeater');
@@ -97,7 +97,9 @@ describe('RemoteNodeModel against the emulator', () => {
     expect(s).toMatchObject({ state: 'admin', role: 'admin', aclPermissions: 3, firmwareVerLevel: 2 });
     expect(rep.isAdmin.value).toBe(true);
     expect((await rep.login('guest')).state).toBe('guest');
-    const bad = await rep.login('wrong');
+    const login = rep.login('wrong');
+    await t.missResponse();
+    const bad = await login;
     expect(bad).toMatchObject({ state: 'failed', timedOut: true });
     expect(rep.errors.value.login).toMatch(/timed out/);
     expect(rep.loggedIn.value).toBe(false);
@@ -221,10 +223,12 @@ describe('RemoteNodeModel against the emulator', () => {
   });
 
   it('surfaces errors and timeouts, and resets on disconnect', async () => {
-    const { app, admin, k } = await connected({ timeoutMs: 200 });
+    const { t, app, admin, k } = await connected();
     const sensor = admin.node(k.sensor);
     // sensors do not answer GET_STATUS
-    await expect(sensor.refreshStatus()).rejects.toThrow();
+    const status = expect(sensor.refreshStatus()).rejects.toThrow(/no response/);
+    await t.missResponse();
+    await status;
     expect(sensor.errors.value.status).toMatch(/timed out/);
     expect(sensor.busy.value.size).toBe(0);
     const rep = admin.node(k.repeater);
