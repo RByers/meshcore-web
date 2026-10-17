@@ -21,6 +21,8 @@ export interface PageDef {
   tag: string;
   /** Show in the navigation (default true; false for detail pages). */
   nav?: boolean;
+  /** Nav entry highlighted while this (non-nav) page is shown, e.g. '/map' for '/map/node/:key'. */
+  navParent?: string;
   /** Nav order (ascending; default 100). */
   order?: number;
   /** Redirect to '/' while not connected (default false). */

@@ -147,6 +147,12 @@ guard (shared styles and `index.html`), About section in Settings (version from
 `packages/web/src/build-info.ts`, MIT licence, MeshCore credits). Docs: `docs/user-guide.md`,
 rewritten `README.md`, `LICENSE`.
 
+**Show on map (issue #13).** `/map/node/:key` (same page, nav highlights Map via the route's
+`navParent`) calls `MapModel.focus(key)`, which selects the contact's marker and re-enables a
+kind / age filter that would hide it; the page centres on it at zoom ≥ 14. The chat header
+(contacts) and the node page header show a "Map" link when the contact has a location; the map's
+details card links back to the chat / node page.
+
 **Not done in Phase 12:** settings export/import (app preferences + per-radio local data as a
 file); a dedicated keyboard/accessibility audit beyond what earlier phases added; `REPO_URL`
 is a placeholder until the repository is published.

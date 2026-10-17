@@ -204,6 +204,21 @@ export class MapModel {
     this.#selected.value = key ? key.toLowerCase() : null;
   }
 
+  /**
+   * Selects a contact's marker so the map can centre on it (issue #13: "Show on map"). Turns its
+   * kind back on and clears the age filter if they would hide it. Returns the marker, or null
+   * when the contact has no location.
+   */
+  focus(key: string): MapMarker | null {
+    const k = key.toLowerCase();
+    const marker = this.allMarkers.peek().find((m) => m.key === k);
+    if (!marker) return null;
+    if (!this.#kinds.peek().has(marker.kind)) this.setKindVisible(marker.kind, true);
+    if (!this.markers.peek().some((m) => m.key === k)) this.setMaxAge('any');
+    this.#selected.value = k;
+    return marker;
+  }
+
   /** Sets the tile URL template; empty restores OpenStreetMap. Throws on an invalid template. */
   setTileUrl(template: string): void {
     const t = template.trim() ? validateTileUrl(template) : OSM_TILE_URL;

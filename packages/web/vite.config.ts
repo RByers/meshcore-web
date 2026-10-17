@@ -32,6 +32,10 @@ export default defineConfig({
   },
   test: {
     include: ['test/**/*.test.ts', 'src/**/*.test.ts'],
+    // Test files share the browser's IndexedDB (every harness radio has the same emulator key, and
+    // cleanup deletes all meshcore-web databases), so files running in parallel iframes corrupt
+    // each other's stores. Run them one at a time.
+    fileParallelism: false,
     browser: {
       enabled: true,
       provider: playwright(),

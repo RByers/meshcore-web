@@ -5,6 +5,7 @@
  */
 import { css, html, nothing, type PropertyValues } from 'lit';
 import {
+  hasLocation,
   parseReply,
   pathDisplay,
   receivedPathLabel,
@@ -16,6 +17,7 @@ import { formatDuration, formatRelative, formatSnr, formatTime } from '../../for
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
 import { avatar, listStyles } from './common.js';
+
 
 /** Distance from the bottom (px) still counted as "at the bottom". */
 const STICKY_PX = 48;
@@ -46,6 +48,16 @@ export class McChatPage extends AppElement {
         text-decoration: none;
         font-size: 1.2rem;
         padding: 4px 8px;
+      }
+      header .map-link {
+        display: inline-flex;
+        align-items: center;
+        min-height: 2.5rem;
+        padding: 0.5em 0.8em;
+        border: 1px solid var(--mc-border);
+        border-radius: 8px;
+        text-decoration: none;
+        white-space: nowrap;
       }
       header .who {
         flex: 1;
@@ -438,6 +450,13 @@ export class McChatPage extends AppElement {
     </li>`;
   }
 
+  /** "Show on map" for a contact with a location (issue #13). */
+  #mapLink(chat: ChatModel) {
+    const c = chat.contact.value;
+    if (!c || !hasLocation(c)) return nothing;
+    return html`<a class="map-link" data-action="show-on-map" href=${hrefFor(`/map/node/${c.key}`)} title="Show on map" aria-label="Show on map"><span aria-hidden="true">🗺 Map</span></a>`;
+  }
+
   #subtitle(chat: ChatModel) {
     if (this.convType === 'channel') {
       const ch = chat.channel.value;
@@ -476,7 +495,7 @@ export class McChatPage extends AppElement {
           ? html`<button data-action="mute" aria-pressed=${ch?.muted ? 'true' : 'false'} @click=${() => void this.#headerAction('mute')}>
               ${ch?.muted ? '🔕 Muted' : '🔔 Mute'}
             </button>`
-          : html`<button data-action="reset-path" @click=${() => void this.#headerAction('reset-path')}>Reset path</button>`}
+          : html`${this.#mapLink(chat)}<button data-action="reset-path" @click=${() => void this.#headerAction('reset-path')}>Reset path</button>`}
       </header>
       <div class="log-wrap">
         <div class="log" @scroll=${() => this.#onScroll()}>

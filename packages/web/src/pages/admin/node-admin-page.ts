@@ -7,6 +7,7 @@
 import { css, html, nothing, type TemplateResult } from 'lit';
 import {
   QUICK_CLI_COMMANDS,
+  hasLocation,
   cliKindOf,
   completeCliCommand,
   formatSeconds,
@@ -234,6 +235,16 @@ export class McNodeAdminPage extends AppElement {
         margin-inline-start: 8px;
         font-size: 0.85em;
       }
+      .map-link {
+        display: inline-flex;
+        align-items: center;
+        min-height: 2.5rem;
+        padding: 0.5em 0.8em;
+        border: 1px solid var(--mc-border);
+        border-radius: 8px;
+        text-decoration: none;
+        white-space: nowrap;
+      }
       ol.hops {
         margin: 0;
         padding-inline-start: 1.5em;
@@ -293,6 +304,11 @@ export class McNodeAdminPage extends AppElement {
           <div class="muted mono" title=${v.key}>${shortKey(v.key, 16)}</div>
         </div>
         <span data-field="session" class=${node.loggedIn.value ? 'ok' : 'muted'}>${loginLabel(node.loginState.value)}</span>
+        ${hasLocation(v.record)
+          ? html`<a class="map-link" data-action="show-on-map" href=${hrefFor(`/map/node/${key}`)} title="Show on map" aria-label="Show on map"
+              ><span aria-hidden="true">🗺 Map</span></a
+            >`
+          : nothing}
       </header>
       <nav class="tabs" role="tablist" aria-label="Node">
         ${NODE_TABS.map(

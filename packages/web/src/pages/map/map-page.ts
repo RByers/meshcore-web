@@ -3,7 +3,7 @@
  * with type / last-heard filters, a details card for the selected node and "Centre on me".
  * State lives in `app.map` (core MapModel); `<mc-tile-map>` renders tiles and positions markers.
  */
-import { css, html, nothing } from 'lit';
+import { css, html, nothing, type PropertyValues } from 'lit';
 import { repeat } from 'lit/directives/repeat.js';
 import {
   MAP_KINDS,
@@ -33,6 +33,8 @@ const AGE_LABEL: Record<MapMaxAge, string> = {
 };
 /** Zoom used by "Centre on me" when the map is zoomed further out. */
 const CENTRE_ZOOM = 13;
+/** Zoom used when focusing one node (`/map/node/:key`, "Show on map"). */
+export const FOCUS_ZOOM = 14;
 
 /** The last map view per AppModel, so leaving and returning keeps the view. */
 const lastView = new WeakMap<AppModel, TileMapView>();
@@ -44,6 +46,8 @@ function describe(m: MapMarker): string {
 }
 
 export class McMapPage extends AppElement {
+  static override properties = { params: { attribute: false } };
+
   static override styles = [
     shared,
     listStyles,
@@ -159,6 +163,10 @@ export class McMapPage extends AppElement {
     `,
   ];
 
+  declare params: Readonly<Record<string, string>> | undefined;
+  /** Node to centre on (from `/map/node/:key`) until it has been focused. */
+  #focusKey: string | undefined;
+
   /** Bounds the view was last fitted to; refits follow new data until the user moves the map. */
   #fittedFor = '';
   #userMoved = false;
@@ -214,7 +222,27 @@ export class McMapPage extends AppElement {
     }
   }
 
+  override willUpdate(changed: PropertyValues): void {
+    if (changed.has('params')) this.#focusKey = this.params?.['key']?.toLowerCase();
+  }
+
+  /** Selects a node and centres the map on it; false when it has no location (yet). */
+  focusNode(key: string): boolean {
+    const map = this.#map;
+    const marker = this.app.map.focus(key);
+    if (!marker || !map) return false;
+    map.setView(marker.lat, marker.lon, Math.max(map.zoom, FOCUS_ZOOM));
+    this.#userMoved = true;
+    lastView.set(this.app, map.view);
+    return true;
+  }
+
   override updated(): void {
+    const key = this.#focusKey;
+    if (key) {
+      // contacts load asynchronously: retry on each update until the marker exists
+      if (this.focusNode(key) || (!this.app.contacts.loading.peek() && this.app.contacts.views.peek().length > 0)) this.#focusKey = undefined;
+    }
     const b = this.app.map.bounds.peek();
     if (b && !this.#userMoved && JSON.stringify(b) !== this.#fittedFor) this.fitAll();
   }

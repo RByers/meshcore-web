@@ -286,6 +286,7 @@ export class McApp extends AppElement {
       '/channels': unread?.channels ?? 0,
     };
     const current = route?.page.path;
+    const navParent = route?.page.navParent;
     return html`
       <a class="skip" href="#main" @click=${this.#skip}>Skip to content</a>
       <div class="shell">
@@ -310,7 +311,7 @@ export class McApp extends AppElement {
           <ul>
             ${this.router.registry.navPages().map(
               (p) => html`<li>
-                <a href=${hrefFor(p.path)} aria-current=${p.path === current ? 'page' : nothing} data-path=${p.path}>
+                <a href=${hrefFor(p.path)} aria-current=${p.path === current || p.path === navParent ? 'page' : nothing} data-path=${p.path}>
                   <span class="icon" aria-hidden="true">${p.icon}</span>
                   <span class="label">${p.title}</span>
                   ${(counts[p.path] ?? 0) > 0

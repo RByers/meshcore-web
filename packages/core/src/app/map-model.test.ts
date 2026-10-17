@@ -122,4 +122,22 @@ describe('MapModel', () => {
     expect(m.tileUrl.value).toBe(OSM_TILE_URL);
     expect(validateTileUrl(' data:image/png;base64,AA ')).toBe('data:image/png;base64,AA');
   });
+
+  it('focus selects a contact, re-enabling filters that hide it (issue #13)', () => {
+    const { m } = setup();
+    const hill = m.allMarkers.value[1]!;
+    m.toggleKind('repeater');
+    m.setMaxAge('24h'); // Hilltop was heard 3 days ago
+    expect(m.focus(hill.key.toUpperCase())?.name).toBe('Hilltop');
+    expect(m.isKindVisible('repeater')).toBe(true);
+    expect(m.maxAge.value).toBe('any');
+    expect(m.selected.value?.key).toBe(hill.key);
+    // Alice passes the filters: they are left alone
+    m.setMaxAge('24h');
+    expect(m.focus(m.allMarkers.value[0]!.key)?.name).toBe('Alice');
+    expect(m.maxAge.value).toBe('24h');
+    // no location → nothing to focus
+    expect(m.focus('room'.padEnd(64, '0'))).toBeNull();
+    expect(m.selected.value?.name).toBe('Alice');
+  });
 });
