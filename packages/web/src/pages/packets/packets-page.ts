@@ -4,7 +4,8 @@
  * inspector in a side panel (wide) or on its own page `/packets/:id` (narrow).
  * State and logic live in the core PacketLogModel; this component renders and forwards intents.
  */
-import { css, html, nothing, type TemplateResult } from 'lit';
+import { css, html, nothing, type PropertyValues, type TemplateResult } from 'lit';
+import { repeat } from 'lit/directives/repeat.js';
 import { formatResolvedPath, resolvedPathTitle, type FrameRow, type LogView, type PacketFilter, type PacketRow } from '@meshcore-web/core/app';
 import { PayloadType, RouteType, payloadTypeName } from '@meshcore-web/core/packet';
 import { CMD, PUSH, RESP } from '@meshcore-web/core/protocol';
@@ -50,6 +51,8 @@ export class McPacketsPage extends AppElement {
   #ro: ResizeObserver | undefined;
   #textTimer: ReturnType<typeof setTimeout> | undefined;
   #loadSeq = 0;
+  /** First visible row before an update, so rows added above it don't move it (see #keepAnchor). */
+  #anchor: { attr: string; id: string; top: number } | null = null;
 
   constructor() {
     super();
@@ -68,6 +71,9 @@ export class McPacketsPage extends AppElement {
       :host {
         display: block;
         min-width: 0;
+        /* rows added above the viewport are compensated for by hand (#keepAnchor); keep the
+           browser's own scroll anchoring out of it so it can't adjust a second time */
+        overflow-anchor: none;
       }
       .tabs {
         display: flex;
@@ -269,6 +275,47 @@ export class McPacketsPage extends AppElement {
     super.disconnectedCallback();
     this.#ro?.disconnect();
     clearTimeout(this.#textTimer);
+  }
+
+  // ---- scroll anchoring ----
+  // Live tail inserts rows at the top. When the reader has scrolled down into the table, keep the
+  // first visible row where it is: record its position before Lit renders (willUpdate) and scroll by
+  // however far it moved right after (updated). Both run synchronously in the same update microtask
+  // as the DOM change, so no frame is painted in between and nothing visibly jumps. Done by hand
+  // rather than relying on CSS scroll anchoring, which isn't in every browser (Safari < 27) and
+  // whose timing differs between engines.
+
+  override willUpdate(changed: PropertyValues<this>): void {
+    super.willUpdate(changed);
+    this.#anchor = this.#findAnchor();
+  }
+
+  override updated(changed: PropertyValues<this>): void {
+    super.updated(changed);
+    this.#keepAnchor();
+  }
+
+  #findAnchor(): { attr: string; id: string; top: number } | null {
+    const attr = this.tab === 'packets' ? 'data-packet-id' : 'data-frame-id';
+    const rows = this.renderRoot.querySelectorAll<HTMLElement>(`tbody tr[${attr}]`);
+    const first = rows[0];
+    // only once the reader has scrolled past the top of the list: at the top new rows should show
+    if (!first || first.getBoundingClientRect().top >= 0) return null;
+    for (const tr of rows) {
+      const r = tr.getBoundingClientRect();
+      if (r.bottom > 0) return { attr, id: tr.getAttribute(attr)!, top: r.top };
+    }
+    return null;
+  }
+
+  #keepAnchor(): void {
+    const a = this.#anchor;
+    this.#anchor = null;
+    if (!a) return;
+    const tr = this.renderRoot.querySelector<HTMLElement>(`tbody tr[${a.attr}="${a.id}"]`);
+    if (!tr) return; // different page / filter / tab: nothing to keep in place
+    const delta = tr.getBoundingClientRect().top - a.top;
+    if (delta !== 0) window.scrollBy({ top: delta, behavior: 'instant' });
   }
 
   get #log() {
@@ -567,7 +614,7 @@ export class McPacketsPage extends AppElement {
           </tr>
         </thead>
         <tbody>
-          ${rows.map((r) => {
+          ${repeat(rows, (r) => r.id, (r) => {
             const rec = r.record;
             return html`<tr
               data-packet-id=${r.id}
@@ -611,7 +658,7 @@ export class McPacketsPage extends AppElement {
           </tr>
         </thead>
         <tbody>
-          ${rows.map((r) => {
+          ${repeat(rows, (r) => r.id, (r) => {
             const rec = r.record;
             return html`<tr
               data-frame-id=${r.id}

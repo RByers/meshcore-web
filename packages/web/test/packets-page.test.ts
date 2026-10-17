@@ -125,6 +125,51 @@ describe('/packets page', () => {
     await t.until(() => !t.query('aside mc-packet-inspector'), 2000, 'closed');
   });
 
+  it('keeps the visible rows still when live tail adds a packet above them', async () => {
+    await page.viewport(1400, 500);
+    const t = await openLog();
+    const bob = t.emulatorScenario().nodes.bob;
+    for (let i = 0; i < 20; i++) bob.sendChannelMessage('Public', `filler ${i}`);
+    await t.until(() => t.queryAll('tr[data-type="GRP_TXT"]').length >= 20, 5000, '20 GRP_TXT rows');
+    await t.app.packetLog.packets.settled();
+
+    // scroll so the list's top is out of view and pick the row at the top of the viewport
+    const rows = t.queryAll('tr[data-packet-id]');
+    rows[8]!.scrollIntoView({ block: 'start', behavior: 'instant' });
+    const anchor = rows.find((r) => r.getBoundingClientRect().bottom > 0)!;
+    const top = anchor.getBoundingClientRect().top;
+    const before = rows.length;
+
+    // the new row and the scroll fix must land in the same microtask: when the insertion is
+    // observed (a later microtask, before any frame) the anchor row is already back in place
+    const atInsert: number[] = [];
+    const tbody = t.query('table[data-table="packets"] tbody')!;
+    const mo = new MutationObserver(() => atInsert.push(anchor.getBoundingClientRect().top));
+    mo.observe(tbody, { childList: true });
+    bob.sendChannelMessage('Public', 'new one on top');
+    await t.until(() => t.query('tr[data-packet-id]')!.textContent!.includes('new one on top'), 5000, 'new row on top');
+    mo.disconnect();
+
+    expect(t.queryAll('tr[data-packet-id]').length).toBeGreaterThan(before);
+    expect(atInsert.length).toBeGreaterThan(0);
+    for (const y of atInsert) expect(y).toBeCloseTo(top, 0);
+    expect(anchor.getBoundingClientRect().top).toBeCloseTo(top, 0);
+  });
+
+  it('at the top of the list new packets push the rows down', async () => {
+    await page.viewport(1400, 500);
+    const t = await openLog();
+    await traffic(t);
+    await t.app.packetLog.packets.settled();
+    window.scrollTo({ top: 0, behavior: 'instant' });
+    const first = t.query('tr[data-packet-id]')!;
+    const top = first.getBoundingClientRect().top;
+    t.emulatorScenario().nodes.bob.sendChannelMessage('Public', 'pushes down');
+    await t.until(() => t.query('tr[data-packet-id]')!.textContent!.includes('pushes down'), 5000, 'new row on top');
+    expect(window.scrollY).toBe(0);
+    expect(first.getBoundingClientRect().top).toBeGreaterThan(top);
+  });
+
   it('frames tab shows the handshake frames and inspects them', async () => {
     const t = await openLog();
     await t.click('[data-tab="frames"]');
