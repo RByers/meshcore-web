@@ -72,7 +72,7 @@ describe('connect flows', () => {
     await t.until(() => t.query('[data-field="name"]'), 5000, 'device page');
     expect(t.query('[data-field="name"]')!.textContent).toBe('Emulator');
     const scenario = t.emulatorScenario();
-    expect(t.query('[data-field="pubkey"]')!.getAttribute('title')).toBe(toHex(scenario.keys.self));
+    expect(t.query('[data-field="pubkey"]')!.textContent!.trim()).toBe(toHex(scenario.keys.self));
     expect(t.query('[data-field="firmware"]')!.textContent!.trim()).not.toBe('unknown');
     expect(t.query('[data-field="radio"]')!.textContent).toContain('MHz');
     await t.until(() => t.query('[data-field="battery"]')!.textContent!.includes('V'), 3000, 'battery');

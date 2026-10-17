@@ -2,7 +2,7 @@
 import { css, html, nothing } from 'lit';
 import { CONNECTION_KIND_LABEL } from '@meshcore-web/core/app';
 import { AppElement } from '../app-context.js';
-import { PHASE_LABEL, batteryPercent, shortKey } from '../format.js';
+import { PHASE_LABEL, batteryPercent } from '../format.js';
 import { hrefFor } from '../router.js';
 import { shared } from '../styles.js';
 
@@ -27,8 +27,15 @@ export class McDevicePage extends AppElement {
         gap: 8px 16px;
         margin-block-end: var(--mc-gap);
       }
+      header > div:first-child {
+        min-width: 0;
+      }
       header h2 {
         margin: 0;
+      }
+      .pubkey {
+        overflow-wrap: anywhere;
+        user-select: all;
       }
       dl {
         display: grid;
@@ -68,7 +75,7 @@ export class McDevicePage extends AppElement {
       <header class="card">
         <div>
           <h2 data-field="name">${si.name || 'Unnamed radio'}</h2>
-          <div class="muted mono" data-field="pubkey" title=${pub}>${shortKey(pub, 16)}</div>
+          <div class="muted mono pubkey" data-field="pubkey">${pub}</div>
         </div>
         <div data-field="state">${PHASE_LABEL[conn.phase.value]}${kind ? html` · ${CONNECTION_KIND_LABEL[kind]}` : nothing}</div>
       </header>
