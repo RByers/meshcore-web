@@ -28,6 +28,7 @@ import { MapModel } from './map-model.js';
 import { PositionEstimatorModel } from './position-estimator.js';
 import { PathModel } from './path-model.js';
 import { PacketLogModel } from './packet-log-model.js';
+import { PacketStatsModel } from './packet-stats-model.js';
 import { ContactPathsModel } from './path-history.js';
 import { RemoteAdminModel, type RemoteAdminOptions } from './remote-admin-model.js';
 import { signal, type ReadonlySignal } from './signal.js';
@@ -97,6 +98,7 @@ export class AppModel {
   #unread: UnreadModel | undefined;
   #conversations: ConversationsModel | undefined;
   #packetLog: PacketLogModel | undefined;
+  #packetStats: PacketStatsModel | undefined;
   #deviceSettings: DeviceSettingsModel | undefined;
   #appSettings: AppSettingsModel | undefined;
   readonly #prefs: PreferencesStore;
@@ -198,6 +200,15 @@ export class AppModel {
     return (this.#packetLog ??= new PacketLogModel(this.connection).start());
   }
 
+  /** Packet log statistics: per-packet points and aggregations for the Stats tab (docs/packet-stats.md). */
+  get packetStats(): PacketStatsModel {
+    return (this.#packetStats ??= new PacketStatsModel(this.connection, {
+      context: this.packetLog.context,
+      contacts: this.contacts.contacts,
+      ready: () => Promise.all([this.packetLog.settled(), this.contacts.settled()]),
+    }).start());
+  }
+
   get deviceSettings(): DeviceSettingsModel {
     return (this.#deviceSettings ??= new DeviceSettingsModel(this.connection, {
       ...(this.#opts.geolocation ? { geolocation: this.#opts.geolocation } : {}),
@@ -250,7 +261,7 @@ export class AppModel {
   async dispose(): Promise<void> {
     await this.connection.disconnect({ keepResume: true });
     for (const off of this.#offs.splice(0)) off();
-    for (const m of [this.#contacts, this.#channels, this.#unread, this.#conversations, this.#packetLog, this.#contactPaths, this.#positions, ...this.#chats.values()]) m?.dispose();
+    for (const m of [this.#contacts, this.#channels, this.#unread, this.#conversations, this.#packetLog, this.#packetStats, this.#contactPaths, this.#positions, ...this.#chats.values()]) m?.dispose();
     this.#remoteAdmin?.dispose();
     this.#deviceSettings?.dispose();
     this.#appSettings?.dispose();

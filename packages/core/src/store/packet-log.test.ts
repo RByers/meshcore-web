@@ -36,6 +36,26 @@ describe('PacketLog', () => {
     s.close();
   });
 
+  it('all() returns every record in a ts range oldest first with bytes; tsBounds() spans the log', async () => {
+    const s = await openStore();
+    expect(await s.packets.tsBounds()).toBeNull();
+    expect(await s.packets.all()).toEqual([]);
+    await s.packets.appendMany([
+      { direction: 'rx', bytes: grpTxtPacket(1), ts: 300 },
+      { direction: 'rx', bytes: advertPacket(), ts: 100 },
+      { direction: 'tx', bytes: grpTxtPacket(0), ts: 200 },
+      { direction: 'rx', bytes: grpTxtPacket(2), ts: 400 },
+    ]);
+    const all = await s.packets.all();
+    expect(all.map((r) => r.ts)).toEqual([100, 200, 300, 400]);
+    expect(all[0]!.bytes).toBeInstanceOf(Uint8Array);
+    expect(all[0]!.bytes).toEqual(advertPacket());
+    expect((await s.packets.all({ from: 200, to: 300 })).map((r) => r.ts)).toEqual([200, 300]);
+    expect((await s.packets.all({ from: 150, direction: 'rx' })).map((r) => r.ts)).toEqual([300, 400]);
+    expect(await s.packets.tsBounds()).toEqual({ first: 100, last: 400 });
+    s.close();
+  });
+
   it('keeps unparsable packets with a parse error', async () => {
     const s = await openStore();
     const rec = await s.packets.append({ direction: 'rx', bytes: Uint8Array.of(0x15) });

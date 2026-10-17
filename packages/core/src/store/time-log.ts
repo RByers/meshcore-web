@@ -150,6 +150,29 @@ export abstract class TimeLog<R extends LogRecordBase, Q extends LogQueryBase> {
     return { items, hasMore };
   }
 
+  /**
+   * Every matching record (all by default), oldest first, bytes as stored — for in-memory
+   * analysis of a bounded range (the packet statistics); paged views use `query`.
+   */
+  async all(q: Omit<Q, 'limit' | 'offset' | 'order'> = {} as Q): Promise<R[]> {
+    const plan = this.plan(q as Q);
+    return this.db.iterate<R>(this.storeName, {
+      index: plan.index,
+      query: plan.query,
+      direction: 'next',
+      ...(plan.filter ? { filter: plan.filter } : {}),
+    });
+  }
+
+  /** `ts` of the oldest and newest record, or null when the log is empty. */
+  async tsBounds(): Promise<{ first: number; last: number } | null> {
+    const [first, last] = await Promise.all([
+      this.db.iterate<R>(this.storeName, { index: this.tsIndex, query: null, direction: 'next', limit: 1 }),
+      this.db.iterate<R>(this.storeName, { index: this.tsIndex, query: null, direction: 'prev', limit: 1 }),
+    ]);
+    return first[0] && last[0] ? { first: first[0].ts, last: last[0].ts } : null;
+  }
+
   /** Newest `n` records, newest first. */
   async latest(n = 100): Promise<R[]> {
     return (await this.query({ limit: n } as Q)).items;

@@ -39,4 +39,3 @@ export {
   sha512Sync,
   type SyncKeyPair,
 } from './crypto-sync.js';
-export { loraAirtimeMs } from './airtime.js';
