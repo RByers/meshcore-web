@@ -155,6 +155,9 @@ export class McLineChart extends ChartBase {
 
     let [dx0, dx1] = this.xDomain ?? extent(ts);
     if (dx0 === undefined || dx1 === undefined) [dx0, dx1] = [Date.now() - HOUR, Date.now()];
+    // bins start on round boundaries, so a given domain is widened to keep every point on the plot
+    const [t0, t1] = extent(ts);
+    if (t0 !== undefined && t1 !== undefined) [dx0, dx1] = [Math.min(dx0, t0), Math.max(dx1, t1)];
     if (dx0 === dx1) [dx0, dx1] = [dx0 - HOUR / 2, dx1 + HOUR / 2];
     const x = scaleTime().domain([dx0, dx1]).range([x0, x1]);
     const xt = (t: number): number => x(t);
@@ -182,7 +185,8 @@ export class McLineChart extends ChartBase {
           : null;
       return svg`
         ${band ? svg`<path class=${this.stacked ? 'band' : 'wash'} d=${band} fill=${r.color}></path>` : nothing}
-        <path class="line" data-mark="line" data-series=${r.key} d=${top ?? ''} stroke=${r.color}></path>`;
+        <path class="line" data-mark="line" data-series=${r.key} d=${top ?? ''} stroke=${r.color}></path>
+        ${ts.length === 1 ? svg`<circle class="marker" data-mark="point" cx=${xt(ts[0]!)} cy=${y(r.hi[0]!)} r="4" fill=${r.color}></circle>` : nothing}`;
     });
 
     const hi = this.hover;

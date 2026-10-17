@@ -24,6 +24,7 @@ export class McStatTile extends LitElement {
       border-radius: var(--mc-radius, 10px);
       background: var(--mc-surface, Canvas);
       border: 1px solid var(--mc-border, GrayText);
+      box-sizing: border-box;
       height: 100%;
     }
     .label {

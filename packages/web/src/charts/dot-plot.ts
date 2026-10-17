@@ -24,6 +24,8 @@ export interface DotPoint {
   size: number;
   /** Series key (looked up in `palette`). */
   color: string;
+  /** Tooltip name of the series; default the key. */
+  label?: string;
   id: number | string;
   /** Extra tooltip line. */
   title?: string;
@@ -123,7 +125,7 @@ export class McDotPlot extends ChartBase {
   }
 
   #computeLayout(): Layout {
-    const key = [this.points, this.xDomain, this.palette, this.width, this.height, this.yFormat];
+    const key = [this.points, this.xDomain, this.palette, this.width, this.height, this.yFormat, this.yLabel];
     const prev = this.#layout;
     if (prev && key.every((k, i) => k === prev.key[i])) return prev;
 
@@ -221,7 +223,7 @@ export class McDotPlot extends ChartBase {
       l.cx[i]!,
       l.cy[i]!,
       html`<div><strong>${pt.y === null ? '—' : this.#fmtY(pt.y)}</strong> ${this.yLabel}</div>
-        <div class="row"><span class="key dot" style="--c:${color}"></span>${this.seriesLabel ? `${this.seriesLabel}: ` : ''}${pt.color}</div>
+        <div class="row"><span class="key dot" style="--c:${color}"></span>${this.seriesLabel ? `${this.seriesLabel}: ` : ''}${pt.label ?? pt.color}</div>
         <div>${formatDateTime(pt.x)}</div>
         ${pt.title ? html`<div>${pt.title}</div>` : nothing}`,
     );

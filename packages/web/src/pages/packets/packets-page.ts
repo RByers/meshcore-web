@@ -19,8 +19,10 @@ import { jsonReplacer } from './packet-inspector.js';
 import { hopsLink } from '../../components/path-dialog.js';
 import { pathHops } from '../../components/node-link.js';
 import './packet-inspector.js';
+import './packet-stats.js';
 
-export type LogTab = 'packets' | 'frames';
+/** The list tabs plus the Stats tab (docs/packet-stats.md §3). */
+export type LogTab = 'packets' | 'frames' | 'stats';
 
 /** Below this host width the inspector opens as its own page. */
 export const WIDE_MIN_PX = 900;
@@ -330,6 +332,7 @@ export class McPacketsPage extends AppElement {
   }
 
   #findAnchor(): { attr: string; id: string; top: number } | null {
+    if (this.tab === 'stats') return null; // no live-tail table
     const attr = this.tab === 'packets' ? 'data-packet-id' : 'data-frame-id';
     const rows = this.renderRoot.querySelectorAll<HTMLElement>(`tbody tr[${attr}]`);
     const first = rows[0];
@@ -753,7 +756,7 @@ export class McPacketsPage extends AppElement {
     }
     const log = this.#log;
     // The inspector belongs to the tab its row came from: switching tabs hides it (and back shows it).
-    const split = this.wide && this.selected !== null && this.selected.tab === this.tab;
+    const split = this.tab !== 'stats' && this.wide && this.selected !== null && this.selected.tab === this.tab;
     return html`
       <div class="tabs" role="tablist" aria-label="Log">
         <button role="tab" data-tab="packets" aria-selected=${this.tab === 'packets' ? 'true' : 'false'} @click=${() => this.#setTab('packets')}>
@@ -762,7 +765,17 @@ export class McPacketsPage extends AppElement {
         <button role="tab" data-tab="frames" aria-selected=${this.tab === 'frames' ? 'true' : 'false'} @click=${() => this.#setTab('frames')}>
           Frames <span class="muted">(${log.frames.total.value})</span>
         </button>
+        <button role="tab" data-tab="stats" aria-selected=${this.tab === 'stats' ? 'true' : 'false'} @click=${() => this.#setTab('stats')}>Stats</button>
       </div>
+      ${this.tab === 'stats'
+        ? html`<section role="tabpanel" aria-label="Packet statistics"><mc-packet-stats></mc-packet-stats></section>`
+        : this.#listTab(split)}
+    `;
+  }
+
+  #listTab(split: boolean): TemplateResult {
+    const log = this.#log;
+    return html`
       <div class="layout ${split ? 'split' : ''}">
         <section role="tabpanel" aria-label=${this.tab === 'packets' ? 'Over-the-air packets' : 'Host ↔ device frames'}>
           ${this.tab === 'packets' ? this.#packetFilters() : this.#frameFilters()} ${this.#toolbar()}
@@ -786,8 +799,7 @@ export class McPacketsPage extends AppElement {
                 : html`<p class="muted">Loading…</p>`}
             </aside>`
           : nothing}
-      </div>
-    `;
+      </div>`;
   }
 }
 

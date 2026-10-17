@@ -4,9 +4,11 @@
  * location — with links to the chat / node pages and to the packet log filtered to this node, and
  * a chart of the packets heard from it over time (core `PacketLogModel.nodeActivity`, an indexed
  * scan of the packet log by source node). Channel senders, DM headers and path hops link here.
+ * A *Stats* tab shows the packet log statistics for the contact (`<mc-contact-stats>`,
+ * docs/packet-stats.md §5).
  */
 import { css, html, nothing } from 'lit';
-import { ACTIVITY_RANGES, hasLocation, type ActivityRange, type NodeActivity } from '@meshcore-web/core/app';
+import { ACTIVITY_RANGES, hasLocation, type ActivityRange, type ContactView, type NodeActivity } from '@meshcore-web/core/app';
 import { AppElement } from '../../app-context.js';
 import { formatRelative, formatSnr, shortKey } from '../../format.js';
 import { hrefFor } from '../../router.js';
@@ -14,12 +16,25 @@ import { shared } from '../../styles.js';
 import { avatar, listStyles, TYPE_LABEL } from './common.js';
 import { pathLabelView } from '../../components/node-link.js';
 import '../../components/activity-chart.js';
+import './contact-stats.js';
+
+type Tab = 'info' | 'stats';
+const TABS: readonly { id: Tab; label: string }[] = [
+  { id: 'info', label: 'Info' },
+  { id: 'stats', label: 'Stats' },
+];
 
 const RANGES = Object.keys(ACTIVITY_RANGES) as ActivityRange[];
 
 export class McContactInfoPage extends AppElement {
-  static override properties = { params: { attribute: false } };
+  static override properties = { params: { attribute: false }, tab: { state: true } };
   declare params: Readonly<Record<string, string>> | undefined;
+  declare tab: Tab;
+
+  constructor() {
+    super();
+    this.tab = 'info';
+  }
 
   static override styles = [
     shared,
@@ -46,6 +61,22 @@ export class McContactInfoPage extends AppElement {
       dl.info dd {
         margin: 0;
         overflow-wrap: anywhere;
+      }
+      .tabs {
+        display: flex;
+        gap: 4px;
+        border-bottom: 1px solid var(--mc-border);
+      }
+      .tabs button {
+        border: none;
+        border-bottom: 2px solid transparent;
+        border-radius: 0;
+        background: none;
+        padding: 6px 12px;
+      }
+      .tabs button[aria-selected='true'] {
+        border-bottom-color: var(--mc-accent);
+        font-weight: 600;
       }
       .actions {
         display: flex;
@@ -166,9 +197,6 @@ export class McContactInfoPage extends AppElement {
         <p><a href=${hrefFor('/contacts')}>Back to contacts</a></p>
       </section>`;
     }
-    const c = v.record;
-    const path = contacts.outPathLabel(v, this.app.appSettings.pathNames.value);
-    const located = hasLocation(c);
     return html`
       <header class="card" data-field="header">
         <a href=${hrefFor('/contacts')} aria-label="Back to contacts">←</a>
@@ -178,6 +206,22 @@ export class McContactInfoPage extends AppElement {
           <span class="muted" data-field="type">${TYPE_LABEL[v.typeName]}${v.favourite ? ' · ★ favourite' : ''}${v.onDevice ? '' : ' · not on radio'}</span>
         </div>
       </header>
+      <div class="tabs" role="tablist" aria-label="Contact">
+        ${TABS.map(
+          (t) => html`<button type="button" role="tab" data-tab=${t.id} aria-selected=${this.tab === t.id ? 'true' : 'false'} @click=${() => (this.tab = t.id)}>
+            ${t.label}
+          </button>`,
+        )}
+      </div>
+      ${this.tab === 'stats' ? html`<mc-contact-stats role="tabpanel" .key=${v.key}></mc-contact-stats>` : this.#renderInfo(v)}
+    `;
+  }
+
+  #renderInfo(v: ContactView) {
+    const c = v.record;
+    const path = this.app.contacts.outPathLabel(v, this.app.appSettings.pathNames.value);
+    const located = hasLocation(c);
+    return html`
       <section class="card">
         <dl class="info">
           <dt>Public key</dt>

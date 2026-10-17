@@ -103,7 +103,7 @@ export interface StatsSummary {
   bytes: number;
   /** Sum of the known airtimes; null when the radio parameters are unknown. */
   airtimeMs: number | null;
-  /** airtimeMs / spanMs; null when either is unknown / zero. */
+  /** airtimeMs / spanMs (capped at 1); null when either is unknown / zero. */
   airtimeFraction: number | null;
   /** Unique sources (resolved and unresolved). */
   sources: number;
@@ -658,7 +658,8 @@ export class PacketStatsModel extends StoreBoundModel {
         packets: pts.length,
         bytes,
         airtimeMs,
-        airtimeFraction: airtimeMs !== null && spanMs > 0 ? airtimeMs / spanMs : null,
+        // a window shorter than the airtime it holds (one burst) would read > 100 %: cap at 1
+        airtimeFraction: airtimeMs !== null && spanMs > 0 ? airtimeMs / Math.max(spanMs, airtimeMs) : null,
         sources: sources.size,
         spanMs,
       };

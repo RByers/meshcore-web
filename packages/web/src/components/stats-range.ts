@@ -4,6 +4,7 @@
  * (*All* = the whole log, the default), a custom `from` / `to` pair, and the timeline bin size.
  */
 import { css, html, nothing, type TemplateResult } from 'lit';
+import { signal } from '@meshcore-web/core/app';
 import { AppElement } from '../app-context.js';
 import { shared } from '../styles.js';
 
@@ -47,9 +48,13 @@ export function fromLocalInput(v: string): number | null {
   return Number.isFinite(t) ? t : null;
 }
 
+/**
+ * The preset that produced the current model range ('custom' after a manual edit). Module-level so
+ * every instance (packets tab, contact tab) highlights the same button for the shared range.
+ */
+const activePreset = signal<string>('all');
+
 export class McStatsRange extends AppElement {
-  static override properties = { preset: { state: true } };
-  declare preset: string;
 
   static override styles = [
     shared,
@@ -91,19 +96,14 @@ export class McStatsRange extends AppElement {
     `,
   ];
 
-  constructor() {
-    super();
-    this.preset = 'all';
-  }
-
   async #applyPreset(p: Preset): Promise<void> {
-    this.preset = p.id;
-    const now = Date.now();
+    activePreset.value = p.id;
+    const now = this.app.clock.now();
     await this.app.packetStats.setRange(p.ms === null ? { from: null, to: null } : { from: now - p.ms, to: null });
   }
 
   async #applyCustom(which: 'from' | 'to', value: string): Promise<void> {
-    this.preset = 'custom';
+    activePreset.value = 'custom';
     const cur = this.app.packetStats.range.peek();
     const ts = fromLocalInput(value);
     await this.app.packetStats.setRange({ ...cur, [which]: ts });
@@ -114,13 +114,14 @@ export class McStatsRange extends AppElement {
     const range = stats.range.value;
     const bin = stats.bin.value;
     const bounds = stats.bounds.value;
+    const preset = range.from === null && range.to === null ? 'all' : activePreset.value;
     return html`<div class="row" data-stats-range>
       <span class="presets" role="group" aria-label="Date range">
         ${RANGE_PRESETS.map(
           (p) => html`<button
             type="button"
             data-preset=${p.id}
-            aria-pressed=${this.preset === p.id ? 'true' : 'false'}
+            aria-pressed=${preset === p.id ? 'true' : 'false'}
             @click=${() => void this.#applyPreset(p)}
           >
             ${p.label}

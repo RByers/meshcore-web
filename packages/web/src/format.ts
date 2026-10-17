@@ -41,7 +41,15 @@ export function formatSnr(snr: number): string {
   return `${Number.isInteger(snr) ? snr : snr.toFixed(2).replace(/0$/, '')} dB`;
 }
 
-/** "850 ms" / "1.2 s" */
+/** "850 ms" / "1.2 s" / "12 min" / "3.5 h" / "2.1 d" */
 export function formatDuration(ms: number): string {
-  return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`;
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)} min`;
+  if (ms < 86_400_000) return `${trim1(ms / 3_600_000)} h`;
+  return `${trim1(ms / 86_400_000)} d`;
+}
+
+function trim1(v: number): string {
+  return v.toFixed(1).replace(/\.0$/, '');
 }
