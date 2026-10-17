@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { page } from 'vitest/browser';
 import { toHex } from '@meshcore-web/core/util/bytes';
 import '../src/mc-app.js';
 import type { McMapMarker, McTileMap } from '../src/components/tile-map.js';
@@ -125,5 +126,25 @@ describe('/map page', () => {
     expect(srcs.every((s) => s === GIF)).toBe(true);
     const net = performance.getEntriesByType('resource').filter((e) => /openstreetmap|\/\d+\/\d+\/\d+\.png/.test(e.name));
     expect(net).toEqual([]);
+  });
+
+  it('keeps the mobile bottom nav on top of the map', async () => {
+    await page.viewport(375, 560);
+    try {
+      const { t, map } = await openMap();
+      const root = t.el!.shadowRoot!;
+      await t.until(() => getComputedStyle(root.querySelector('nav ul')!).flexDirection === 'row', 2000, 'row nav');
+      // put the map's bottom edge at the viewport bottom, under the sticky nav
+      map.scrollIntoView({ block: 'end' });
+      const m = map.getBoundingClientRect();
+      for (const a of t.queryAll<HTMLAnchorElement>('nav a')) {
+        const r = a.getBoundingClientRect();
+        expect(r.top).toBeLessThan(m.bottom); // the nav overlaps the map here
+        const hit = root.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        expect(hit?.closest('nav a'), a.dataset['path']).toBe(a);
+      }
+    } finally {
+      await page.viewport(1280, 800);
+    }
   });
 });

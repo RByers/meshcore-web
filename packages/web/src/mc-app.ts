@@ -162,6 +162,8 @@ export class McApp extends AppElement {
         padding-inline-end: calc(var(--mc-gap) + env(safe-area-inset-right, 0px));
         padding-block-end: calc(var(--mc-gap) + env(safe-area-inset-bottom, 0px));
         min-width: 0;
+        /* page z-indexes (map overlays, sticky table heads) stay below the header and mobile nav */
+        isolation: isolate;
       }
       main:focus {
         outline: none;
@@ -175,6 +177,7 @@ export class McApp extends AppElement {
         nav {
           position: sticky;
           bottom: 0;
+          z-index: 1;
           border-inline-end: 0;
           border-block-start: 1px solid var(--mc-border);
           padding: 4px;
