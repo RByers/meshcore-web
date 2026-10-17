@@ -87,6 +87,62 @@ export function messagePreview(m: MessageRecord | undefined): string {
   return preview(m);
 }
 
+const DAY_MS = 86_400_000;
+
+/** Preset "not heard for" periods for bulk-selecting stale contacts (most recent first). */
+export const STALE_PERIODS: readonly { label: string; ms: number }[] = [
+  { label: '1 day', ms: DAY_MS },
+  { label: '1 week', ms: 7 * DAY_MS },
+  { label: '2 weeks', ms: 14 * DAY_MS },
+  { label: '1 month', ms: 30 * DAY_MS },
+  { label: '3 months', ms: 90 * DAY_MS },
+  { label: '6 months', ms: 182 * DAY_MS },
+  { label: '1 year', ms: 365 * DAY_MS },
+];
+
+/**
+ * Epoch ms the contact was last heard from (0 = never): the latest of its advert (`lastSeen`),
+ * a zero-hop packet (`directSnrAt`) and its last message when that message is incoming. Our own
+ * outgoing messages don't count — sending to a contact says nothing about whether it's alive.
+ */
+export function contactLastHeard(v: Pick<ContactView, 'lastSeen' | 'directSnrAt' | 'lastMessage'>): number {
+  const msg = v.lastMessage?.direction === 'in' ? v.lastMessage.receivedAt : 0;
+  return Math.max(v.lastSeen, v.directSnrAt, msg);
+}
+
+export interface NotHeardSinceOptions {
+  /** Include favourites (default false: favourites are never selected). */
+  includeFavourites?: boolean;
+}
+
+/**
+ * Contacts not heard from since `cutoffMs` (epoch ms): {@link contactLastHeard} strictly before
+ * the cutoff, so never-heard contacts (0) always match. For "not heard for a period" pass
+ * `app.clock.now() - period.ms` (see {@link STALE_PERIODS}). Keeps the input order.
+ */
+export function contactsNotHeardSince(
+  views: readonly ContactView[],
+  cutoffMs: number,
+  opts: NotHeardSinceOptions = {},
+): ContactView[] {
+  return views.filter((v) => (opts.includeFavourites || !v.favourite) && contactLastHeard(v) < cutoffMs);
+}
+
+export interface RemoveOptions {
+  /** Keep the conversation history (default: delete it with the contact). */
+  keepMessages?: boolean;
+}
+
+export interface RemoveManyOptions extends RemoveOptions {
+  /** Called after each contact is attempted (removed or failed), starting with (0, total). */
+  onProgress?: (done: number, total: number) => void;
+}
+
+export interface RemoveManyResult {
+  removed: string[];
+  failed: { key: string; error: unknown }[];
+}
+
 /** An incoming message heard zero hop, with an SNR. */
 function isDirectSnrMessage(m: MessageRecord): boolean {
   return m.direction === 'in' && m.snr !== undefined && receivedHops(m.pathLen) === 0;
@@ -322,16 +378,53 @@ export class ContactsModel extends StoreBoundModel {
   }
 
   /** Removes from the device and deletes the contact (and, by default, its messages) locally. */
-  async remove(key: string, opts: { keepMessages?: boolean } = {}): Promise<void> {
+  async remove(key: string, opts: RemoveOptions = {}): Promise<void> {
+    const store = this.#store();
+    try {
+      await this.#removeOne(store, key, opts);
+    } finally {
+      await this.reload();
+    }
+  }
+
+  /**
+   * Removes several contacts one at a time (device commands are serial), carrying on past
+   * individual failures, and reloads the list once at the end.
+   */
+  async removeMany(keys: readonly string[], opts: RemoveManyOptions = {}): Promise<RemoveManyResult> {
+    const store = this.#store();
+    const out: RemoveManyResult = { removed: [], failed: [] };
+    const total = keys.length;
+    opts.onProgress?.(0, total);
+    try {
+      for (const key of keys) {
+        try {
+          await this.#removeOne(store, key, opts);
+          out.removed.push(key);
+        } catch (error) {
+          out.failed.push({ key, error });
+        }
+        opts.onProgress?.(out.removed.length + out.failed.length, total);
+      }
+    } finally {
+      await this.reload();
+    }
+    return out;
+  }
+
+  #store(): RadioStore {
     const store = this.store;
     if (!store) throw new Error('Not connected');
+    return store;
+  }
+
+  async #removeOne(store: RadioStore, key: string, opts: RemoveOptions): Promise<void> {
     const rec = await store.contacts.get(key);
     const client = this.connection.client.peek();
     if (rec?.onDevice && client?.connected) await client.removeContact(rec.pubKey);
     await this.connection.capture?.idle();
     await store.contacts.delete(key);
     if (!opts.keepMessages) await store.messages.deleteConversation(key);
-    await this.reload();
   }
 
   /** RESET_PATH: the next message floods and a new path is learnt. */

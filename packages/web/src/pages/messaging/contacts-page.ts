@@ -1,6 +1,19 @@
-/** Contacts: search / filter / sort, per-contact actions, add by shared contact. */
+/**
+ * Contacts: search / filter / sort, per-contact actions, add by shared contact, and a selection
+ * mode for bulk delete (select all visible, or the visible ones not heard from for a period —
+ * core `contactsNotHeardSince`, favourites skipped — then `ContactsModel.removeMany`).
+ */
 import { css, html, nothing } from 'lit';
-import { CONTACT_FILTERS, messagePreview, type ContactFilter, type ContactSort, type ContactView } from '@meshcore-web/core/app';
+import {
+  CONTACT_FILTERS,
+  contactLastHeard,
+  contactsNotHeardSince,
+  messagePreview,
+  STALE_PERIODS,
+  type ContactFilter,
+  type ContactSort,
+  type ContactView,
+} from '@meshcore-web/core/app';
 import { AppElement } from '../../app-context.js';
 import { formatRelative, formatSnr } from '../../format.js';
 import { hrefFor } from '../../router.js';
@@ -46,6 +59,44 @@ export class McContactsPage extends AppElement {
       .star-btn:hover {
         color: #f5b400;
       }
+      .select-bar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        margin-block-end: 12px;
+        padding: 8px 12px;
+        border: 1px solid var(--mc-border);
+        border-radius: var(--mc-radius);
+        background: var(--mc-accent-soft);
+      }
+      .select-bar .count {
+        font-weight: 600;
+        margin-inline-end: auto;
+      }
+      .select-bar .hint {
+        flex-basis: 100%;
+        font-size: 0.85rem;
+        color: var(--mc-text-muted);
+      }
+      label.row-link {
+        cursor: pointer;
+      }
+      label.row-link input {
+        flex: none;
+        width: 1.2rem;
+        height: 1.2rem;
+        margin: 0;
+      }
+      li[data-selected] {
+        background: var(--mc-accent-soft);
+      }
+      .bulk-names {
+        margin: 0;
+        padding-inline-start: 1.2em;
+        max-height: 10rem;
+        overflow: auto;
+      }
       .share-url {
         width: 100%;
         font-family: var(--mc-mono);
@@ -61,6 +112,96 @@ export class McContactsPage extends AppElement {
   #exportUrl = '';
   #exportName = '';
   #removeKey = '';
+  /** Selection mode for bulk delete; keys in #selected may include contacts hidden by the filter. */
+  #selecting = false;
+  #selected = new Set<string>();
+  #selectNote = '';
+  /** Bulk delete progress while removeMany runs. */
+  #deleting: { done: number; total: number } | null = null;
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    window.addEventListener('keydown', this.#onKey);
+  }
+
+  override disconnectedCallback(): void {
+    window.removeEventListener('keydown', this.#onKey);
+    super.disconnectedCallback();
+  }
+
+  #onKey = (e: KeyboardEvent): void => {
+    if (e.key !== 'Escape' || !this.#selecting || this.#deleting) return;
+    if (this.renderRoot.querySelector('dialog[open]')) return; // Esc closes the dialog first
+    this.#setSelecting(false);
+  };
+
+  #setSelecting(on: boolean): void {
+    this.#selecting = on;
+    this.#selected = new Set();
+    this.#selectNote = '';
+    this.requestUpdate();
+  }
+
+  #select(keys: Iterable<string>, note = ''): void {
+    this.#selected = new Set(keys);
+    this.#selectNote = note;
+    this.requestUpdate();
+  }
+
+  #toggle(key: string, on: boolean): void {
+    if (on) this.#selected.add(key);
+    else this.#selected.delete(key);
+    this.#selectNote = '';
+    this.requestUpdate();
+  }
+
+  #selectStale(e: Event): void {
+    const sel = e.target as HTMLSelectElement;
+    const period = STALE_PERIODS[Number(sel.value)];
+    sel.value = '';
+    if (!period) return;
+    const visible = this.app.contacts.visible.peek();
+    const stale = contactsNotHeardSince(visible, this.app.clock.now() - period.ms);
+    const favs = visible.filter((v) => v.favourite).length;
+    this.#select(
+      stale.map((v) => v.key),
+      `${stale.length} not heard in ${period.label}${favs ? ` · ${favs} favourite${favs === 1 ? '' : 's'} skipped` : ''}`,
+    );
+  }
+
+  /** Selected keys that still exist, in list order. */
+  #selectedViews(): ContactView[] {
+    return this.app.contacts.views.value.filter((v) => this.#selected.has(v.key));
+  }
+
+  async #confirmBulk(): Promise<void> {
+    const views = this.#selectedViews();
+    this.#dialog('bulk-dialog')?.close();
+    if (!views.length) return;
+    this.#deleting = { done: 0, total: views.length };
+    this.requestUpdate();
+    try {
+      const r = await this.app.contacts.removeMany(
+        views.map((v) => v.key),
+        {
+          onProgress: (done, total) => {
+            this.#deleting = { done, total };
+            this.requestUpdate();
+          },
+        },
+      );
+      if (r.removed.length) this.app.notifications.info(`Deleted ${r.removed.length} contact${r.removed.length === 1 ? '' : 's'}`);
+      if (r.failed.length) {
+        const names = r.failed.map((f) => views.find((v) => v.key === f.key)?.name ?? f.key.slice(0, 12)).join(', ');
+        this.app.notifications.error(`Could not delete ${r.failed.length}: ${names}`, r.failed[0]?.error);
+      }
+    } catch (err) {
+      this.app.notifications.error('Could not delete contacts', err);
+    } finally {
+      this.#deleting = null;
+      this.#setSelecting(false);
+    }
+  }
 
   #dialog(id: string): HTMLDialogElement | null {
     return this.renderRoot.querySelector<HTMLDialogElement>(`#${id}`);
@@ -169,24 +310,43 @@ export class McContactsPage extends AppElement {
   #row(v: ContactView) {
     const now = this.app.clock.now();
     const path = this.app.contacts.outPathLabel(v, this.app.appSettings.pathNames.value);
+    const heard = contactLastHeard(v);
     const meta = [
       path.label,
       v.directSnr !== undefined ? `direct SNR ${formatSnr(v.directSnr)}` : '',
-      v.lastSeen ? `seen ${formatRelative(v.lastSeen, now)}` : 'never seen',
+      heard ? `heard ${formatRelative(heard, now)}` : 'never heard',
     ].filter(Boolean);
+    const main = html`${avatar(v.typeName)}
+      <span class="row-main">
+        <span class="row-title">
+          <span class="name">${v.name}</span>
+          ${v.favourite && this.#selecting ? html`<span class="flags" title="Favourite">★</span>` : nothing}
+          ${!v.onDevice ? html`<span class="flags muted" title="Not on the radio">(not on radio)</span>` : nothing}
+          <span class="when">${v.lastActivity ? formatRelative(v.lastActivity, now) : ''}</span>
+        </span>
+        <span class="row-sub" data-field="meta" title=${path.title || nothing}>${meta.join(' · ')}</span>
+        ${v.lastMessage ? html`<span class="preview">${messagePreview(v.lastMessage)}</span>` : nothing}
+      </span>`;
+    if (this.#selecting) {
+      const on = this.#selected.has(v.key);
+      return html`<li data-contact=${v.key} data-type=${v.typeName} ?data-selected=${on}>
+        <label class="row-link">
+          <input
+            type="checkbox"
+            data-select=${v.key}
+            aria-label=${`Select ${v.name}`}
+            .checked=${on}
+            ?disabled=${!!this.#deleting}
+            @change=${(e: Event) => this.#toggle(v.key, (e.target as HTMLInputElement).checked)}
+          />
+          ${main}
+        </label>
+      </li>`;
+    }
     const menuId = `menu-${v.key}`;
     return html`<li data-contact=${v.key} data-type=${v.typeName}>
       <a class="row-link" href=${contactHref(v)}>
-        ${avatar(v.typeName)}
-        <span class="row-main">
-          <span class="row-title">
-            <span class="name">${v.name}</span>
-            ${!v.onDevice ? html`<span class="flags muted" title="Not on the radio">(not on radio)</span>` : nothing}
-            <span class="when">${v.lastActivity ? formatRelative(v.lastActivity, now) : ''}</span>
-          </span>
-          <span class="row-sub" data-field="meta" title=${path.title || nothing}>${meta.join(' · ')}</span>
-          ${v.lastMessage ? html`<span class="preview">${messagePreview(v.lastMessage)}</span>` : nothing}
-        </span>
+        ${main}
         ${unreadBadge(v.unread)}
       </a>
       <button
@@ -211,17 +371,57 @@ export class McContactsPage extends AppElement {
     </li>`;
   }
 
+  #selectBar(visible: readonly ContactView[], selected: readonly ContactView[]) {
+    const busy = this.#deleting;
+    const shown = new Set(visible.map((v) => v.key));
+    const hidden = selected.filter((v) => !shown.has(v.key)).length;
+    return html`<div class="select-bar" data-field="select-bar">
+      <span class="count" data-field="selected-count" role="status">
+        ${busy
+          ? `Deleting ${busy.done} / ${busy.total}…`
+          : html`${selected.length} selected${hidden ? html` <span class="muted">(${hidden} hidden by filter)</span>` : nothing}`}
+      </span>
+      <button data-action="select-all" ?disabled=${!!busy || !visible.length} @click=${() => this.#select(visible.map((v) => v.key))}>Select all</button>
+      <button data-action="select-none" ?disabled=${!!busy || !selected.length} @click=${() => this.#select([])}>Clear</button>
+      <select
+        data-field="stale"
+        aria-label="Select contacts not heard in a period"
+        title="Selects the listed contacts not heard from in the period (favourites are skipped)"
+        ?disabled=${!!busy || !visible.length}
+        @change=${(e: Event) => this.#selectStale(e)}
+      >
+        <option value="" selected>Not heard in…</option>
+        ${STALE_PERIODS.map((p, i) => html`<option value=${i}>${p.label}</option>`)}
+      </select>
+      <button
+        class="danger"
+        data-action="bulk-delete"
+        ?disabled=${!!busy || !selected.length}
+        @click=${() => this.#dialog('bulk-dialog')?.showModal()}
+      >
+        Delete ${selected.length || ''}
+      </button>
+      <button data-action="select-cancel" ?disabled=${!!busy} @click=${() => this.#setSelecting(false)}>Cancel</button>
+      <span class="hint" data-field="select-note">${this.#selectNote || 'Tap contacts to select them. “Not heard in…” skips favourites.'}</span>
+    </div>`;
+  }
+
   override render() {
     const m = this.app.contacts;
     const visible = m.visible.value;
     const total = m.views.value.length;
     const removing = this.#removeKey ? m.view(this.#removeKey) : undefined;
+    const selected = this.#selecting ? this.#selectedViews() : [];
     return html`
       <div class="page-head">
         <h2>Contacts <span class="muted" data-field="count">(${total})</span></h2>
-        <button data-action="refresh" ?disabled=${this.#busy} @click=${() => void this.#refresh()}>Refresh</button>
-        <button class="primary" data-action="add-contact" @click=${() => this.#openAdd()}>Add contact</button>
+        ${this.#selecting
+          ? nothing
+          : html`<button data-action="select-mode" ?disabled=${!total} @click=${() => this.#setSelecting(true)}>Select</button>
+              <button data-action="refresh" ?disabled=${this.#busy} @click=${() => void this.#refresh()}>Refresh</button>
+              <button class="primary" data-action="add-contact" @click=${() => this.#openAdd()}>Add contact</button>`}
       </div>
+      ${this.#selecting ? this.#selectBar(visible, selected) : nothing}
       <div class="toolbar" role="search">
         <input
           type="search"
@@ -270,6 +470,21 @@ export class McContactsPage extends AppElement {
           <div class="actions">
             <button type="button" @click=${() => void this.#copyExport()}>Copy</button>
             <button class="primary">Done</button>
+          </div>
+        </form>
+      </dialog>
+
+      <dialog id="bulk-dialog" aria-labelledby="bulk-h">
+        <form method="dialog">
+          <h3 id="bulk-h">Delete ${selected.length} contact${selected.length === 1 ? '' : 's'}?</h3>
+          <ul class="bulk-names" data-field="bulk-names">
+            ${selected.slice(0, 5).map((v) => html`<li>${v.name}</li>`)}
+            ${selected.length > 5 ? html`<li class="muted">and ${selected.length - 5} more</li>` : nothing}
+          </ul>
+          <p>They are removed from the radio and their messages are deleted from this browser.</p>
+          <div class="actions">
+            <button>Cancel</button>
+            <button type="button" class="danger" data-action="bulk-confirm" @click=${() => void this.#confirmBulk()}>Delete</button>
           </div>
         </form>
       </dialog>
