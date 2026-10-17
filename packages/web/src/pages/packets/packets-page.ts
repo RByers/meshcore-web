@@ -114,7 +114,7 @@ export class McPacketsPage extends AppElement {
         font-size: 0.8rem;
         color: var(--mc-text-muted);
       }
-      input,
+      input:not([type='checkbox'], [type='radio'], [type='range']),
       select {
         font: inherit;
         color: var(--mc-text);

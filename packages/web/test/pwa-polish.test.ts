@@ -25,16 +25,18 @@ function installEvent(outcome: 'accepted' | 'dismissed' = 'accepted') {
 }
 
 describe('install prompt', () => {
-  it('connect page shows "Install app" only after beforeinstallprompt, and prompts on click', async () => {
+  it('Settings shows "Install app" only after beforeinstallprompt, and prompts on click', async () => {
     const t = (h = createHarness());
     await t.mount();
-    await t.until(() => t.query('mc-connect-page'), 2000, 'connect page');
+    location.hash = '#/settings';
+    await t.until(() => t.query('mc-settings-page') && t.query('[data-section="app"]'), 2000, 'settings page');
     expect(t.query('[data-action="install"]')).toBeNull();
 
     const { e, prompt } = installEvent();
     window.dispatchEvent(e);
     expect(e.defaultPrevented).toBe(true);
     await t.until(() => t.query('[data-action="install"]'), 2000, 'install button');
+    expect(t.query('[data-section="install"]')).not.toBeNull();
     expect(t.query('[data-action="install"]')!.textContent).toContain('Install app');
 
     await t.click('[data-action="install"]');

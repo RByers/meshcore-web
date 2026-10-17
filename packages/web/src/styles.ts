@@ -91,6 +91,23 @@ export const shared = css`
     cursor: not-allowed;
     opacity: 0.55;
   }
+  /*
+   * Checkboxes and radios keep their intrinsic size (page rules give text-like inputs padding and
+   * a 2.5rem min-height); a label wrapping one lines the control up with its text.
+   */
+  input[type='checkbox'],
+  input[type='radio'] {
+    flex: none;
+    margin: 0;
+    min-height: 0;
+    padding: 0;
+  }
+  label:has(> input[type='checkbox'], > input[type='radio']) {
+    display: inline-flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.5em;
+  }
   .card {
     background: var(--mc-surface);
     border: 1px solid var(--mc-border);

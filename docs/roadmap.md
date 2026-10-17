@@ -138,7 +138,7 @@ is registered only in production builds (`import.meta.env.PROD`) as
 `./sw.js?v=<__BUILD_ID__>`; the build id is injected by vite `define`, so each deploy installs
 a new worker with a new cache (`meshcore-web-<build id>`) and old caches are deleted on
 activate. All paths are relative, so the build works from any base path. "Install app" on
-the Connect page appears only when Chromium fires `beforeinstallprompt`.
+the Settings page appears only when Chromium fires `beforeinstallprompt`.
 
 **Polish.** App-level error boundary (`packages/web/src/error-boundary.ts`: window `error` /
 `unhandledrejection` → deduplicated error toast + `console.error`), `prefers-reduced-motion`

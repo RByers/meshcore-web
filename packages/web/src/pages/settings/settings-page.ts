@@ -23,6 +23,7 @@ import {
 import { AppElement } from '../../app-context.js';
 import { APP_VERSION, BUILD_DATE, MESHCORE_FIRMWARE_URL, MESHCORE_URL, REPO_URL } from '../../build-info.js';
 import { batteryPercent } from '../../format.js';
+import { getInstallPrompt } from '../../pwa.js';
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
 
@@ -126,7 +127,7 @@ export class McSettingsPage extends AppElement {
         gap: 8px;
         align-items: center;
       }
-      input:not([type='checkbox'], [type='range']),
+      input:not([type='checkbox'], [type='radio'], [type='range']),
       select,
       textarea {
         font: inherit;
@@ -374,7 +375,7 @@ export class McSettingsPage extends AppElement {
               <h2>Radio settings</h2>
               <p><a href=${hrefFor('/')}>Connect a radio</a> to change its settings.</p>
             </section>`}
-        ${this.#appSection()}
+        ${this.#appSection()} ${this.#install()}
       </div>
       ${this.#about()}
       ${this.#renderDialog()}
@@ -1003,6 +1004,19 @@ export class McSettingsPage extends AppElement {
         >
         <p class="hint">Off by default. Turning it off deletes a stored key of the connected radio.</p>
       </form>
+    </section>`;
+  }
+
+  /** Shown only while the browser offers installation (`beforeinstallprompt`). */
+  #install() {
+    const install = getInstallPrompt();
+    if (!install.available.value) return nothing;
+    return html`<section class="card install" data-section="install" aria-labelledby="s-install">
+      <h2 id="s-install">Install app</h2>
+      <p class="hint">Install MeshCore Web to open it from your dock or home screen, in its own window; the app shell works offline.</p>
+      <div class="actions">
+        <button class="primary" data-action="install" @click=${() => void install.prompt()}>Install app</button>
+      </div>
     </section>`;
   }
 

@@ -2,8 +2,8 @@
  * PWA glue: service-worker registration (production builds only) and the install prompt.
  *
  * Chromium fires `beforeinstallprompt` when the app is installable; we keep the event and offer
- * an "Install app" button (connect page) that calls `prompt()`. The listener is attached when
- * this module is first imported, so an event fired before the connect page renders is not lost.
+ * an "Install app" button (Settings page) that calls `prompt()`. The listener is attached when
+ * this module is first imported, so an event fired before the Settings page renders is not lost.
  */
 import { computed, signal, type ReadonlySignal } from '@meshcore-web/core/app';
 import { BUILD_ID } from './build-info.js';

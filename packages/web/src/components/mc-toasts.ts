@@ -16,7 +16,7 @@ export class McToasts extends AppElement {
       .stack {
         /* the popover (top layer) keeps toasts above dialogs; reset UA popover styles */
         position: fixed;
-        inset: auto 16px 16px auto;
+        inset: auto calc(16px + env(safe-area-inset-right, 0px)) calc(16px + env(safe-area-inset-bottom, 0px)) auto;
         margin: 0;
         padding: 0;
         border: 0;
@@ -25,7 +25,7 @@ export class McToasts extends AppElement {
         display: flex;
         flex-direction: column;
         gap: 8px;
-        width: min(380px, calc(100vw - 32px));
+        width: min(380px, calc(100vw - 32px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)));
         pointer-events: none;
       }
       .toast {
@@ -71,7 +71,8 @@ export class McToasts extends AppElement {
       }
       @media (max-width: 640px) {
         .stack {
-          inset: 8px 8px auto 8px;
+          inset: calc(8px + env(safe-area-inset-top, 0px)) calc(8px + env(safe-area-inset-right, 0px)) auto
+            calc(8px + env(safe-area-inset-left, 0px));
           width: auto;
         }
       }

@@ -74,7 +74,7 @@ export const listStyles = css`
   .toolbar input[type='search'] {
     flex: 1 1 12rem;
   }
-  input,
+  input:not([type='checkbox'], [type='radio'], [type='range']),
   select,
   textarea {
     font: inherit;

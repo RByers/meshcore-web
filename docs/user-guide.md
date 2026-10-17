@@ -107,6 +107,9 @@ stored like any other radio, under the emulator's own key.
 or the radio resets, the app shows an error toast and returns to Connect; use
 **Reconnect** to resume. Your data stays in the browser.
 
+While a radio is connected, the Connect tab shows only that connection (name, transport)
+with a **Disconnect** button; disconnect first to connect to a different radio.
+
 ## Messaging and contacts
 
 - **Messages** lists recent direct messages and channels with unread counts.
@@ -215,7 +218,7 @@ distant path; the app runs one remote request at a time, as the firmware require
 ## Installing the app (PWA)
 
 In Chrome/Edge, when the site is installable an **Install app** button appears on the
-Connect page (you can also use the install icon in the address bar or the browser menu →
+Settings page (you can also use the install icon in the address bar or the browser menu →
 "Install MeshCore Web"). The installed app opens in its own window. After the first visit
 the app shell is cached by a service worker, so the app opens without a network
 connection; connecting a radio over USB/Bluetooth needs no internet either. Map tiles do

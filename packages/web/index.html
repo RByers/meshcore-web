@@ -2,10 +2,11 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="light dark" />
     <meta name="description" content="MeshCore companion radio client for the browser: messaging, channels, map, packet inspector and node admin over USB or Bluetooth." />
-    <meta name="theme-color" content="#0b63c9" />
+    <meta name="theme-color" data-scheme="light" content="#0b63c9" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" data-scheme="dark" content="#1b1f25" media="(prefers-color-scheme: dark)" />
     <title>MeshCore Web</title>
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="icon" href="./icon.svg" type="image/svg+xml" />
@@ -15,9 +16,12 @@
       :root {
         color-scheme: light dark;
       }
+      /* the themed background fills the whole window, including areas under system bars
+         (viewport-fit=cover); the shell pads its own UI with env(safe-area-inset-*) */
       html,
       body {
         margin: 0;
+        min-height: 100%;
         background: light-dark(#f6f7f9, #111418);
       }
       @media (prefers-reduced-motion: reduce) {

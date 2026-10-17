@@ -99,6 +99,25 @@ describe('connect flows', () => {
     expect(t.query('.chip')!.textContent).toContain('Disconnected');
   });
 
+  it('while connected the connect page shows only the current connection, with Disconnect', async () => {
+    const t = harness();
+    await t.mount();
+    await t.connectEmulator('/');
+    await t.until(() => t.query('[data-section="current"]'), 3000, 'current connection');
+    expect(t.query('[data-field="current-name"]')!.textContent).toBe('Emulator');
+    expect(t.query('[data-field="current-kind"]')!.textContent).toBe('Emulator');
+    expect(t.text()).toContain('Disconnect this radio to connect to a different one');
+    // no way to start another connection while connected
+    expect(t.queryAll('[data-connect]')).toEqual([]);
+    expect(t.queryAll('[data-reconnect]')).toEqual([]);
+
+    await t.click('[data-action="disconnect-current"]');
+    await t.until(() => t.app.connection.phase.value === 'disconnected', 3000, 'disconnected');
+    await t.until(() => t.query('[data-connect="emulator"]'), 3000, 'connect options back');
+    expect(t.query('[data-section="current"]')).toBeNull();
+    expect(t.query('[data-reconnect]')).not.toBeNull();
+  });
+
   it('connects via mocked Bluetooth', async () => {
     const t = harness();
     await t.mount();

@@ -55,7 +55,9 @@ export class McApp extends AppElement {
         display: flex;
         align-items: center;
         gap: 12px;
-        padding: 10px var(--mc-gap);
+        /* viewport-fit=cover (index.html): keep controls out of notches / system bars */
+        padding: calc(10px + env(safe-area-inset-top, 0px)) calc(var(--mc-gap) + env(safe-area-inset-right, 0px)) 10px
+          calc(var(--mc-gap) + env(safe-area-inset-left, 0px));
         background: var(--mc-surface);
         border-block-end: 1px solid var(--mc-border);
         position: sticky;
@@ -107,6 +109,8 @@ export class McApp extends AppElement {
         background: var(--mc-surface);
         border-inline-end: 1px solid var(--mc-border);
         padding: 8px;
+        padding-inline-start: calc(8px + env(safe-area-inset-left, 0px));
+        padding-block-end: calc(8px + env(safe-area-inset-bottom, 0px));
       }
       nav ul {
         list-style: none;
@@ -154,6 +158,8 @@ export class McApp extends AppElement {
       main {
         grid-area: main;
         padding: var(--mc-gap);
+        padding-inline-end: calc(var(--mc-gap) + env(safe-area-inset-right, 0px));
+        padding-block-end: calc(var(--mc-gap) + env(safe-area-inset-bottom, 0px));
         min-width: 0;
       }
       main:focus {
@@ -171,7 +177,12 @@ export class McApp extends AppElement {
           border-inline-end: 0;
           border-block-start: 1px solid var(--mc-border);
           padding: 4px;
-          padding-block-end: max(4px, env(safe-area-inset-bottom));
+          padding-inline: calc(4px + env(safe-area-inset-left, 0px)) calc(4px + env(safe-area-inset-right, 0px));
+          padding-block-end: max(4px, env(safe-area-inset-bottom, 0px));
+        }
+        main {
+          padding-inline-start: calc(var(--mc-gap) + env(safe-area-inset-left, 0px));
+          padding-block-end: var(--mc-gap);
         }
         nav ul {
           flex-direction: row;
@@ -203,7 +214,7 @@ export class McApp extends AppElement {
         }
         header.top {
           gap: 8px;
-          padding-inline: 12px;
+          padding-inline: calc(12px + env(safe-area-inset-left, 0px)) calc(12px + env(safe-area-inset-right, 0px));
         }
         header.top button {
           padding-inline: 0.75em;
