@@ -1,6 +1,6 @@
 ---
 name: fix-issues
-description: Triage a batch of GitHub issues from trusted authors for this repo and land fixes for them, one issue per commit (split complex issues into several), using parallel subagents in worktrees. Use when asked to "fix the open issues", "work through issues by <author>", "land fixes for #N #M", or to review an issue list and fix what's appropriate.
+description: Triage a batch of GitHub issues from trusted authors for this repo and land fixes for them, one issue per commit (split complex issues into several), using one fresh subagent per issue in its own worktree. Use when asked to "fix the open issues", "work through issues by <author>", "land fixes for #N #M", or to review an issue list and fix what's appropriate.
 ---
 
 # Fixing a batch of GitHub issues
@@ -55,16 +55,23 @@ For each issue decide one of:
   Such a commit uses `Refs #N`, not `Fixes #N`, unless a real bug was fixed.
 - **Defer** — speculative or underspecified. Leave it; note it in the final report.
 
-Then **group issues into agents by the code they touch**, not by theme:
+**One subagent per issue, never reused.** Spawn a fresh agent for each issue and never send a
+finished agent a second issue (or a second unrelated task): it carries the first issue's
+assumptions and half-read files into the next one, and its worktree branch then mixes two
+issues. A follow-up message to an agent is only for *its own* issue (split your commit, rebase,
+fix a test). Integration/rebase work gets its own fresh agent too.
 
-- Pure CSS / shell / PWA issues → one agent (cheap, no conflicts).
-- Issues that all edit the same page (chat bubble, contact info, packet log) → one agent, or
-  run them in sequence. Two agents editing `chat-page.ts` concurrently cost more in rebasing
-  than they saved in parallelism.
+Then **schedule the agents by the code they touch**, not by theme:
+
+- Issues that touch disjoint code (CSS/shell/PWA vs. packet log vs. SMAZ codec) can run in
+  parallel.
+- Issues that all edit the same page (chat bubble, contact info, packet log) run **in sequence**:
+  land one, then spawn the next from the updated `main`. Two agents editing `chat-page.ts`
+  concurrently cost more in rebasing than they saved in parallelism.
 - Features that need a shared helper (path hash → contact name, hop geometry) → **name one
-  owner and one file** in every brief. Two agents independently wrote a hash resolver and a
-  third wrote a `PathsModel` that collided with another's `app.paths`; unifying them later cost
-  a whole extra agent run.
+  owner and one file** in every brief, and land the owner first. Two agents independently wrote
+  a hash resolver and a third wrote a `PathsModel` that collided with another's `app.paths`;
+  unifying them later cost a whole extra agent run.
 
 For interop features (compression, reactions, paths), the brief must point at the exact
 MeshCore Open files under `.ref/meshcore-open/lib` and demand byte-/string-exact vectors read
@@ -73,7 +80,7 @@ from the Dart source. The repo is https://github.com/zjs81/meshcore-open.
 ## 3. The agent brief (copy, then fill in)
 
 Every brief to a fixing agent (`subagent_type: general-purpose`, `model: opus`,
-`isolation: worktree`) must contain:
+`isolation: worktree`, one agent per issue) must contain:
 
 1. **Setup**: `ln -s <main-checkout>/.ref .ref` (gitignored dir; the symlink shows as untracked —
    never commit it), `npm ci`, `git rebase main` (worktrees fork from `origin/main`, which is
