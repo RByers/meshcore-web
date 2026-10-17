@@ -124,17 +124,21 @@ describe('/packets Stats tab', () => {
     // one packet logged two hours ago: inside "All", outside "Last hour"
     const store = t.app.connection.store.value!;
     const old = buildPacket({ routeType: RouteType.FLOOD, payloadType: PayloadType.ACK, path: new Uint8Array(0), payload: new Uint8Array(4).fill(7) });
-    await store.packets.append({ direction: 'rx', bytes: old, ts: t.clock.now() - 2 * 3_600_000, source: 'logRxData', snr: 4, rssi: -95 });
+    const oldTs = t.clock.now() - 2 * 3_600_000;
+    await store.packets.append({ direction: 'rx', bytes: old, ts: oldTs, source: 'logRxData', snr: 4, rssi: -95 });
+    // other emulator traffic may still be landing, so check the old packet itself rather than comparing two totals
+    const stats = t.app.packetStats;
+    const hasOld = () => stats.points.value.some((p) => p.ts === oldTs);
+    await t.until(hasOld, 3000, 'old packet counted');
     await settle(t, el);
-    const all = Number(tileValue(t, 'packets'));
-    expect(all).toBe(t.app.packetStats.summary.value.packets);
+    expect(Number(tileValue(t, 'packets'))).toBe(stats.summary.value.packets);
 
     await t.click('[data-preset="1h"]');
-    await t.until(() => t.app.packetStats.range.value.from !== null, 3000, 'range set');
+    await t.until(() => stats.range.value.from !== null, 3000, 'range set');
     await settle(t, el);
-    const hour = Number(tileValue(t, 'packets'));
-    expect(hour).toBeLessThan(all);
-    expect(hour).toBe(t.app.packetStats.summary.value.packets);
+    expect(hasOld()).toBe(false);
+    expect(stats.points.value.length).toBeGreaterThan(0);
+    expect(Number(tileValue(t, 'packets'))).toBe(stats.summary.value.packets);
   });
 });
 
