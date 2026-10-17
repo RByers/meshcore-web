@@ -8,8 +8,12 @@
  *
  * Hovering / focusing a tree node highlights its bytes (`.hl` on the cells); clicking selects it
  * (`.sel`). Hovering or clicking a byte targets the deepest annotation node covering it.
- * Hovering or focusing a field (tree row or byte) shows a tooltip with the field's `description`
- * from the protocol docs (`[data-tooltip]`, a manual popover; Escape or leaving hides it).
+ * Hovering or focusing a field (tree row or byte) shows a hover card with the field's `description`
+ * from the protocol docs (`[data-tooltip]`, a manual popover; Escape or leaving hides it). When a
+ * node has a `valueDescription` (enumerated and flag fields), hovering its value part
+ * (`[data-part="value"]`: the value and meaning spans) instead shows what that specific value
+ * means, anchored to the value span, which is then also focusable so keyboard users can reach
+ * that card. Describable names and values get a dotted underline.
  * Data hooks: `[data-byte="<offset>"]` (hex cells), `[data-ascii="<offset>"]`,
  * `[data-node="<path>"]` / `[data-name]` (tree rows), `[data-action="copy-hex|copy-json"]`.
  */
@@ -61,6 +65,12 @@ function printable(b: number): string {
   return b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : '·';
 }
 
+/** Which hover card is shown: a node's field description, or what its current value means. */
+export interface InspectorTip {
+  id: string;
+  part: 'field' | 'value';
+}
+
 export class McPacketInspector extends LitElement {
   static override properties = {
     annotation: { attribute: false },
@@ -82,10 +92,10 @@ export class McPacketInspector extends LitElement {
   declare hovered: string | null;
   declare selected: string | null;
   declare copied: string;
-  /** Node id whose description tooltip is shown. */
-  declare tip: string | null;
+  /** Node (and which part of it) whose hover card is shown. */
+  declare tip: InspectorTip | null;
   #index = new Map<string, Indexed>();
-  #tipAnchor: Element | null = null;
+  #tipAnchor: Element[] = [];
   #hideTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor() {
@@ -294,7 +304,8 @@ export class McPacketInspector extends LitElement {
         font-size: 0.8rem;
         color: var(--mc-ok);
       }
-      .node.described .name {
+      .node.described .name,
+      .node .value.value-described {
         text-decoration: underline dotted var(--mc-text-muted);
         text-underline-offset: 3px;
       }
@@ -345,13 +356,16 @@ export class McPacketInspector extends LitElement {
     const el = this.renderRoot.querySelector<HTMLElement>('[data-tooltip]');
     if (!el) return;
     const open = el.matches(':popover-open');
-    if (!this.tip || !this.#tipAnchor?.isConnected) {
+    const anchors = this.#tipAnchor;
+    if (!this.tip || !anchors.length || !anchors.every((a) => a.isConnected)) {
       if (open) el.hidePopover();
       return;
     }
     if (!open) el.showPopover();
-    // Below the anchor, or above it when there is no room; kept inside the viewport.
-    const r = this.#tipAnchor.getBoundingClientRect();
+    // Below the anchors (aligned with the first), or above them when there is no room; kept inside
+    // the viewport. Spanning all anchors keeps a value card off the meaning line under the value.
+    const rects = anchors.map((a) => a.getBoundingClientRect());
+    const r = { left: rects[0]!.left, top: Math.min(...rects.map((x) => x.top)), bottom: Math.max(...rects.map((x) => x.bottom)) };
     const t = el.getBoundingClientRect();
     const gap = 6;
     let top = r.bottom + gap;
@@ -361,15 +375,21 @@ export class McPacketInspector extends LitElement {
     el.style.left = `${left}px`;
   }
 
-  /** Shows the description of node `id` next to `anchor` (if it has one). */
-  #showTip(id: string | null, anchor: Element): void {
+  /**
+   * Shows a card for node `id` next to `anchor` (one element or several): what its current value
+   * means (`part` 'value', needs a `valueDescription`) or the field's `description` ('field');
+   * hides it if there is nothing to say.
+   */
+  #showTip(id: string | null, anchor: Element | Element[], part: InspectorTip['part'] = 'field'): void {
     clearTimeout(this.#hideTimer);
-    if (!id || !this.#index.get(id)?.node.description) {
+    const n = id ? this.#index.get(id)?.node : undefined;
+    if (!id || !(part === 'value' ? n?.valueDescription : n?.description)) {
       this.#hideTip();
       return;
     }
-    this.#tipAnchor = anchor;
-    this.tip = id;
+    this.#tipAnchor = Array.isArray(anchor) ? anchor : [anchor];
+    if (this.tip?.id !== id || this.tip.part !== part) this.tip = { id, part };
+    else this.requestUpdate(); // same card, possibly a new anchor: reposition it
   }
 
   /** Hides after a short grace period so the pointer can move onto the tooltip. */
@@ -381,7 +401,7 @@ export class McPacketInspector extends LitElement {
   #hideTip(): void {
     clearTimeout(this.#hideTimer);
     this.tip = null;
-    this.#tipAnchor = null;
+    this.#tipAnchor = [];
   }
 
   #rangeLabel(n: AnnotationNode): string {
@@ -389,7 +409,8 @@ export class McPacketInspector extends LitElement {
   }
 
   #tooltip(): TemplateResult {
-    const n = this.tip ? this.#index.get(this.tip)?.node : undefined;
+    const n = this.tip ? this.#index.get(this.tip.id)?.node : undefined;
+    const value = this.tip?.part === 'value';
     return html`<div
       data-tooltip
       id="tip"
@@ -399,8 +420,10 @@ export class McPacketInspector extends LitElement {
       @mouseleave=${() => this.#leaveTip()}
     >
       ${n
-        ? html`<div class="tip-head"><strong>${n.name}</strong><span class="range">${this.#rangeLabel(n)}</span></div>
-            ${(n.description ?? '').split('\n\n').map((para) => html`<p>${para}</p>`)}`
+        ? html`<div class="tip-head" data-part=${value ? 'value' : 'field'}>
+              <strong>${value ? `${n.name} = ${n.meaning ?? n.value}` : n.name}</strong><span class="range">${this.#rangeLabel(n)}</span>
+            </div>
+            ${((value ? n.valueDescription : n.description) ?? '').split('\n\n').map((para) => html`<p>${para}</p>`)}`
         : nothing}
     </div>`;
   }
@@ -505,13 +528,31 @@ export class McPacketInspector extends LitElement {
     const isHl = !isSel && this.hovered === id;
     const kids = n.children ?? [];
     const range = this.#rangeLabel(n);
+    const tipPart = this.tip?.id === id ? this.tip.part : null;
+    const vd = !!n.valueDescription;
+    const rowOf = (el: Element): Element => el.closest('.node') ?? el;
+    // The value and meaning spans form the value part; its card is anchored to them (aligned with
+    // the value, below the meaning line so it never covers it).
+    const enterValue = (e: Event): void => {
+      if (!vd) return; // no value card: the row's field card stays
+      const r = rowOf(e.currentTarget as Element);
+      const parts = [...r.querySelectorAll(':scope > [data-part="value"]')];
+      this.#showTip(id, parts.length ? parts : r, 'value');
+    };
+    const leaveValue = (e: MouseEvent): void => {
+      if (!vd) return;
+      const to = e.relatedTarget instanceof Element ? e.relatedTarget : null;
+      const r = rowOf(e.currentTarget as Element);
+      // still in the row but off the value part: back to the field card (leaving the row is the row's job)
+      if (to && r.contains(to) && !to.closest('[data-part="value"]')) this.#showTip(id, r);
+    };
     return html`<li role="treeitem" aria-selected=${isSel ? 'true' : 'false'} aria-expanded=${kids.length ? 'true' : nothing}>
       <div
         class="node ${isSel ? 'sel' : ''} ${isHl ? 'hl' : ''} ${n.decrypted ? 'decrypted' : ''} ${n.description ? 'described' : ''}"
         data-node=${id}
         data-name=${n.name}
         tabindex="0"
-        aria-describedby=${this.tip === id ? 'tip' : nothing}
+        aria-describedby=${tipPart === 'field' ? 'tip' : nothing}
         @mouseenter=${(e: Event) => {
           this.hovered = id;
           this.#showTip(id, e.currentTarget as Element);
@@ -539,9 +580,22 @@ export class McPacketInspector extends LitElement {
         <span class="name">${n.name}</span>
         <span class="range">${range}</span>
         ${n.bits && parent ? this.#bits(parent, n) : nothing}
-        <span class="value">${n.value}</span>
+        <span
+          class="value ${vd ? 'value-described' : ''}"
+          data-part="value"
+          tabindex=${vd ? '0' : nothing}
+          aria-describedby=${tipPart === 'value' ? 'tip' : nothing}
+          @mouseenter=${enterValue}
+          @mouseleave=${leaveValue}
+          @focus=${(e: Event) => {
+            this.hovered = id;
+            enterValue(e);
+          }}
+          @blur=${() => this.#leaveTip()}
+          >${n.value}</span
+        >
         ${n.decrypted ? html`<span class="badge" title="decrypted plaintext">decrypted</span>` : nothing}
-        ${n.meaning ? html`<span class="meaning">${n.meaning}</span>` : nothing}
+        ${n.meaning ? html`<span class="meaning" data-part="value" @mouseenter=${enterValue} @mouseleave=${leaveValue}>${n.meaning}</span>` : nothing}
       </div>
       ${kids.length ? html`<ul role="group">${kids.map((c, i) => this.#node(c, `${id}.${i}`, n))}</ul>` : nothing}
     </li>`;

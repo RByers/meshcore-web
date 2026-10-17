@@ -33,6 +33,11 @@ export interface AnnotationNode {
   meaning?: string;
   /** What the field is, from the protocol docs (shown as a tooltip by the inspector). */
   description?: string;
+  /**
+   * What the specific value this node holds means (e.g. exactly how a FLOOD route type is handled),
+   * as opposed to `description`, which explains the field in general. Shown when hovering the value.
+   */
+  valueDescription?: string;
   children?: AnnotationNode[];
   /** This node describes decrypted plaintext (positions map 1:1 onto the ciphertext bytes). */
   decrypted?: true;
@@ -208,7 +213,12 @@ async function runPending(pending: Pending[], ann: Annotation): Promise<void> {
 }
 
 function describedPacket(ann: Annotation, bytes: Uint8Array): Annotation {
-  describePacketTree(ann, bytes.length ? (bytes[0]! >> 2) & 0x0f : undefined, false);
+  describePacketTree(
+    ann,
+    bytes.length ? (bytes[0]! >> 2) & 0x0f : undefined,
+    false,
+    bytes.length ? bytes[0]! & PH_ROUTE_MASK : undefined,
+  );
   return ann;
 }
 

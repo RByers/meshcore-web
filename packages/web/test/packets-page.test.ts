@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { page } from 'vitest/browser';
+import { page, userEvent } from 'vitest/browser';
+import type { AnnotationNode } from '@meshcore-web/core/packet';
 import '../src/mc-app.js';
 import '../src/pages/packets/index.js';
 import { createHarness, type Harness } from '../src/testing/harness.js';
@@ -226,6 +227,85 @@ describe('/packets page', () => {
     t.query('[data-name="code"]')!.dispatchEvent(new MouseEvent('mouseenter'));
     await finsp.updateComplete;
     expect(finsp.shadowRoot!.querySelector('[data-tooltip]')!.textContent).toContain('APP_START: Starts the app session');
+  });
+
+  it('hovering a value shows what that specific value means', async () => {
+    const t = await openLog();
+    await traffic(t);
+    const id = t.query('tr[data-type="GRP_TXT"]')!.dataset['packetId']!;
+    await t.click(`tr[data-packet-id="${id}"]`);
+    await t.until(() => t.query('[data-byte="0"]'), 3000, 'inspector');
+    const insp = t.query<McPacketInspector>('aside mc-packet-inspector')!;
+    const tip = (): HTMLElement => insp.shadowRoot!.querySelector<HTMLElement>('[data-tooltip]')!;
+    const find = (name: string): AnnotationNode => {
+      const walk = (n: AnnotationNode): AnnotationNode | undefined => (n.name === name ? n : (n.children ?? []).map(walk).find(Boolean));
+      return walk(insp.annotation!)!;
+    };
+    const rt = find('route type');
+    expect(rt.meaning).toBe('FLOOD');
+    const valueText = rt.valueDescription!.split('\n\n')[0]!;
+    const fieldText = rt.description!.split('\n\n')[0]!;
+    expect(valueText).not.toBe(fieldText);
+
+    const row = t.query('[data-name="route type"]')!;
+    const name = row.querySelector('.name')!;
+    const value = row.querySelector<HTMLElement>('.value')!;
+    const meaning = row.querySelector('.meaning')!;
+    // describable values get the dotted underline, as described names do
+    expect(getComputedStyle(value).textDecorationStyle).toBe('dotted');
+    expect(value.tabIndex).toBe(0);
+
+    // the name shows the general field card, anchored to the row
+    await userEvent.hover(name);
+    await t.until(() => tip().matches(':popover-open') && tip().textContent!.includes(fieldText), 2000, 'field card');
+    expect(tip().textContent).not.toContain(valueText);
+    expect(row.getAttribute('aria-describedby')).toBe('tip');
+
+    // the value (or its meaning) shows the FLOOD card, anchored to the value
+    await userEvent.hover(value);
+    await t.until(() => tip().textContent!.includes(valueText), 2000, 'value card');
+    expect(tip().querySelector('.tip-head')!.textContent).toContain('route type = FLOOD');
+    expect(tip().textContent).not.toContain(fieldText);
+    expect(value.getAttribute('aria-describedby')).toBe('tip');
+    expect(row.hasAttribute('aria-describedby')).toBe(false);
+    // aligned with the value (or shifted left to fit the viewport), clear of the meaning line below it
+    const vr = value.getBoundingClientRect();
+    const mr = meaning.getBoundingClientRect();
+    const tr = tip().getBoundingClientRect();
+    expect(tr.left).toBeLessThanOrEqual(vr.left + 1);
+    expect(tr.right).toBeGreaterThan(vr.left);
+    expect(Math.abs(tr.top - mr.bottom) < 20 || Math.abs(tr.bottom - vr.top) < 20).toBe(true);
+    await userEvent.hover(meaning);
+    await insp.updateComplete;
+    expect(tip().textContent).toContain(valueText);
+
+    // back onto the name switches to the field card
+    await userEvent.hover(name);
+    await t.until(() => tip().textContent!.includes(fieldText), 2000, 'field card again');
+    expect(value.hasAttribute('aria-describedby')).toBe(false);
+
+    // a field without a valueDescription falls back to its field card on the value
+    const ch = find('channel_hash');
+    expect(ch.valueDescription).toBeUndefined();
+    const chRow = t.query('[data-name="channel_hash"]')!;
+    const chValue = chRow.querySelector<HTMLElement>('.value')!;
+    expect(chValue.hasAttribute('tabindex')).toBe(false);
+    await userEvent.hover(chValue);
+    await t.until(() => tip().textContent!.includes('SHA256(channel PSK)'), 2000, 'channel_hash field card');
+    expect(chRow.getAttribute('aria-describedby')).toBe('tip');
+
+    // keyboard: the row shows the field card, the focusable value its value card; Enter still selects
+    row.focus();
+    await t.until(() => tip().textContent!.includes(fieldText), 2000, 'focused row');
+    value.focus();
+    await t.until(() => tip().textContent!.includes(valueText), 2000, 'focused value');
+    value.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, composed: true }));
+    await insp.updateComplete;
+    expect(row.classList.contains('sel')).toBe(true);
+
+    // hovering a byte still shows the field card
+    t.query('[data-byte="0"]')!.dispatchEvent(new MouseEvent('mouseenter'));
+    await t.until(() => tip().textContent!.includes('route type (bits 0-1)'), 2000, 'byte card');
   });
 
   it('frames tab shows the handshake frames and inspects them', async () => {

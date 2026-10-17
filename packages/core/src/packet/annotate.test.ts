@@ -221,8 +221,8 @@ describe('annotatePacket — every field has a description (docs/mesh-packet-for
   it('header bits describe the selected route and payload type', async () => {
     const ann = await annotatePacket(await fixtures['TXT_MSG direct 2-byte path']!());
     const header = find(ann, 'header')!;
-    expect(header.children![0]!.description).toContain('DIRECT (2): follows the path');
-    expect(header.children![1]!.description).toContain('TXT_MSG (2)');
+    expect(header.children![0]!.valueDescription).toMatch(/^DIRECT \(2\): source-routed/);
+    expect(header.children![1]!.valueDescription).toMatch(/^TXT_MSG \(2\)/);
     expect(find(ann, 'payload')!.description).toMatch(/^TXT_MSG \(2\)/);
   });
 

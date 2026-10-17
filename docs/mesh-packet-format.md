@@ -235,7 +235,7 @@ Plaintext: `[timestamp u32][flags u8 = 0 (txt_type<<2; receivers drop if >>2 ≠
 
 ### 3.7 GRP_DATA (0x06)
 
-Same envelope as GRP_TXT. Plaintext: `[data_type u16][data_len u8][data (data_len bytes)][padding]` (`BCM sendGroupData` L539, `onGroupDataRecv` L431-448). data_type 0 is reserved/invalid, 0xFFFF is dev, 0xFF00-0xFFFE are testing, and the registry is in docs/number_allocations.md. Max data 165 bytes.
+Same envelope as GRP_TXT. Plaintext: `[data_type u16][data_len u8][data (data_len bytes)][padding]` (`BCM sendGroupData` L539, `onGroupDataRecv` L431-448). data_type 0 is reserved/invalid (`DATA_TYPE_RESERVED`; companions refuse to send it), 0x0001-0x00FF are reserved for internal use, 0x0100-0xFEFF are custom apps assigned in the registry (docs/number_allocations.md), 0xFF00-0xFFFE are testing and 0xFFFF is dev (`DATA_TYPE_DEV`). Max data 165 bytes.
 
 ### 3.8 ANON_REQ (0x07) — `Mesh::createAnonDatagram` L512, `Mesh.cpp` L197-224
 

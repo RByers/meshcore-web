@@ -12,18 +12,30 @@
 import type { AnnotationNode } from './annotate.js';
 import { PayloadType, payloadTypeName, RouteType } from './constants.js';
 
-export type FieldDoc = string | ((node: AnnotationNode) => string | undefined);
+/** Packet-level facts a doc may depend on (e.g. what a hop count means depends on the route). */
+export interface DocContext {
+  /** Route type from the packet header; undefined for bare payloads. */
+  routeType?: number;
+}
+
+export type FieldDoc = string | ((node: AnnotationNode, ctx: DocContext) => string | undefined);
 export type FieldDocTable = Readonly<Record<string, FieldDoc>>;
+
+export interface DescribeOptions {
+  /** Value docs: explain the specific value a node holds (sets `valueDescription`). Same keys as the field table. */
+  values?: FieldDocTable;
+  ctx?: DocContext;
+}
 
 function normName(name: string): string {
   return name.replace(/\s*\(truncated\)$/, '').replace(/\[\d+\]/g, '[]');
 }
 
-function lookup(table: FieldDocTable, scope: string, chain: readonly string[], node: AnnotationNode): string | undefined {
+function lookup(table: FieldDocTable, scope: string, chain: readonly string[], node: AnnotationNode, ctx: DocContext): string | undefined {
   for (let i = 0; i < chain.length; i++) {
     const key = chain.slice(i).join('/');
     for (const doc of [table[`${scope}:${key}`], table[`*:${key}`]]) {
-      const d = typeof doc === 'function' ? doc(node) : doc;
+      const d = typeof doc === 'function' ? doc(node, ctx) : doc;
       if (d) return d;
     }
   }
@@ -31,17 +43,28 @@ function lookup(table: FieldDocTable, scope: string, chain: readonly string[], n
 }
 
 /**
- * Sets `description` on `nodes` and their descendants that do not have one yet. `chain` is the
- * name path of the parent within `scope`.
+ * Sets `description` (from `table`) and `valueDescription` (from `opts.values`) on `nodes` and
+ * their descendants that do not have one yet. `chain` is the name path of the parent within `scope`.
  */
-export function describeNodes(nodes: readonly AnnotationNode[], scope: string, table: FieldDocTable, chain: readonly string[] = []): void {
+export function describeNodes(
+  nodes: readonly AnnotationNode[],
+  scope: string,
+  table: FieldDocTable,
+  opts: DescribeOptions = {},
+  chain: readonly string[] = [],
+): void {
+  const ctx = opts.ctx ?? {};
   for (const n of nodes) {
     const c = [...chain, normName(n.name)];
     if (n.description === undefined) {
-      const d = lookup(table, scope, c, n);
+      const d = lookup(table, scope, c, n, ctx);
       if (d) n.description = d;
     }
-    if (n.children) describeNodes(n.children, scope, table, c);
+    if (opts.values && n.valueDescription === undefined) {
+      const d = lookup(opts.values, scope, c, n, ctx);
+      if (d) n.valueDescription = d;
+    }
+    if (n.children) describeNodes(n.children, scope, table, opts, c);
   }
 }
 
@@ -84,10 +107,14 @@ export function payloadTypeDescription(type: number): string | undefined {
 }
 
 const ROUTE_PURPOSE: Record<number, string> = {
-  [RouteType.TRANSPORT_FLOOD]: 'TRANSPORT_FLOOD (0): flooded and scoped to a region with transport codes.',
-  [RouteType.FLOOD]: 'FLOOD (1): every repeater retransmits it once, appending its own hash to the path.',
-  [RouteType.DIRECT]: 'DIRECT (2): follows the path; each hop removes itself from the front. Path length 0 = zero-hop.',
-  [RouteType.TRANSPORT_DIRECT]: 'TRANSPORT_DIRECT (3): direct-routed with transport codes.',
+  [RouteType.TRANSPORT_FLOOD]:
+    'TRANSPORT_FLOOD (0): a flood scoped to a region. The 4 transport-code bytes follow the header. A repeater forwards it like a FLOOD (once, appending its own hash to the path) only if transport_code[0] matches a region it allows; a code of 0 counts as the wildcard region "*". Repeaters that do not recognise the code drop it, so the flood stays inside the region. Companions send floods this way when a flood scope is set. §1.2, §5',
+  [RouteType.FLOOD]:
+    'FLOOD (1): an unscoped flood, used when the sender has no known route (adverts, channel messages, first contact). Every repeater that hears it for the first time retransmits it once (if it allows unscoped floods and the hop limit is not reached), appending its own hash to the path. The path is therefore the route taken so far, oldest first, and grows by one entry per hop. Copies arriving by other routes have the same packet hash and are dropped as duplicates. §1.3',
+  [RouteType.DIRECT]:
+    'DIRECT (2): source-routed along a known route (the out_path learned from an earlier PATH reply). The path lists the repeaters still to traverse, next hop first. Only the repeater whose hash matches path[0] forwards it, removing itself from the front; every other repeater ignores it. With an empty path (0 hops) it is zero-hop: only nodes in direct radio range receive it and nobody forwards it. §1.3',
+  [RouteType.TRANSPORT_DIRECT]:
+    'TRANSPORT_DIRECT (3): routed like DIRECT (the path is the hops still to travel; each forwarder removes itself), but with transport codes after the header. Repeaters route it by the path, not by region. A zero-hop TRANSPORT_DIRECT advert with codes {0,0} is a "Share contact" re-broadcast, which receivers must not treat as having heard the node directly. §1.2',
 };
 
 /** Number in a node's value ("12", "0x0c"), or NaN. */
@@ -122,10 +149,10 @@ export const PACKET_FIELD_DOCS: FieldDocTable = {
   // ---- envelope §1 ----
   'env:header':
     'Header byte: route type (bits 0-1), payload type (bits 2-5) and payload version (bits 6-7). §1.1',
-  'env:header/route type': (n) =>
-    `How the packet travels: 0 TRANSPORT_FLOOD, 1 FLOOD, 2 DIRECT, 3 TRANSPORT_DIRECT. ${ROUTE_PURPOSE[num(n)] ?? ''} §1.1`,
-  'env:header/payload type': (n) =>
-    `What the payload is (0-11, 15; 12-14 reserved). ${PAYLOAD_PURPOSE[num(n)] ?? 'Reserved type: the firmware has no handler for it.'}`,
+  'env:header/route type':
+    'How the packet travels: 0 TRANSPORT_FLOOD (region-scoped flood), 1 FLOOD (flooded by every repeater), 2 DIRECT (follows the path), 3 TRANSPORT_DIRECT (direct with transport codes). Floods build up the path; direct packets consume it. §1.1',
+  'env:header/payload type':
+    'What the payload is: 0 REQ, 1 RESPONSE, 2 TXT_MSG, 3 ACK, 4 ADVERT, 5 GRP_TXT, 6 GRP_DATA, 7 ANON_REQ, 8 PATH, 9 TRACE, 10 MULTIPART, 11 CONTROL, 15 RAW_CUSTOM; 12-14 are reserved. §1.1',
   'env:header/payload version':
     'Payload format version. 0 = v1 (1-byte src/dest hashes, 2-byte MAC); 1-3 are reserved and the firmware drops such packets. §1.1',
   'env:transport codes':
@@ -225,7 +252,7 @@ export const PACKET_FIELD_DOCS: FieldDocTable = {
   'GRP_TXT:ciphertext/flags/attempt': 'Low 2 bits of the send attempt. §3.6',
   'GRP_TXT:ciphertext/text':
     'UTF-8 "<sender name>: <message>". The sender name is just text and is not authenticated: anyone with the PSK can claim any name. §3.6',
-  'GRP_DATA:ciphertext/data_type': 'Datagram type (u16): 0 reserved/invalid, 0xFF00-0xFFFE testing, 0xFFFF dev; others from the number registry. §3.7',
+  'GRP_DATA:ciphertext/data_type': 'Datagram type (u16) naming the application: 0 invalid, 0x0001-0x00FF internal, 0x0100-0xFEFF registered apps, 0xFF00-0xFFFE testing, 0xFFFF dev. §3.7',
   'GRP_DATA:ciphertext/data_len': 'Length of data (max 165). §3.7',
   'GRP_DATA:ciphertext/data': 'Application datagram bytes. §3.7',
 
@@ -267,15 +294,218 @@ export const PACKET_FIELD_DOCS: FieldDocTable = {
   'RAW_CUSTOM:data': 'Opaque application bytes. §3.13',
 };
 
+// ---------------------------------------------------------------------------
+// Value docs: what the specific value of an enumerated / flag field means
+// ---------------------------------------------------------------------------
+
+const NODE_TYPE_VALUE: Record<number, string> = {
+  0: 'NONE (0): no node type. Real nodes never advertise it; companions use it internally for temporary contacts (e.g. an ANON_REQ sender).',
+  1: 'CHAT (1): a companion (chat) node, i.e. a person using a phone or client app. It sends and receives messages but does not repeat by default.',
+  2: 'REPEATER (2): a repeater. It forwards flood and direct traffic for others and can be logged into for status, telemetry, neighbours and remote admin.',
+  3: 'ROOM (3): a room server, a shared message board. Logged-in members post with TXT_MSG and it relays each post to the others as SIGNED_PLAIN messages.',
+  4: 'SENSOR (4): a sensor node. It serves telemetry (current readings and min/max/average) and supports subscriptions for pushed readings.',
+};
+
+function nodeTypeValue(v: number): string {
+  return NODE_TYPE_VALUE[v] ?? `${v}: reserved for future node types; current firmware has no special handling for it.`;
+}
+
+const TXT_TYPE_VALUE: Record<number, string> = {
+  0: 'PLAIN (0): an ordinary text message. The recipient shows it and ACKs it, so the sender can mark it delivered. §3.3',
+  1: 'CLI_DATA (1): a remote-CLI command to a repeater / room server (admin login required) or the text of its reply. Not ACKed. §3.3',
+  2: "SIGNED_PLAIN (2): a room-server post relayed to a member. A 4-byte prefix of the original author's public key follows the flags, and the ACK is computed with the receiver's public key. §3.3, §3.4",
+  3: 'CLI_COMMAND (3): an explicit remote-CLI command. Not ACKed. §3.3',
+};
+
+function attemptValue(n: AnnotationNode): string | undefined {
+  const v = num(n);
+  if (!Number.isInteger(v)) return undefined;
+  const which = v === 0 ? 'The first transmission' : `Retry #${v}`;
+  return `${which} (attempt & 3 = ${v}; a later retry if an extended attempt byte follows the text). Each retry has a different packet hash and ACK code.`;
+}
+
+const REQ_TYPE_VALUE: Record<number, string> = {
+  1: 'GET_STATUS (1): asks a repeater, room server or sensor for its statistics (uptime, battery, airtime, queue, packet and duplicate counters, last SNR/RSSI). The reply is a RepeaterStats (56 B) or ServerStats (52 B) block. Guests may ask too. §3.1, §3.2',
+  2: 'KEEP_ALIVE (2): a room-server member says it is still there; the request data is sync_since u32, the time of the newest post it has. The room ACKs it and pushes any newer posts. §3.1',
+  3: 'GET_TELEMETRY_DATA (3): asks for CayenneLPP telemetry (battery voltage, plus location and environment sensors if permitted). The first data byte is an inverse permission mask (0 = everything). Companions answer it too. §3.1, §4',
+  4: 'GET_AVG_MIN_MAX (4): asks a sensor for aggregated readings (average, min, max) over a time window given as start/end seconds ago. §3.1',
+  5: 'GET_ACCESS_LIST (5): asks for the access control list (key prefixes and permissions of known clients). Only answered for admins. §3.1',
+  6: 'GET_NEIGHBOURS (6): asks a repeater for the nodes it hears directly (key prefix, last heard, SNR), paged with count/offset and sorted by newest, oldest, strongest or weakest. §3.1',
+  7: 'GET_OWNER_INFO (7): asks a repeater for its owner info text (firmware level 2+). §3.1',
+  8: 'SUBSCRIBE (8): asks a sensor to push telemetry when readings change by more than the given minimum deltas, until the timeout. §3.1',
+  9: 'UNSUBSCRIBE (9): cancels a sensor subscription. §3.1',
+};
+
+function flagValue(n: AnnotationNode, set: string, clear: string): string | undefined {
+  return n.value === 'true' ? set : n.value === 'false' ? clear : undefined;
+}
+
+function hashSizeValue(n: AnnotationNode): string | undefined {
+  switch (num(n)) {
+    case 1:
+      return "1-byte hashes: each path entry is the first byte of a node's public key. Compact (up to 64 hops) but only 256 values, so different nodes often share a hash. The only size firmware before v1.12 understands. §1.3";
+    case 2:
+      return "2-byte hashes: each path entry is the first 2 bytes of a node's public key, so collisions are rare. At most 32 hops fit. Needs firmware v1.12+ on every hop. §1.3";
+    case 3:
+      return "3-byte hashes: each path entry is the first 3 bytes of a node's public key, practically collision-free. At most 21 hops fit. Needs firmware v1.12+ on every hop. §1.3";
+    case 4:
+      return 'Invalid: bits 6-7 = 3 is reserved, and the firmware drops the packet. §1.3';
+    default:
+      return undefined;
+  }
+}
+
+function plural(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/** Hop count of the envelope path_len, whose meaning depends on the route type. */
+function envHopsValue(n: AnnotationNode, ctx: DocContext): string | undefined {
+  const v = num(n);
+  if (!Number.isInteger(v)) return undefined;
+  const r = ctx.routeType;
+  if (r === RouteType.FLOOD || r === RouteType.TRANSPORT_FLOOD) {
+    return v === 0
+      ? '0 hops: a fresh flood heard straight from its originator; no repeater has relayed it yet. §1.3'
+      : `${plural(v, 'hop', 'hops')}: relayed by ${plural(v, 'repeater', 'repeaters')} so far; the path lists them, oldest first. The receiver returns this route in a PATH so the sender can reply direct. §1.3`;
+  }
+  if (r === RouteType.DIRECT || r === RouteType.TRANSPORT_DIRECT) {
+    return v === 0
+      ? '0 hops: zero-hop. Either sent to nodes in direct radio range, or the last leg of a direct route after the final repeater removed itself. Nobody forwards it. §1.3'
+      : `${plural(v, 'hop', 'hops')} still to go: path[0] forwards it next and removes itself; the destination receives it once the path is empty. §1.3`;
+  }
+  return `${plural(v, 'path entry', 'path entries')}. §1.3`;
+}
+
+const PATH_EXTRA_VALUE: Record<number, string> = {
+  [PayloadType.ACK]:
+    'ACK (3): the reply to a flooded text message. The ACK code rides inside this PATH, so one packet both acknowledges the message and teaches the sender a direct route. §3.9, §5',
+  [PayloadType.RESPONSE]:
+    'RESPONSE (1): the reply to a flooded request (status, telemetry, login…) bundled with the route back, so the requester learns a direct route along with the answer. §3.9, §5',
+};
+
+function grpDataTypeValue(v: number): string {
+  if (v === 0) return '0: reserved/invalid. Companions refuse to send it. §3.7';
+  if (v <= 0x00ff) return 'Reserved for internal MeshCore use (0x0001-0x00FF). §3.7';
+  if (v === 0x0100) return '0x0100: registered to MeshCore Open (the Flutter client). §3.7';
+  if (v >= 0x0110 && v <= 0x011f) return 'Registered to Ripple (0x0110-0x011F). §3.7';
+  if (v === 0x0120) return '0x0120: registered to MCO Advanced. §3.7';
+  if (v >= 0x0130 && v <= 0x013f) return 'Registered to StreamSensor (0x0130-0x013F). §3.7';
+  if (v === 0x0140) return '0x0140: registered to Nelos. §3.7';
+  if (v === 0xffff) return '0xFFFF: the developer namespace for experimenting with channel datagrams; no registration needed. §3.7';
+  if (v >= 0xff00) return 'Testing/development range (0xFF00-0xFFFE): free to use while prototyping, no registration needed. §3.7';
+  return 'A custom-application type (0x0100-0xFEFF) that is not in the number registry as of firmware v1.18. §3.7';
+}
+
+/**
+ * Value docs for packet fields (same keys as {@link PACKET_FIELD_DOCS}): what the specific value a
+ * node holds means. Functions return undefined when there is nothing specific to say.
+ */
+export const PACKET_VALUE_DOCS: FieldDocTable = {
+  // ---- envelope §1 ----
+  'env:header/route type': (n) => ROUTE_PURPOSE[num(n)],
+  'env:header/payload type': (n) =>
+    PAYLOAD_PURPOSE[num(n)] ?? `${n.value}: a reserved payload type. The firmware has no handler for it. §1.1`,
+  'env:header/payload version': (n) =>
+    num(n) === 0
+      ? 'v1 (0): the only version in use: 1-byte source/destination hashes and a 2-byte MAC. §1.1'
+      : `${n.value}: a reserved payload version. The firmware drops the packet without processing or forwarding it. §1.1`,
+  'env:path_len/hash size': hashSizeValue,
+  'env:path_len/hop count': envHopsValue,
+  'env:path_len/SNR count': (n) =>
+    num(n) === 0
+      ? '0: no hop has forwarded the trace yet. §3.10'
+      : `${n.value}: ${plural(num(n), 'hop has', 'hops have')} forwarded the trace, each appending the SNR it received it at. §3.10`,
+
+  // ---- TXT_MSG §3.3 ----
+  'TXT_MSG:ciphertext/flags/txt_type': (n) => TXT_TYPE_VALUE[num(n)] ?? `${n.value}: an unknown text type; recipients drop the message. §3.3`,
+  'TXT_MSG:ciphertext/flags/attempt': attemptValue,
+
+  // ---- REQ §3.1 ----
+  'REQ:ciphertext/req_type': (n) =>
+    REQ_TYPE_VALUE[num(n)] ??
+    `${n.value}: not a firmware request type. Servers ignore it; companion firmware hands unknown requests to an optional application hook, so it may be app-defined. §3.1`,
+
+  // ---- PATH §3.9 ----
+  'PATH:ciphertext/path_len/hash size': hashSizeValue,
+  'PATH:ciphertext/path_len/hop count': (n) =>
+    num(n) === 0
+      ? '0 hops: the original packet arrived without being relayed, so the route back is zero-hop (direct radio range). §3.9'
+      : `${plural(num(n), 'hop', 'hops')}: the original packet was relayed by these repeaters; direct sends to the replier will go through them. §3.9`,
+  'PATH:ciphertext/extra_type': (n) => {
+    const v = num(n);
+    if (!Number.isInteger(v)) return undefined;
+    if (v === 0xff)
+      return '0xFF: no extra. A bare path return (e.g. the reciprocal PATH sent back direct); 4 random bytes follow so its packet hash is unique. §3.9, §5';
+    return PATH_EXTRA_VALUE[v & 0x0f] ?? `Payload type ${v & 0x0f}: the firmware ignores extras other than ACK and RESPONSE. §3.9`;
+  },
+
+  // ---- ADVERT §3.5 ----
+  'ADVERT:app_data/flags/node type': (n) => nodeTypeValue(num(n)),
+  'ADVERT:app_data/flags/has lat/lon': (n) =>
+    flagValue(n, 'Set: latitude and longitude (8 bytes) follow the flags, so the node shares its position.', 'Not set: no location is included.'),
+  'ADVERT:app_data/flags/has feat1': (n) => flagValue(n, 'Set: a 2-byte feat1 word follows (reserved).', 'Not set: no feat1 word.'),
+  'ADVERT:app_data/flags/has feat2': (n) => flagValue(n, 'Set: a 2-byte feat2 word follows (reserved).', 'Not set: no feat2 word.'),
+  'ADVERT:app_data/flags/has name': (n) =>
+    flagValue(
+      n,
+      'Set: the node name fills the rest of app_data.',
+      'Not set: no name. Companions ignore adverts without a name, so this node will not be added as a contact.',
+    ),
+
+  // ---- GRP_TXT / GRP_DATA §3.6-3.7 ----
+  'GRP_TXT:ciphertext/flags/txt_type': (n) =>
+    num(n) === 0
+      ? 'PLAIN (0): an ordinary channel message; receivers display it. §3.6'
+      : `${n.value}: not PLAIN, so receivers drop this channel message. §3.6`,
+  'GRP_TXT:ciphertext/flags/attempt': attemptValue,
+  'GRP_DATA:ciphertext/data_type': (n) => {
+    const v = num(n);
+    return Number.isInteger(v) ? grpDataTypeValue(v) : undefined;
+  },
+
+  // ---- TRACE §3.10 ----
+  'TRACE:flags/path_sz': (n) => {
+    const v = num(n);
+    if (!Number.isInteger(v)) return undefined;
+    const sz = 1 << v;
+    return `${v}: hop hashes are ${plural(sz, 'byte', 'bytes')} (the first ${sz} of each node's public key)${v === 0 ? ', the only size before v1.11' : ''}. §3.10`;
+  },
+
+  // ---- MULTIPART §3.11 ----
+  'MULTIPART:multipart header/remaining': (n) =>
+    num(n) === 0 ? '0: the last part; nothing more follows. §3.11' : `${n.value}: ${plural(num(n), 'more part follows', 'more parts follow')} this one. §3.11`,
+  'MULTIPART:multipart header/inner type': (n) =>
+    num(n) === PayloadType.ACK
+      ? 'ACK (3): an extra copy of an ACK, sent direct ahead of the normal ACK to make delivery more reliable (multi_acks setting). §3.11'
+      : `${n.value}: not implemented (only ACK multiparts exist), so the firmware does not process it. §3.11`,
+
+  // ---- CONTROL §3.12 ----
+  'CONTROL:flags/sub_type': (n) => {
+    const v = num(n);
+    if (v === 0x80)
+      return 'DISCOVER_REQ (0x80): asks nodes in direct radio range (zero-hop) to identify themselves; those whose type is in the type filter answer with DISCOVER_RESP. §3.12';
+    if (v === 0x90)
+      return "DISCOVER_RESP (0x90): the answer to a DISCOVER_REQ, carrying the responder's type, the SNR it heard the request at, the request tag and its public key. §3.12";
+    return `${n.value}: an unknown control sub-type; the firmware ignores it. §3.12`;
+  },
+  'CONTROL:flags/prefix_only': (n) =>
+    num(n) === 1
+      ? '1: respondents send only an 8-byte prefix of their public key, keeping responses short. §3.12'
+      : '0: respondents send their full 32-byte public key. §3.12',
+  'CONTROL:flags/node type': (n) => `The responder is: ${nodeTypeValue(num(n))}`,
+};
+
 /** Root/payload node descriptions plus the table lookup, for a packet or bare-payload annotation. */
-export function describePacketTree(root: AnnotationNode, payloadType: number | undefined, bare: boolean): void {
+export function describePacketTree(root: AnnotationNode, payloadType: number | undefined, bare: boolean, routeType?: number): void {
+  const opts: DescribeOptions = { values: PACKET_VALUE_DOCS, ctx: routeType === undefined ? {} : { routeType } };
   const scope = payloadType === undefined ? '*' : payloadTypeName(payloadType);
   const purpose = payloadType === undefined ? undefined : PAYLOAD_PURPOSE[payloadType];
   const describePayload = (p: AnnotationNode): void => {
     p.description ??=
       (purpose ? `${purpose}\n\n` : '') +
       'Payload: everything after the path (1-184 bytes). Its packet hash, SHA256(payload type ‖ payload)[0..8], is the de-duplication id. §1.4';
-    describeNodes(p.children ?? [], scope, PACKET_FIELD_DOCS);
+    describeNodes(p.children ?? [], scope, PACKET_FIELD_DOCS, opts);
   };
   if (bare) {
     describePayload(root);
@@ -285,6 +515,6 @@ export function describePacketTree(root: AnnotationNode, payloadType: number | u
     'A raw over-the-air packet: [header][transport codes?][path_len][path][payload], at most 255 bytes. §1' + (purpose ? `\n\n${purpose}` : '');
   for (const c of root.children ?? []) {
     if (c.name === 'payload') describePayload(c);
-    else describeNodes([c], 'env', PACKET_FIELD_DOCS);
+    else describeNodes([c], 'env', PACKET_FIELD_DOCS, opts);
   }
 }
