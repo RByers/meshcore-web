@@ -594,6 +594,9 @@ export class McChatPage extends AppElement {
   override render() {
     const chat = this.#chat;
     if (!chat) return html`<p class="muted">No conversation selected.</p>`;
+    // Until the model's first load has published the contact / channel record, the title would be
+    // the key placeholder and the composer would send with the wrong compression / byte limit.
+    if (chat.loading.value) return html`<p class="muted" data-field="loading">Loading…</p>`;
     const messages = chat.messages.value;
     const channel = this.convType === 'channel';
     const ch = channel ? chat.channel.value : null;
