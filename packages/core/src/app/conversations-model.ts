@@ -28,8 +28,8 @@ export interface ConversationView {
 export class ConversationsModel extends StoreBoundModel {
   readonly #items = signal<readonly ConversationView[]>([]);
   /**
-   * Contacts with at least one message or unread, and every channel; sorted by last message
-   * (conversations without messages last, by name).
+   * Contacts and channels with at least one message or unread, newest message first (ties and
+   * unread-only conversations by name).
    */
   readonly items: ReadonlySignal<readonly ConversationView[]> = this.#items.readonly;
 
@@ -65,6 +65,7 @@ export class ConversationsModel extends StoreBoundModel {
     }
     for (const ch of channels) {
       const lm = last.get(ch.key);
+      if (!lm && ch.unread === 0) continue;
       out.push({
         convType: 'channel',
         key: ch.key,

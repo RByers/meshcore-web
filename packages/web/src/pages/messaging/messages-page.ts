@@ -22,8 +22,6 @@ export class McMessagesPage extends AppElement {
     return html`
       <div class="page-head">
         <h2>Messages</h2>
-        <a href=${hrefFor('/contacts')}>Contacts</a>
-        <a href=${hrefFor('/channels')}>Channels</a>
       </div>
       ${items.length
         ? html`<ul class="list" data-list="conversations">

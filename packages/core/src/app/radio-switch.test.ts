@@ -87,7 +87,8 @@ describe('switching between two radios', () => {
     await vi.waitFor(() => expect(convKeys()).toContain(toHex(zed)));
     expect(conversations.items.value.filter((c) => c.convType === 'contact').map((c) => c.name)).toEqual(['Zed']);
     expect(convKeys()).not.toContain(alice);
-    expect(conversations.items.value.filter((c) => c.convType === 'channel').map((c) => c.name)).toEqual(['Public']);
+    // B's own Public channel has no messages, so the inbox shows no channels; A's would leak here
+    expect(conversations.items.value.filter((c) => c.convType === 'channel')).toEqual([]);
     await packetLog.settled();
     expect(packetLog.packets.total.value).toBe(0);
     expect(packetLog.packets.rows.value).toEqual([]);
