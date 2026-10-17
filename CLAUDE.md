@@ -51,7 +51,8 @@ manually tests local `main` and pushes it to `origin` themselves; the agent neve
 
 - Create worktrees (`EnterWorktree`) on branches forked from the local `main` branch and develop there.
 - After the worktree is created, check it's up to date with local `main` and rebase onto `main` if
-  needed so you don't work on stale code. Don't rebase onto `origin/main`: local `main` is usually
+  needed so you don't work on stale code. `EnterWorktree` branches from `origin/main` by default, so
+  this rebase is usually needed. Don't rebase onto `origin/main`: local `main` is usually
   ahead of origin until the operator pushes.
 - Run `npm install` in a new worktree (otherwise web resolves core from the main checkout).
 - When work is complete, rebase the branch onto `main`, then verify `npm run typecheck` and `npm test`
@@ -82,6 +83,12 @@ manually tests local `main` and pushes it to `origin` themselves; the agent neve
 - To revise work already on `main`, commit the fix on top of current `main`.
 - Don't open PRs, don't create branches on `origin`, and don't push. Pushing `main` to `origin` is a
   step the operator does by hand after manual testing. Never force-push.
+- **GitHub issues close themselves on push.** Make one commit per issue, and put
+  `Fixes #N` on its own line in that commit's message. GitHub closes the issue when the operator
+  pushes `main`. Write the "what changed and why" explanation in the commit message body, since it
+  appears linked on the issue. Don't close or comment on issues yourself; the fix isn't upstream yet.
+  If an issue takes several commits, put `Fixes #N` on the last one and `Refs #N` on the others. A
+  bare `#N` doesn't close anything. In your final report, list the issues that will close on push.
 - Older history contains merge commits from earlier flows; leave them alone.
 
 ### Local git config
