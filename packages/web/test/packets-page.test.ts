@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 import type { AnnotationNode } from '@meshcore-web/core/packet';
+import { toHex } from '@meshcore-web/core/util/bytes';
 import '../src/mc-app.js';
 import '../src/pages/packets/index.js';
 import { createHarness, type Harness } from '../src/testing/harness.js';
@@ -373,6 +374,43 @@ describe('/packets page', () => {
     await t.until(() => t.query('aside mc-packet-inspector'), 3000, 'inspector');
     await t.until(() => t.text().includes('sent by the radio at this app'), 3000, 'tx direction in inspector');
     expect(t.text()).toContain('does not report it back');
+  });
+
+  it('marks the send outcome of tx rows and shows it in the inspector', async () => {
+    const t = await openLog();
+    const alice = toHex(t.emulatorScenario().keys.alice);
+    const dm = t.app.chat('contact', alice);
+    await dm.settled();
+    expect((await (await dm.send('ping from the log')).done).status).toBe('delivered');
+    // the row updates in place: pending → sent → confirmed with the round trip
+    await t.until(() => t.query('tr[data-type="TXT_MSG"] [data-send-status="confirmed"]'), 5000, 'confirmed DM row');
+    const mark = t.query('tr[data-type="TXT_MSG"] [data-send-status="confirmed"]')!;
+    expect(mark.textContent).toMatch(/^✓✓ \d+(\.\d)? m?s$/);
+    expect(mark.getAttribute('title')).toContain('Delivered: ACK received');
+
+    // the radio rejects a DM to an unknown contact
+    const client = t.app.connection.client.value!;
+    await expect(client.sendTextMessage(new Uint8Array(32).fill(9), 'nobody home')).rejects.toThrow();
+    await t.until(() => t.query('[data-send-status="failed"]'), 3000, 'failed row');
+    expect(t.query('[data-send-status="failed"]')!.textContent).toBe('✗ NOT_FOUND');
+
+    const id = mark.closest('tr')!.dataset['packetId']!;
+    await t.click(`tr[data-packet-id="${id}"]`);
+    await t.until(() => t.query('[data-section="send"]'), 3000, 'send section');
+    const field = (k: string): string => t.query(`[data-section="send"] [data-send="${k}"]`)?.textContent ?? '';
+    expect(field('Status')).toContain('Delivered');
+    expect(field('Route')).toBe('direct');
+    expect(field('ACK tag')).toMatch(/^0x[0-9a-f]{8}$/);
+    expect(field('Est. timeout')).toMatch(/s$/);
+    expect(field('Response')).toMatch(/^after /);
+    expect(field('Confirmed')).toContain('round trip');
+    expect(t.query('[data-section="send"] [data-send="Error"]')).toBeNull();
+
+    const failedId = t.query('[data-send-status="failed"]')!.closest('tr')!.dataset['packetId']!;
+    await t.click(`tr[data-packet-id="${failedId}"]`);
+    await t.until(() => field('Error') !== '', 3000, 'error field');
+    expect(field('Error')).toBe('NOT_FOUND (code 2)');
+    expect(field('Status')).toContain('Failed');
   });
 
   it('clear asks for confirmation and empties the log', async () => {

@@ -122,7 +122,10 @@ export class CapturePipeline {
     } while (c !== this.#chain);
   }
 
-  /** Detaches from the client; already-queued steps still run (await `idle()`). */
+  /**
+   * Detaches from the client; already-queued steps still run (await `idle()`). The background
+   * backfill stops at its next batch (await `sendBackfill` before closing the store).
+   */
   stop(): void {
     this.#stopped = true;
     for (const off of this.#unsubs) off();
@@ -139,7 +142,7 @@ export class CapturePipeline {
       if ((await store.settings.get<unknown>(SEND_BACKFILL_SETTING)) !== undefined) return started(Promise.resolve(null));
       const upToFrameId = await store.frames.lastId();
       started(
-        runSendBackfillOnce(store, { upToFrameId, now: this.client.clock.now() }).catch((err: unknown) => {
+        runSendBackfillOnce(store, { upToFrameId, now: this.client.clock.now(), cancelled: () => this.#stopped }).catch((err: unknown) => {
           if (!this.#stopped) this.opts.onError?.(err, 'sent-packet history');
           return null;
         }),

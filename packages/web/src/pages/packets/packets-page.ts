@@ -8,7 +8,7 @@
  */
 import { css, html, nothing, type PropertyValues, type TemplateResult } from 'lit';
 import { repeat } from 'lit/directives/repeat.js';
-import { resolvedPathTitle, type FrameRow, type LogView, type PacketFilter, type PacketRow } from '@meshcore-web/core/app';
+import { resolvedPathTitle, sendOutcomeLabel, type FrameRow, type LogView, type PacketFilter, type PacketRow } from '@meshcore-web/core/app';
 import { PayloadType, RouteType, payloadTypeName } from '@meshcore-web/core/packet';
 import { CMD, PUSH, RESP } from '@meshcore-web/core/protocol';
 import { AppElement } from '../../app-context.js';
@@ -56,6 +56,9 @@ export class McPacketsPage extends AppElement {
   #ro: ResizeObserver | undefined;
   #textTimer: ReturnType<typeof setTimeout> | undefined;
   #loadSeq = 0;
+  /** `send` of the packet the inspector shows (JSON), to refresh it when the outcome changes. */
+  #inspectedSend = '';
+  #inspectedId = -1;
   /** First visible row before an update, so rows added above it don't move it (see #keepAnchor). */
   #anchor: { attr: string; id: string; top: number } | null = null;
   /** Contact note lookup for path hop tooltips. */
@@ -248,6 +251,21 @@ export class McPacketsPage extends AppElement {
       .dir-out {
         color: var(--mc-accent);
       }
+      .send {
+        font-size: 0.75rem;
+        font-variant-numeric: tabular-nums;
+        color: var(--mc-text-muted);
+      }
+      .send-sent,
+      .send-confirmed {
+        color: var(--mc-ok);
+      }
+      .send-no-ack {
+        color: var(--mc-warn);
+      }
+      .send-failed {
+        color: var(--mc-danger);
+      }
       .empty {
         padding: 24px;
         text-align: center;
@@ -331,6 +349,19 @@ export class McPacketsPage extends AppElement {
   override updated(changed: PropertyValues<this>): void {
     super.updated(changed);
     this.#keepAnchor();
+    this.#refreshInspector();
+  }
+
+  /** The inspected tx row's send outcome changed (e.g. its ACK arrived): inspect it again. */
+  #refreshInspector(): void {
+    const s = this.selected;
+    if (s?.tab !== 'packets' || !this.inspector || s.id !== this.#inspectedId) return;
+    const row = this.#log.packets.rows.peek().find((r) => r.id === s.id);
+    if (!row) return;
+    const key = JSON.stringify(row.record.send ?? null);
+    if (key === this.#inspectedSend) return;
+    this.#inspectedSend = key;
+    void this.#open('packets', s.id);
   }
 
   #findAnchor(): { attr: string; id: string; top: number } | null {
@@ -379,7 +410,14 @@ export class McPacketsPage extends AppElement {
     try {
       const props =
         tab === 'packets'
-          ? await this.#log.inspect(id).then((i) => (i ? packetInspectorProps(i, (p) => this.app.contacts.resolvePath(p)) : null))
+          ? await this.#log.inspect(id).then((i) => {
+              if (!i) return null;
+              if (seq === this.#loadSeq) {
+                this.#inspectedId = id;
+                this.#inspectedSend = JSON.stringify(i.record.send ?? null);
+              }
+              return packetInspectorProps(i, (p) => this.app.contacts.resolvePath(p), this.app.clock.now());
+            })
           : await this.#log.inspectFrame(id).then((i) => (i ? frameInspectorProps(i) : null));
       if (seq === this.#loadSeq) this.inspector = props;
     } catch (err) {
@@ -652,8 +690,17 @@ export class McPacketsPage extends AppElement {
     >`;
   }
 
+  /** Send outcome of a tx row (pending / sent / confirmed / failed / no ACK). */
+  #sendMarker(r: PacketRow, now: number): TemplateResult | typeof nothing {
+    const s = sendOutcomeLabel(r.record, now);
+    if (!s) return nothing;
+    return html` <span class="send send-${s.status}" data-send-status=${s.status} title=${s.title}>${s.text}</span>`;
+  }
+
   #packetTable(rows: readonly PacketRow[]): TemplateResult {
     const sel = this.selected?.tab === 'packets' ? this.selected.id : null;
+    // app clock: a DM still unconfirmed past the radio's estimated timeout shows "no ACK"
+    const now = this.app.clock.now();
     return html`<div class="tablewrap">
       <table data-table="packets">
         <thead>
@@ -681,7 +728,7 @@ export class McPacketsPage extends AppElement {
             >
               <td class="mono">${formatLogTime(rec.ts, this.app.clock.now())}</td>
               <td class="dir-${rec.direction}" data-dir=${rec.direction} title=${rec.direction === 'rx' ? 'received: heard by the radio' : 'sent: transmitted at this app\'s request'}>
-                ${rec.direction === 'rx' ? '↓ rx' : '↑ tx'}
+                ${rec.direction === 'rx' ? '↓ rx' : '↑ tx'}${this.#sendMarker(r, now)}
               </td>
               <td>${r.typeName}</td>
               <td>${r.routeName || '—'}</td>

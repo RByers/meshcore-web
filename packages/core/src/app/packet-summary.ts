@@ -19,7 +19,7 @@ import {
   type PeerDatagramPayload,
   type TxtMsgPlaintext,
 } from '../packet/payloads.js';
-import type { FrameRecord, PacketRecord } from '../store/schema.js';
+import type { FrameRecord, PacketRecord, PacketSendStatus } from '../store/schema.js';
 
 /** Names and keys known to the store, used to resolve hashes and decrypt channel traffic. */
 export interface SummaryContext {
@@ -277,6 +277,54 @@ export function packetMentionsNode(view: Pick<PacketView, 'nodeHashes' | 'nodeKe
   // a node hash h matches a key prefix n when one is a prefix of the other
   if (view.nodeHashes.some((h) => n.startsWith(h) || h.startsWith(n))) return true;
   return view.nodeKeys.some((k) => k.startsWith(n) || (n.length > k.length && n.startsWith(k)));
+}
+
+// ---------------------------------------------------------------------------
+// Send outcome (tx rows)
+// ---------------------------------------------------------------------------
+
+/** A sent (tx) row's send outcome as shown in the packet log: {@link PacketSendStatus} plus `no-ack`. */
+export type SendDisplayStatus = PacketSendStatus | 'no-ack';
+
+export interface SendOutcomeLabel {
+  status: SendDisplayStatus;
+  /** Compact marker for the list row: "…", "✓", "✓✓ 1.2 s", "✗ NOT_FOUND", "no ACK". */
+  text: string;
+  /** Longer explanation (tooltip). */
+  title: string;
+}
+
+/** "850 ms" below a second, else "1.2 s". */
+export function formatDurationMs(ms: number): string {
+  return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
+}
+
+/**
+ * The send outcome of a tx row for display, or null for rx rows and rows without `send`.
+ * The radio sends no push on an ACK timeout, so a DM still `sent` once `ts + estTimeoutMs` is
+ * before `now` (pass the app clock) shows as `no-ack`.
+ */
+export function sendOutcomeLabel(rec: Pick<PacketRecord, 'direction' | 'ts' | 'payloadType' | 'send'>, now: number): SendOutcomeLabel | null {
+  const s = rec.send;
+  if (rec.direction !== 'tx' || !s) return null;
+  switch (s.status) {
+    case 'pending':
+      return { status: 'pending', text: '…', title: 'Pending: sent to the radio, no response yet' };
+    case 'failed':
+      return { status: 'failed', text: `✗ ${s.error ?? 'ERR'}`, title: `Failed: the radio rejected it${s.error ? ` (${s.error})` : ''}` };
+    case 'confirmed': {
+      const rtt = s.rttMs !== undefined ? formatDurationMs(s.rttMs) : '';
+      return { status: 'confirmed', text: rtt ? `✓✓ ${rtt}` : '✓✓', title: `Delivered: ACK received${rtt ? `, round trip ${rtt}` : ''}` };
+    }
+    case 'sent': {
+      const dm = rec.payloadType === PayloadType.TXT_MSG && s.tag !== undefined && s.tag !== 0;
+      if (dm && s.estTimeoutMs !== undefined && now > rec.ts + s.estTimeoutMs) {
+        return { status: 'no-ack', text: 'no ACK', title: `No ACK: not confirmed within the radio's estimated ${formatDurationMs(s.estTimeoutMs)}` };
+      }
+      const route = s.flood === undefined ? '' : s.flood ? ' (flood)' : ' (direct)';
+      return { status: 'sent', text: '✓', title: `Sent: the radio transmitted it${route}${dm ? '; waiting for the ACK' : ''}` };
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

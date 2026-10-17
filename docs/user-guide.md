@@ -172,6 +172,10 @@ frame exchanged with it). **Packets** shows them live:
   sent (the radio accepted it; for DMs and requests also whether it went flood or direct, which
   fills in the route, and the timeout it expects), failed (the radio refused it, with the
   reason) or, for DMs, confirmed when the recipient's ACK came back (with the round-trip time).
+  The row shows it next to "↑ tx": `…` pending, `✓` sent, `✓✓ 1.2 s` confirmed (round trip),
+  `✗ NOT_FOUND` failed, and `no ACK` for a DM still unconfirmed after the radio's estimated
+  timeout (hover for details). The inspector's **Send** entry lists the route, ACK tag,
+  estimated timeout, how long the radio took to answer, when the ACK arrived and any error.
   Because the packet log is kept and frames are not, it is the lasting record of what you sent:
   the first time a radio is connected with this version, sends found in its older frame log
   are added to the packet log (with their outcome) in the background.

@@ -1,7 +1,8 @@
 /** Formatting helpers for the packet log pages and the inputs of `<mc-packet-inspector>`. */
 import { html } from 'lit';
-import { NO_BYTES_MEANING, type FrameInspection, type PacketInspection, type ResolvedHop } from '@meshcore-web/core/app';
+import { NO_BYTES_MEANING, formatDurationMs, sendOutcomeLabel, type FrameInspection, type PacketInspection, type ResolvedHop } from '@meshcore-web/core/app';
 import type { Annotation } from '@meshcore-web/core/packet';
+import type { PacketRecord } from '@meshcore-web/core/store';
 import { toHex } from '@meshcore-web/core/util/bytes';
 import type { InspectorMeta } from './packet-inspector.js';
 import { hopsLink } from '../../components/path-dialog.js';
@@ -39,7 +40,31 @@ export interface InspectorProps {
 /** Resolves path hop hashes to known contacts (so hops link to their contact pages). */
 export type HopResolver = (hashes: readonly string[]) => readonly ResolvedHop[];
 
-export function packetInspectorProps(ins: PacketInspection, resolve?: HopResolver): InspectorProps {
+/**
+ * The "Send" entry of a tx row: what the radio did with the request (only the fields recorded).
+ * `now` is the app clock (a DM unconfirmed past its estimated timeout reads "no ACK").
+ */
+export function sendSection(r: PacketRecord, now: number): InspectorMeta | null {
+  const s = r.send;
+  const label = sendOutcomeLabel(r, now);
+  if (!s || !label) return null;
+  const rows: [string, string][] = [['Status', `${label.text} · ${label.title}`]];
+  if (s.flood !== undefined) rows.push(['Route', s.flood ? 'flood' : 'direct']);
+  if (s.tag !== undefined) rows.push(['ACK tag', `0x${(s.tag >>> 0).toString(16).padStart(8, '0')}`]);
+  if (s.estTimeoutMs !== undefined) rows.push(['Est. timeout', formatDurationMs(s.estTimeoutMs)]);
+  if (s.respondedAt !== undefined) rows.push(['Response', `after ${formatDurationMs(Math.max(0, s.respondedAt - r.ts))}`]);
+  if (s.confirmedAt !== undefined) {
+    const rtt = s.rttMs !== undefined ? ` · round trip ${formatDurationMs(s.rttMs)}` : '';
+    rows.push(['Confirmed', `${new Date(s.confirmedAt).toISOString()}${rtt}`]);
+  } else if (s.rttMs !== undefined) rows.push(['Round trip', formatDurationMs(s.rttMs)]);
+  if (s.error !== undefined || s.errCode !== undefined) rows.push(['Error', `${s.error ?? 'ERR'}${s.errCode !== undefined ? ` (code ${s.errCode})` : ''}`]);
+  return {
+    label: 'Send',
+    value: html`<dl class="sub" data-section="send">${rows.map(([k, v]) => html`<dt>${k}</dt><dd data-send=${k}>${v}</dd>`)}</dl>`,
+  };
+}
+
+export function packetInspectorProps(ins: PacketInspection, resolve: HopResolver | undefined, now: number): InspectorProps {
   const r = ins.record;
   const meta: InspectorMeta[] = [
     { label: 'Time', value: new Date(r.ts).toISOString() },
@@ -63,6 +88,8 @@ export function packetInspectorProps(ins: PacketInspection, resolve?: HopResolve
   if (r.format === 'none') meta.push({ label: 'Bytes', value: `none: ${NO_BYTES_MEANING}` });
   else meta.push({ label: 'Size', value: `${r.bytes.length} B${r.format === 'payload' ? ' (payload only)' : ''}` });
   if (r.hash) meta.push({ label: 'Packet hash', value: `${r.hash}${ins.copies > 1 ? ` (${ins.copies} copies logged)` : ''}` });
+  const send = sendSection(r, now);
+  if (send) meta.push(send);
   meta.push({ label: 'Source', value: r.source + (ins.sourceFrame ? ` · frame #${ins.sourceFrame.id} (${ins.sourceFrame.kind})` : '') });
   return {
     heading: `Packet #${r.id}`,

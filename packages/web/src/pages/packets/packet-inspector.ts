@@ -160,6 +160,12 @@ export class McPacketInspector extends LitElement {
         overflow-wrap: anywhere;
         font-family: var(--mc-mono);
       }
+      dl.meta dl.sub {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: 0 8px;
+        margin: 0;
+      }
       .errors {
         border: 1px solid color-mix(in oklab, var(--mc-danger), transparent 50%);
         color: var(--mc-danger);

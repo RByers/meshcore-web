@@ -533,6 +533,7 @@ export class ConnectionModel {
       if (s.client) await s.client.disconnect().catch(() => undefined);
       else if (s.transport) await s.transport.disconnect().catch(() => undefined);
       await s.pipeline?.idle();
+      await s.pipeline?.sendBackfill; // stops at its next batch; never rejects
       if (this.#session === null || this.#session === s) {
         batch(() => {
           if (this.#store.peek() === s.store || this.#store.peek() === null) {

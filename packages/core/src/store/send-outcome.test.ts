@@ -266,4 +266,21 @@ describe('backfillSentPackets', () => {
     expect(await s.packets.count()).toBe(0);
     s.close();
   });
+
+  it('a cancelled run stops before its next batch and is not recorded as done', async () => {
+    const s = await openStore();
+    await seedFrames(s, [
+      ['out', dmCmd(), 1],
+      ['in', sent(0), 2],
+      ['out', chanCmd(), 3],
+    ]);
+    let batches = 0;
+    const cancelled = (): boolean => batches++ >= 1; // let one batch run
+    expect(await runSendBackfillOnce(s, { batchSize: 2, cancelled })).toEqual({ framesScanned: 2, added: 1, updated: 0 });
+    expect(await s.settings.get(SEND_BACKFILL_SETTING)).toBeUndefined();
+    // the next run starts over and finishes (the first row is matched, not duplicated)
+    expect(await runSendBackfillOnce(s, { batchSize: 2 })).toEqual({ framesScanned: 3, added: 1, updated: 0 });
+    expect(await s.packets.count()).toBe(2);
+    s.close();
+  });
 });

@@ -167,7 +167,7 @@ describe('PacketLog', () => {
   it('keeps packets forever by default', async () => {
     const s = await openStore(1);
     await s.packets.append({ direction: 'rx', bytes: grpTxtPacket(0, 1), ts: 1 });
-    expect(await s.packets.prune(undefined, Date.now())).toBe(0);
+    expect(await s.packets.prune(undefined, 10 * 365 * 86_400_000)).toBe(0);
     s.close();
   });
 

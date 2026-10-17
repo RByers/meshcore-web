@@ -33,6 +33,8 @@ export interface SendBackfillOptions {
   upToFrameId?: number;
   /** Frames per transaction (default 2000). */
   batchSize?: number;
+  /** Checked before each batch; true stops early (counts so far are returned). */
+  cancelled?: () => boolean;
 }
 
 export interface SendBackfillResult {
@@ -76,6 +78,7 @@ export async function backfillSentPackets(store: RadioStore, opts: SendBackfillO
   let after = 0;
   for (;;) {
     if (after >= upTo) break;
+    if (opts.cancelled?.()) break;
     const frames = await db.iterate<FrameRecord>(STORE.frames, { query: db.range(after, upTo === Infinity ? undefined : upTo, true, false), limit: batchSize });
     if (frames.length === 0) break;
     after = frames[frames.length - 1]!.id;
@@ -92,7 +95,7 @@ export async function backfillSentPackets(store: RadioStore, opts: SendBackfillO
             row.rec.send = input.send; // an older row: start it pending, with its peer / channel
             touched.add(row);
           } else if (!row && input) {
-            row = { rec: await packetRecordFromInput(input), counted: false };
+            row = { rec: await packetRecordFromInput(input, f.ts), counted: false };
             added.push(row);
           }
         }
@@ -140,7 +143,8 @@ export async function backfillSentPackets(store: RadioStore, opts: SendBackfillO
 
 /**
  * Runs {@link backfillSentPackets} unless this radio's {@link SEND_BACKFILL_SETTING} says it has
- * already completed; records completion. Resolves null when skipped.
+ * already completed; records completion (not when cancelled: the next run starts over). Resolves
+ * null when skipped.
  */
 export async function runSendBackfillOnce(
   store: RadioStore,
@@ -148,7 +152,8 @@ export async function runSendBackfillOnce(
 ): Promise<SendBackfillResult | null> {
   if ((await store.settings.get<unknown>(SEND_BACKFILL_SETTING)) !== undefined) return null;
   const result = await backfillSentPackets(store, opts);
-  await store.settings.set(SEND_BACKFILL_SETTING, { ...result, at: opts.now ?? Date.now() });
+  if (opts.cancelled?.()) return result; // possibly incomplete: the next run starts over
+  await store.settings.set(SEND_BACKFILL_SETTING, { ...result, at: opts.now ?? store.clock.now() });
   return result;
 }
 
