@@ -50,6 +50,19 @@ export function formatDuration(ms: number): string {
   return `${trim1(ms / 86_400_000)} d`;
 }
 
+/** "512 B" / "1.2 KB" / "34 MB" / "1.1 GB" (1 KB = 1024 B). */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'] as const;
+  let v = bytes / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v < 10 ? trim1(v) : Math.round(v)} ${units[i]}`;
+}
+
 function trim1(v: number): string {
   return v.toFixed(1).replace(/\.0$/, '');
 }

@@ -26,5 +26,6 @@ export * from './path-geometry.js';
 export * from './path-usage.js';
 export * from './path-model.js';
 export * from './path-history.js';
+export * from './storage-model.js';
 export * from './app-model.js';
 export * from './reactions.js';

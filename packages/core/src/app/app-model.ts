@@ -28,6 +28,7 @@ import { MapModel } from './map-model.js';
 import { PositionEstimatorModel } from './position-estimator.js';
 import { PathModel } from './path-model.js';
 import { PacketLogModel } from './packet-log-model.js';
+import { StorageModel } from './storage-model.js';
 import { PacketStatsModel } from './packet-stats-model.js';
 import { ContactPathsModel } from './path-history.js';
 import { RemoteAdminModel, type RemoteAdminOptions } from './remote-admin-model.js';
@@ -107,6 +108,7 @@ export class AppModel {
   #positions: PositionEstimatorModel | undefined;
   #paths: PathModel | undefined;
   #contactPaths: ContactPathsModel | undefined;
+  #storage: StorageModel | undefined;
   readonly #chats = new Map<string, ChatModel>();
   #offs: Array<() => void> = [];
 
@@ -251,6 +253,11 @@ export class AppModel {
   /** Contact paths: set path, path history with delivery stats, repeater candidates (issue #6). */
   get contactPaths(): ContactPathsModel {
     return (this.#contactPaths ??= new ContactPathsModel(this.connection, this.contacts).start());
+  }
+
+  /** Per-radio IndexedDB usage (record counts, approximate size) for the known radios. */
+  get storage(): StorageModel {
+    return (this.#storage ??= new StorageModel({ devices: this.devices, storeOptions: () => this.#idbOpts() }));
   }
 
   /** The model of one conversation (cached per conversation). */
