@@ -1,5 +1,5 @@
 /**
- * Local storage usage per known radio (the Device page's "Stored data" card): record counts and
+ * Local storage usage per known radio (the Connect page's known-radios list): record counts and
  * an approximate size of each radio's IndexedDB database (`store/db-stats.ts`).
  */
 
@@ -30,20 +30,34 @@ export interface StorageModelDeps {
 export class StorageModel {
   readonly #deps: StorageModelDeps;
   readonly #byDevice = signal<Readonly<Record<string, DeviceStorage>>>({});
-  /** Storage per known radio, keyed by pubkey hex. */
-  readonly byDevice: ReadonlySignal<Readonly<Record<string, DeviceStorage>>> = this.#byDevice.readonly;
+  /**
+   * Storage per known radio, keyed by pubkey hex. Only radios still in `devices` are listed: a
+   * forgotten radio drops out at once, without waiting for the next refresh.
+   */
+  readonly byDevice: ReadonlySignal<Readonly<Record<string, DeviceStorage>>>;
   /** True while any radio's stats are being computed. */
-  readonly loading = computed(() => Object.values(this.#byDevice.value).some((d) => d.status === 'loading'));
+  readonly loading: ReadonlySignal<boolean>;
   /** Approximate bytes over every radio with stats. */
-  readonly totalBytes = computed(() =>
-    Object.values(this.#byDevice.value).reduce((sum, d) => sum + (d.stats?.approxBytes ?? 0), 0),
-  );
+  readonly totalBytes: ReadonlySignal<number>;
 
   #running: Promise<void> | undefined;
   #again = false;
 
   constructor(deps: StorageModelDeps) {
     this.#deps = deps;
+    this.byDevice = computed(() => {
+      const all = this.#byDevice.value;
+      const out: Record<string, DeviceStorage> = {};
+      for (const d of deps.devices.value) {
+        const e = all[d.pubKey];
+        if (e) out[d.pubKey] = e;
+      }
+      return out;
+    });
+    this.loading = computed(() => Object.values(this.byDevice.value).some((d) => d.status === 'loading'));
+    this.totalBytes = computed(() =>
+      Object.values(this.byDevice.value).reduce((sum, d) => sum + (d.stats?.approxBytes ?? 0), 0),
+    );
   }
 
   /**
@@ -76,6 +90,8 @@ export class StorageModel {
     this.#byDevice.value = next;
     const statsFn = this.#deps.stats ?? radioDbStats;
     for (const k of keys) {
+      // forgotten while this pass ran (its database may be gone): skip it
+      if (!this.#deps.devices.peek().some((d) => d.pubKey === k)) continue;
       let entry: DeviceStorage;
       try {
         entry = { pubKey: k, status: 'ready', stats: await statsFn(k, this.#deps.storeOptions()), error: null };

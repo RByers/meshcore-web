@@ -8,7 +8,7 @@
  * not as the disk footprint.
  */
 
-import { defaultFactory, openDatabase } from './idb.js';
+import { defaultFactory, openDatabase, type IdbDatabase, type Migration } from './idb.js';
 import { RADIO_DB_MIGRATIONS, RADIO_DB_VERSION, STORE, pubKeyHex, radioDbName, type RadioStoreName } from './schema.js';
 import type { StoreOpenOptions } from './devices.js';
 
@@ -72,6 +72,21 @@ export function approxValueBytes(value: unknown): number {
   return n;
 }
 
+class MissingDatabase extends Error {}
+
+/**
+ * The radio migrations, except that creating the database (oldVersion 0) aborts the upgrade, so
+ * a stats pass never creates a database (an aborted upgrade of a new database deletes it).
+ */
+const STATS_MIGRATIONS: readonly Migration[] = RADIO_DB_MIGRATIONS.map((m, i) =>
+  i === 0
+    ? (ctx) => {
+        if (ctx.oldVersion === 0) throw new MissingDatabase('no database');
+        m(ctx);
+      }
+    : m,
+);
+
 /** Whether `name` exists, or `undefined` when the factory can't list databases. */
 async function databaseExists(factory: IDBFactory, name: string): Promise<boolean | undefined> {
   if (typeof factory.databases !== 'function') return undefined;
@@ -86,8 +101,9 @@ async function databaseExists(factory: IDBFactory, name: string): Promise<boolea
 /**
  * Counts and sizes every store of one radio's database in a single read-only transaction (one
  * cursor pass per store). A database that does not exist is reported with `exists: false` and
- * zeroes, without being created; where the factory can't list databases it is opened the way
- * `RadioStore.open` would (creating / migrating it). The connection is closed afterwards.
+ * zeroes, without being created (also where the factory can't list databases, or the database
+ * is deleted concurrently: an open that would create it is aborted). An existing older-version
+ * database is migrated the way `RadioStore.open` would. The connection is closed afterwards.
  */
 export async function radioDbStats(pubKey: Uint8Array | string, opts: StoreOpenOptions = {}): Promise<RadioDbStats> {
   const hex = pubKeyHex(pubKey);
@@ -98,13 +114,21 @@ export async function radioDbStats(pubKey: Uint8Array | string, opts: StoreOpenO
   if ((await databaseExists(factory, name)) === false) {
     return { pubKey: hex, exists: false, counts, bytesByStore, approxBytes: 0 };
   }
-  const db = await openDatabase({
-    name,
-    version: RADIO_DB_VERSION,
-    migrations: RADIO_DB_MIGRATIONS,
-    factory,
-    ...(opts.keyRange ? { keyRange: opts.keyRange } : {}),
-  });
+  let db: IdbDatabase;
+  try {
+    db = await openDatabase({
+      name,
+      version: RADIO_DB_VERSION,
+      migrations: STATS_MIGRATIONS,
+      factory,
+      ...(opts.keyRange ? { keyRange: opts.keyRange } : {}),
+    });
+  } catch (err) {
+    // the database vanished (e.g. deleted by "Remove") between the check above and this open:
+    // the aborted upgrade leaves nothing behind
+    if (err instanceof MissingDatabase) return { pubKey: hex, exists: false, counts, bytesByStore, approxBytes: 0 };
+    throw err;
+  }
   try {
     const stores = RADIO_STORE_NAMES.filter((s) => db.storeNames.includes(s));
     await db.transaction(stores, 'readonly', (t) =>

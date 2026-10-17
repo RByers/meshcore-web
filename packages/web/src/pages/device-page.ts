@@ -1,8 +1,8 @@
-/** Device overview: identity, firmware, battery, radio parameters, link, stored data per known radio. */
-import { css, html, nothing, type TemplateResult } from 'lit';
-import { CONNECTION_KIND_LABEL, effect, untracked } from '@meshcore-web/core/app';
+/** Device overview: identity, firmware, battery, radio parameters, link. */
+import { css, html, nothing } from 'lit';
+import { CONNECTION_KIND_LABEL } from '@meshcore-web/core/app';
 import { AppElement } from '../app-context.js';
-import { PHASE_LABEL, batteryPercent, formatBytes, shortKey } from '../format.js';
+import { PHASE_LABEL, batteryPercent } from '../format.js';
 import { hrefFor } from '../router.js';
 import { shared } from '../styles.js';
 
@@ -53,157 +53,17 @@ export class McDevicePage extends AppElement {
       h3 {
         font-size: 1rem;
       }
-      .storage {
-        margin-block-start: var(--mc-gap);
-      }
-      .storage-head {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        justify-content: space-between;
-        gap: 8px;
-      }
-      .storage-head h3 {
-        margin: 0;
-      }
-      .storage ul {
-        list-style: none;
-        margin: 12px 0 0;
-        padding: 0;
-        display: grid;
-        gap: 8px;
-      }
-      .storage li {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: baseline;
-        justify-content: space-between;
-        gap: 4px 16px;
-        padding: 8px 10px;
-        border: 1px solid var(--mc-border);
-        border-radius: var(--mc-radius);
-      }
-      .storage li.current {
-        border-color: var(--mc-accent);
-        background: var(--mc-accent-soft);
-      }
-      .storage .who {
-        min-width: 0;
-        overflow-wrap: anywhere;
-      }
-      .storage .size {
-        font-variant-numeric: tabular-nums;
-        white-space: nowrap;
-      }
-      .storage .counts {
-        flex-basis: 100%;
-        font-size: 0.9em;
-      }
-      .storage .origin {
-        margin: 12px 0 0;
-        font-size: 0.9em;
-      }
     `,
   ];
-
-  #off: (() => void) | undefined;
-  /** Origin-wide usage from `navigator.storage.estimate()` (all databases, caches, …), if available. */
-  #origin: { usage: number; quota: number } | null = null;
-
-  override connectedCallback(): void {
-    super.connectedCallback();
-    // recount whenever the known radios change (a connect records / updates its device row)
-    this.#off = effect(() => {
-      void this.app.devices.value;
-      untracked(() => void this.#refreshStorage());
-    });
-  }
-
-  override disconnectedCallback(): void {
-    super.disconnectedCallback();
-    this.#off?.();
-    this.#off = undefined;
-  }
-
-  async #refreshStorage(): Promise<void> {
-    await this.app.storage.refresh();
-    const storage = (navigator as { storage?: StorageManager }).storage;
-    if (typeof storage?.estimate !== 'function') return;
-    try {
-      const est = await storage.estimate();
-      this.#origin = { usage: est.usage ?? 0, quota: est.quota ?? 0 };
-      this.requestUpdate();
-    } catch {
-      // not available (e.g. opaque origin); the per-radio numbers still show
-    }
-  }
-
-  async #onRefresh(): Promise<void> {
-    await this.app.refreshDevices();
-    await this.#refreshStorage();
-  }
-
-  #renderStorage(): TemplateResult {
-    const devices = this.app.devices.value;
-    const byDevice = this.app.storage.byDevice.value;
-    const loading = this.app.storage.loading.value;
-    const current = this.app.connection.pubKey.value;
-    return html`<section class="card storage" aria-labelledby="storage-h" data-section="storage">
-      <div class="storage-head">
-        <h3 id="storage-h">Stored data</h3>
-        <button type="button" data-action="refresh-storage" ?disabled=${loading} @click=${() => void this.#onRefresh()}>
-          ${loading ? 'Counting…' : 'Refresh'}
-        </button>
-      </div>
-      ${devices.length === 0
-        ? html`<p class="muted">No radios stored in this browser yet.</p>`
-        : html`<ul>
-            ${devices.map((d) => {
-              const e = byDevice[d.pubKey];
-              const st = e?.stats;
-              const c = st?.counts;
-              return html`<li class=${d.pubKey === current ? 'current' : ''} data-device=${d.pubKey}>
-                <span class="who">
-                  <strong>${d.name || 'Unnamed radio'}</strong>
-                  <span class="muted mono">${shortKey(d.pubKey)}</span>
-                  ${d.pubKey === current ? html`<span class="muted">(connected)</span>` : nothing}
-                </span>
-                <span class="size" data-field="db-size" title="Approximate: record data only, without index and storage overhead">
-                  ${e?.status === 'error'
-                    ? html`<span class="muted">unavailable</span>`
-                    : st
-                      ? `≈ ${formatBytes(st.approxBytes)}`
-                      : html`<span class="muted">…</span>`}
-                </span>
-                ${c
-                  ? html`<span class="counts muted">
-                      <span data-field="packet-count">${c.packets.toLocaleString()}</span> packets ·
-                      ${c.messages.toLocaleString()} messages · ${c.contacts.toLocaleString()} contacts ·
-                      ${c.channels.toLocaleString()} channels · ${c.frames.toLocaleString()} frames
-                    </span>`
-                  : nothing}
-              </li>`;
-            })}
-          </ul>`}
-      ${this.#origin
-        ? html`<p class="origin muted" data-field="origin-usage">
-            All site data in this browser: ${formatBytes(this.#origin.usage)}${this.#origin.quota
-              ? ` of ${formatBytes(this.#origin.quota)} available`
-              : ''}
-          </p>`
-        : nothing}
-    </section>`;
-  }
 
   override render() {
     const conn = this.app.connection;
     const si = conn.selfInfo.value;
     if (!si || !conn.connected.value) {
       return html`<section class="card">
-          <h2>No radio connected</h2>
-          <p><a href=${hrefFor('/')}>Connect a radio</a> to see its details.</p>
-        </section>
-        ${this.#renderStorage()}`;
+        <h2>No radio connected</h2>
+        <p><a href=${hrefFor('/')}>Connect a radio</a> to see its details.</p>
+      </section>`;
     }
     const di = conn.deviceInfo.value;
     const batt = conn.battery.value;
@@ -272,7 +132,6 @@ export class McDevicePage extends AppElement {
           </dl>
         </section>
       </div>
-      ${this.#renderStorage()}
     `;
   }
 }

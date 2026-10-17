@@ -61,6 +61,23 @@ describe('radioDbStats', () => {
     expect(names).not.toContain(radioDbName(key32(0x02)));
   });
 
+  it('does not create a missing database even when the factory cannot list databases', async () => {
+    const factory = freshFactory();
+    const noList = {
+      open: factory.open.bind(factory),
+      deleteDatabase: factory.deleteDatabase.bind(factory),
+      cmp: factory.cmp.bind(factory),
+    } as unknown as IDBFactory;
+    const st = await radioDbStats(key32(0x04), { factory: noList });
+    expect(st).toMatchObject({ exists: false, approxBytes: 0 });
+    const names = (await factory.databases()).map((d) => d.name);
+    expect(names).not.toContain(radioDbName(key32(0x04)));
+    // an existing database is still counted through the same factory
+    const s = await RadioStore.open(key32(0x04), { factory });
+    s.close();
+    expect((await radioDbStats(key32(0x04), { factory: noList })).exists).toBe(true);
+  });
+
   it('rejects when IndexedDB is unavailable', async () => {
     const g = globalThis as { indexedDB?: unknown };
     const saved = g.indexedDB;

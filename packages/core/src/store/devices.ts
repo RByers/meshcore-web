@@ -108,8 +108,9 @@ export class DevicesRepo {
   }
 
   /**
-   * Forgets a radio. With `deleteData`, also deletes its per-radio database (close any open
-   * RadioStore for it first, or the delete waits for it to close).
+   * Forgets a radio. With `deleteData`, also deletes its per-radio database. Connections opened
+   * by `openDatabase` close themselves on the delete's `versionchange`, so an open RadioStore does
+   * not block it (but becomes unusable: disconnect the radio first, as `AppModel.forgetDevice` does).
    */
   async forget(pubKey: Uint8Array | string, opts: { deleteData?: boolean } = {}): Promise<void> {
     const key = pubKeyHex(pubKey);

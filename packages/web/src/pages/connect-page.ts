@@ -1,13 +1,15 @@
 /**
- * Connect page: USB Serial / Bluetooth / Emulator, plus previously connected radios. While a
- * radio is connected it shows only that connection with a Disconnect button: disconnect first
- * to connect to something else. The "Install app" offer lives on the Settings page.
+ * Connect page: USB Serial / Bluetooth / Emulator, plus previously connected radios with the
+ * data each one has stored in this browser (packets, ≈ database size) and a two-click Remove that
+ * forgets the radio and deletes its data. While a radio is connected it shows that connection
+ * with a Disconnect button (disconnect first to connect to something else) and the stored radios
+ * without Reconnect. The "Install app" offer lives on the Settings page.
  */
 import { css, html, nothing } from 'lit';
-import { CONNECTION_KIND_LABEL, isConnectionKind, type ConnectionKind } from '@meshcore-web/core/app';
+import { CONNECTION_KIND_LABEL, effect, isConnectionKind, untracked, type ConnectionKind } from '@meshcore-web/core/app';
 import type { DeviceRecord } from '@meshcore-web/core/store';
 import { AppElement } from '../app-context.js';
-import { PHASE_LABEL, formatRelative, shortKey } from '../format.js';
+import { PHASE_LABEL, formatBytes, formatRelative, shortKey } from '../format.js';
 import { hrefFor } from '../router.js';
 import { shared } from '../styles.js';
 import '../components/connect-progress.js';
@@ -127,6 +129,44 @@ export class McConnectPage extends AppElement {
       .device .name {
         font-weight: 600;
       }
+      .device .stored {
+        font-variant-numeric: tabular-nums;
+      }
+      .device .row-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .device[data-current] {
+        border-color: var(--mc-accent);
+      }
+      button.danger[data-armed] {
+        background: var(--mc-danger);
+        border-color: var(--mc-danger);
+        color: var(--mc-surface);
+      }
+      .known-head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 4px 12px;
+        margin-block: 1em 0.5em;
+      }
+      .known-head h3 {
+        margin: 0;
+      }
+      .known-head .total {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.9em;
+        font-variant-numeric: tabular-nums;
+      }
+      .known-head .total button {
+        min-height: 2rem;
+        padding: 0.25em 0.75em;
+      }
       .current {
         display: flex;
         flex-wrap: wrap;
@@ -160,6 +200,80 @@ export class McConnectPage extends AppElement {
       }
     `,
   ];
+
+  #off: (() => void) | undefined;
+  /** Origin-wide usage from `navigator.storage.estimate()` (all databases, caches, …), if available. */
+  #origin: { usage: number; quota: number } | null = null;
+  /** Pubkey whose Remove button was clicked once and awaits the confirming second click. */
+  #armed: string | null = null;
+  /** Pubkey being removed. */
+  #removing: string | null = null;
+
+  /** Any click other than on the armed Remove button disarms it (runs after the button's own handler). */
+  readonly #onClick = (e: Event): void => {
+    if (this.#armed === null) return;
+    const btn = e
+      .composedPath()
+      .find((n): n is HTMLElement => n instanceof HTMLElement && n.dataset['action'] === 'remove-device');
+    if (btn?.dataset['pubkey'] !== this.#armed) this.#disarm();
+  };
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this.addEventListener('click', this.#onClick);
+    // count on show, and again whenever the known radios change (connect / remove)
+    this.#off = effect(() => {
+      void this.app.devices.value;
+      untracked(() => void this.#refreshStorage());
+    });
+  }
+
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this.removeEventListener('click', this.#onClick);
+    this.#off?.();
+    this.#off = undefined;
+    this.#armed = null;
+  }
+
+  async #refreshStorage(): Promise<void> {
+    await this.app.storage.refresh();
+    const storage = (navigator as { storage?: StorageManager }).storage;
+    if (typeof storage?.estimate !== 'function') return;
+    try {
+      const est = await storage.estimate();
+      this.#origin = { usage: est.usage ?? 0, quota: est.quota ?? 0 };
+      this.requestUpdate();
+    } catch {
+      // not available (e.g. opaque origin); the per-radio numbers still show
+    }
+  }
+
+  #disarm(): void {
+    if (this.#armed === null) return;
+    this.#armed = null;
+    this.requestUpdate();
+  }
+
+  /** First click arms; a second click on the same button forgets the radio and deletes its data. */
+  async #remove(d: DeviceRecord): Promise<void> {
+    if (this.#armed !== d.pubKey) {
+      this.#armed = d.pubKey;
+      this.requestUpdate();
+      return;
+    }
+    this.#armed = null;
+    this.#removing = d.pubKey;
+    this.requestUpdate();
+    try {
+      await this.app.forgetDevice(d.pubKey, { deleteData: true });
+    } catch (err) {
+      this.app.notifications.error(`Could not remove ${d.name || shortKey(d.pubKey)}`, err);
+    } finally {
+      this.#removing = null;
+      this.requestUpdate();
+    }
+  }
 
   override render() {
     const conn = this.app.connection;
@@ -214,6 +328,7 @@ export class McConnectPage extends AppElement {
         </div>
       </section>
       <p class="muted" data-field="connected-note">Disconnect this radio to connect to a different one.</p>
+      ${this.#devices(false, true)}
     `;
   }
 
@@ -237,39 +352,102 @@ export class McConnectPage extends AppElement {
     </section>`;
   }
 
-  #devices(busy: boolean) {
+  /** Known radios with their stored data; `connected`: the list shown under the current connection. */
+  #devices(busy: boolean, connected = false) {
     const devices = this.app.devices.value;
     if (devices.length === 0) return nothing;
-    return html`<section aria-labelledby="known-h">
-      <h3 id="known-h">Previously connected</h3>
+    const storage = this.app.storage;
+    const loading = storage.loading.value;
+    const origin = this.#origin;
+    return html`<section aria-labelledby="known-h" data-section="known">
+      <div class="known-head">
+        <h3 id="known-h">${connected ? 'Radios in this browser' : 'Previously connected'}</h3>
+        <span class="total muted">
+          <span data-field="storage-total" title="Approximate: record data only, without index and storage overhead"
+            >≈ ${formatBytes(storage.totalBytes.value)} stored</span
+          >${origin
+            ? html`<span
+                data-field="origin-usage"
+                title=${`All site data in this browser${origin.quota ? `, of ${formatBytes(origin.quota)} available` : ''}`}
+                >· ${formatBytes(origin.usage)} site total</span
+              >`
+            : nothing}
+          <button type="button" data-action="refresh-storage" ?disabled=${loading} aria-label="Recount stored data"
+            @click=${() => void this.#refreshStorage()}>
+            ${loading ? 'Counting…' : 'Recount'}
+          </button>
+        </span>
+      </div>
       <ul class="devices">
-        ${devices.map((d) => this.#device(d, busy))}
+        ${devices.map((d) => this.#device(d, busy, connected))}
       </ul>
     </section>`;
   }
 
-  #device(d: DeviceRecord, busy: boolean) {
+  /** "1,234 packets · ≈ 1.2 MB", other record counts in the tooltip. */
+  #stored(d: DeviceRecord) {
+    const e = this.app.storage.byDevice.value[d.pubKey];
+    if (e?.status === 'error') return html`<div class="stored muted" data-field="stored">Stored data unavailable</div>`;
+    const st = e?.stats;
+    if (!st) return html`<div class="stored muted" data-field="stored">Counting stored data…</div>`;
+    const c = st.counts;
+    const detail =
+      `${c.messages.toLocaleString()} messages · ${c.contacts.toLocaleString()} contacts · ` +
+      `${c.channels.toLocaleString()} channels · ${c.frames.toLocaleString()} frames ` +
+      '(size is approximate: record data only)';
+    return html`<div class="stored muted" data-field="stored" title=${detail}>
+      <span data-field="packet-count">${c.packets.toLocaleString()}</span> packets ·
+      <span data-field="db-size">≈ ${formatBytes(st.approxBytes)}</span>
+    </div>`;
+  }
+
+  #device(d: DeviceRecord, busy: boolean, connected: boolean) {
     const conn = this.app.connection;
     const kind = isConnectionKind(d.transport) ? d.transport : null;
     const available = kind !== null && conn.isAvailable(kind);
     const direct = kind !== null && conn.canReconnect(kind);
-    return html`<li class="card device" data-pubkey=${d.pubKey}>
+    const label = d.name || shortKey(d.pubKey);
+    const current = connected && conn.pubKey.value === d.pubKey;
+    const armed = this.#armed === d.pubKey;
+    const removing = this.#removing === d.pubKey;
+    const disabled = busy || this.#removing !== null;
+    return html`<li class="card device" data-pubkey=${d.pubKey} ?data-current=${current}>
       <div class="who">
-        <div class="name">${d.name || 'Unnamed radio'}</div>
+        <div class="name">${d.name || 'Unnamed radio'}${current ? html` <span class="muted">(connected)</span>` : nothing}</div>
         <div class="muted">
           <span class="mono" title=${d.pubKey}>${shortKey(d.pubKey)}</span>
           · ${kind ? CONNECTION_KIND_LABEL[kind] : d.transport} · ${formatRelative(d.lastConnected, this.app.clock.now())}
         </div>
+        ${this.#stored(d)}
       </div>
-      <button
-        data-reconnect=${d.pubKey}
-        ?disabled=${!available || busy}
-        aria-label=${`Reconnect to ${d.name || shortKey(d.pubKey)}`}
-        title=${direct ? 'Reconnect' : 'Opens the browser device chooser'}
-        @click=${() => void conn.reconnect(d)}
-      >
-        Reconnect
-      </button>
+      <div class="row-actions">
+        ${connected
+          ? nothing
+          : html`<button
+              data-reconnect=${d.pubKey}
+              ?disabled=${!available || disabled}
+              aria-label=${`Reconnect to ${label}`}
+              title=${direct ? 'Reconnect' : 'Opens the browser device chooser'}
+              @click=${() => void conn.reconnect(d)}
+            >
+              Reconnect
+            </button>`}
+        <button
+          class="danger"
+          data-action="remove-device"
+          data-pubkey=${d.pubKey}
+          ?data-armed=${armed}
+          ?disabled=${disabled}
+          aria-label=${armed ? `Confirm: remove ${label} and delete its stored data` : `Remove ${label} and its stored data`}
+          title=${current ? 'Disconnects, then deletes everything stored for this radio' : 'Deletes everything stored for this radio'}
+          @click=${() => void this.#remove(d)}
+          @blur=${() => {
+            if (armed) this.#disarm();
+          }}
+        >
+          ${removing ? 'Removing…' : armed ? 'Confirm remove' : 'Remove'}
+        </button>
+      </div>
     </li>`;
   }
 }

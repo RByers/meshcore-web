@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { IDBFactory } from 'fake-indexeddb';
 import type { RadioDbStats } from '../store/db-stats.js';
-import type { DeviceRecord } from '../store/schema.js';
+import { radioDbName, type DeviceRecord } from '../store/schema.js';
 import { signal } from './signal.js';
 import { StorageModel } from './storage-model.js';
 import { connectedApp } from './testing.js';
@@ -68,4 +69,44 @@ describe('StorageModel', () => {
     expect(m.totalBytes.value).toBe(20);
     expect(m.loading.value).toBe(false);
   });
+
+  it('drops a radio as soon as it is forgotten, and skips it in a running pass', async () => {
+    const devices = signal<readonly DeviceRecord[]>([device('aa'), device('bb')]);
+    const gates: Array<() => void> = [];
+    const stats = vi.fn(async (pubKey: string) => {
+      await new Promise<void>((r) => gates.push(r));
+      return fakeStats(pubKey, 5);
+    });
+    const m = new StorageModel({ devices, storeOptions: () => ({}), stats });
+    const run = m.refresh();
+    await vi.waitFor(() => expect(gates).toHaveLength(1));
+    devices.value = [device('aa')];
+    expect(Object.keys(m.byDevice.value)).toEqual(['aa']);
+    gates.shift()!();
+    await run;
+    // 'bb' was forgotten before its turn: never counted
+    expect(stats).toHaveBeenCalledTimes(1);
+    expect(Object.keys(m.byDevice.value)).toEqual(['aa']);
+    expect(m.totalBytes.value).toBe(5);
+  });
+
+  it('forgetDevice with deleteData on the connected radio disconnects and deletes its database', async () => {
+    const factory = new IDBFactory();
+    const t = await connectedApp({ app: { indexedDB: factory } });
+    const key = t.app.connection.pubKey.peek()!;
+    await t.app.refreshDevices();
+    await t.app.storage.refresh();
+    expect(t.app.storage.byDevice.value[key]?.stats?.exists).toBe(true);
+    expect((await factory.databases()).map((d) => d.name)).toContain(radioDbName(key));
+
+    await t.app.forgetDevice(key, { deleteData: true });
+    expect(t.app.connection.connected.peek()).toBe(false);
+    expect(t.app.devices.peek().map((d) => d.pubKey)).not.toContain(key);
+    expect((await factory.databases()).map((d) => d.name)).not.toContain(radioDbName(key));
+    expect(t.app.storage.byDevice.value[key]).toBeUndefined();
+    await t.app.storage.refresh();
+    expect(t.app.storage.byDevice.value[key]).toBeUndefined();
+    expect(t.app.storage.totalBytes.value).toBe(0);
+  });
+
 });
