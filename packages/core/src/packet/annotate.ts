@@ -22,6 +22,7 @@ import {
 import { calcSharedSecret, ed25519Verify, macThenDecrypt } from './crypto.js';
 import { firmwareRejectReasons, packetHash, parsePacket } from './packet.js';
 import { advertSignedMessage, channelHash } from './payloads.js';
+import { describePacketTree } from './field-docs.js';
 
 export interface AnnotationNode {
   /** Absolute byte offset within the packet. */
@@ -30,6 +31,8 @@ export interface AnnotationNode {
   name: string;
   value: string;
   meaning?: string;
+  /** What the field is, from the protocol docs (shown as a tooltip by the inspector). */
+  description?: string;
   children?: AnnotationNode[];
   /** This node describes decrypted plaintext (positions map 1:1 onto the ciphertext bytes). */
   decrypted?: true;
@@ -185,6 +188,16 @@ function pathLenBits(node: AnnotationNode, raw: number, trace = false): void {
 export async function annotatePacket(bytes: Uint8Array, opts: AnnotateOptions = {}): Promise<Annotation> {
   const pending: Pending[] = [];
   const ann = buildAnnotation(bytes, opts, pending);
+  await runPending(pending, ann);
+  return describedPacket(ann, bytes);
+}
+
+/** Synchronous structural annotation (no decryption, no signature check, no packet hash). */
+export function annotatePacketSync(bytes: Uint8Array): Annotation {
+  return describedPacket(buildAnnotation(bytes, { verifySignatures: false }, null), bytes);
+}
+
+async function runPending(pending: Pending[], ann: Annotation): Promise<void> {
   for (const p of pending) {
     try {
       await p();
@@ -192,12 +205,11 @@ export async function annotatePacket(bytes: Uint8Array, opts: AnnotateOptions = 
       ann.errors.push(`async step failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
-  return ann;
 }
 
-/** Synchronous structural annotation (no decryption, no signature check, no packet hash). */
-export function annotatePacketSync(bytes: Uint8Array): Annotation {
-  return buildAnnotation(bytes, { verifySignatures: false }, null);
+function describedPacket(ann: Annotation, bytes: Uint8Array): Annotation {
+  describePacketTree(ann, bytes.length ? (bytes[0]! >> 2) & 0x0f : undefined, false);
+  return ann;
 }
 
 /**
@@ -207,19 +219,16 @@ export function annotatePacketSync(bytes: Uint8Array): Annotation {
 export async function annotatePayload(payloadType: number, bytes: Uint8Array, opts: AnnotateOptions = {}): Promise<Annotation> {
   const pending: Pending[] = [];
   const ann = buildPayloadAnnotation(payloadType, bytes, opts, pending);
-  for (const p of pending) {
-    try {
-      await p();
-    } catch (e) {
-      ann.errors.push(`async step failed: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
+  await runPending(pending, ann);
+  describePacketTree(ann, payloadType, true);
   return ann;
 }
 
 /** Synchronous structural variant of {@link annotatePayload}. */
 export function annotatePayloadSync(payloadType: number, bytes: Uint8Array): Annotation {
-  return buildPayloadAnnotation(payloadType, bytes, { verifySignatures: false }, null);
+  const ann = buildPayloadAnnotation(payloadType, bytes, { verifySignatures: false }, null);
+  describePacketTree(ann, payloadType, true);
+  return ann;
 }
 
 function buildPayloadAnnotation(payloadType: number, bytes: Uint8Array, opts: AnnotateOptions, pending: Pending[] | null): Annotation {

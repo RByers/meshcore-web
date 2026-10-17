@@ -170,6 +170,64 @@ describe('/packets page', () => {
     expect(first.getBoundingClientRect().top).toBeGreaterThan(top);
   });
 
+  it('hovering or focusing a field shows a tooltip with its protocol description', async () => {
+    const t = await openLog();
+    await traffic(t);
+    const id = t.query('tr[data-type="GRP_TXT"]')!.dataset['packetId']!;
+    await t.click(`tr[data-packet-id="${id}"]`);
+    await t.until(() => t.query('[data-byte="0"]'), 3000, 'inspector');
+    const insp = t.query<McPacketInspector>('aside mc-packet-inspector')!;
+    const tip = (): HTMLElement => insp.shadowRoot!.querySelector<HTMLElement>('[data-tooltip]')!;
+    const open = (): boolean => tip().matches(':popover-open');
+
+    // tree row
+    const header = t.query('[data-name="header"]')!;
+    header.dispatchEvent(new MouseEvent('mouseenter'));
+    await insp.updateComplete;
+    expect(open()).toBe(true);
+    expect(tip().textContent).toContain('header');
+    expect(tip().textContent).toContain('route type (bits 0-1), payload type (bits 2-5)');
+    expect(header.getAttribute('aria-describedby')).toBe('tip');
+    // placed next to the hovered row
+    const hr = header.getBoundingClientRect();
+    const tr = tip().getBoundingClientRect();
+    expect(Math.abs(tr.top - hr.bottom) < 20 || Math.abs(tr.bottom - hr.top) < 20).toBe(true);
+
+    // leaving hides it (after a short grace period)
+    header.dispatchEvent(new MouseEvent('mouseleave'));
+    await t.until(() => !open(), 2000, 'tooltip hidden');
+
+    // decrypted field: description of the plaintext layout
+    t.query('.node.decrypted[data-name="text"]')!.dispatchEvent(new MouseEvent('mouseenter'));
+    await insp.updateComplete;
+    expect(tip().textContent).toContain('not authenticated');
+
+    // hovering a byte describes the deepest field covering it; Escape dismisses
+    t.query('[data-byte="1"]')!.dispatchEvent(new MouseEvent('mouseenter'));
+    await insp.updateComplete;
+    expect(tip().textContent).toContain('path_len');
+    expect(tip().textContent).toContain('bits 6-7 = hash size − 1');
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    await insp.updateComplete;
+    expect(open()).toBe(false);
+
+    // keyboard focus shows it too
+    t.query<HTMLElement>('[data-name="channel_hash"]')!.focus();
+    await insp.updateComplete;
+    expect(open()).toBe(true);
+    expect(tip().textContent).toContain('SHA256(channel PSK)');
+
+    // frames: the code byte explains what the command is for
+    await t.click('[data-tab="frames"]');
+    await t.until(() => t.query('tr[data-name="APP_START"]'), 3000, 'frames');
+    await t.click('tr[data-name="APP_START"]');
+    await t.until(() => t.query('[data-name="app name"]'), 3000, 'frame inspector');
+    const finsp = t.query<McPacketInspector>('aside mc-packet-inspector')!;
+    t.query('[data-name="code"]')!.dispatchEvent(new MouseEvent('mouseenter'));
+    await finsp.updateComplete;
+    expect(finsp.shadowRoot!.querySelector('[data-tooltip]')!.textContent).toContain('APP_START: Starts the app session');
+  });
+
   it('frames tab shows the handshake frames and inspects them', async () => {
     const t = await openLog();
     await t.click('[data-tab="frames"]');

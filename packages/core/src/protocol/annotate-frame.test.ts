@@ -309,6 +309,34 @@ describe('annotateFrame — device → host (companion-protocol.md §2-§7)', ()
   });
 });
 
+/** Paths of nodes without a description. */
+function undescribed(n: AnnotationNode, path = n.name): string[] {
+  const own = n.description ? [] : [path];
+  return [...own, ...(n.children ?? []).flatMap((c) => undescribed(c, `${path}/${c.name}`))];
+}
+
+describe('annotateFrame — every field has a description (docs/companion-protocol.md)', () => {
+  it.each(FIXTURES.filter(([n]) => n !== 'unknown code'))('%s', (_name, bytes) => {
+    expect(undescribed(annotateFrame('in', bytes))).toEqual([]);
+  });
+
+  it('every command sample', () => {
+    for (const cmd of samples) expect(undescribed(annotateFrame('out', encodeCommand(cmd))), cmd.kind).toEqual([]);
+  });
+
+  it('the code byte describes what the frame is for', () => {
+    const ann = annotateFrame('out', encodeCommand({ kind: 'deviceQuery', appTargetVer: 3 }));
+    expect(find(ann, 'code')!.description).toMatch(/^DEVICE_QUERY: .*protocol version/);
+    expect(find(ann, 'app target ver')!.description).toContain('V3');
+  });
+
+  it('nested packets keep the packet descriptions', () => {
+    const ann = annotateFrame('in', FIXTURES.find(([n]) => n === 'PUSH LOG_RX_DATA')![1]);
+    expect(find(ann, 'packet')!.description).toContain('ADVERT (4)');
+    expect(find(ann, 'header')!.description).toContain('Header byte');
+  });
+});
+
 describe('annotateFrame — host → device (companion-protocol.md §4)', () => {
   it('every CMD code: tiles, named, no truncation or trailing bytes', () => {
     const seen = new Set<number>();

@@ -8,6 +8,8 @@
  *
  * Hovering / focusing a tree node highlights its bytes (`.hl` on the cells); clicking selects it
  * (`.sel`). Hovering or clicking a byte targets the deepest annotation node covering it.
+ * Hovering or focusing a field (tree row or byte) shows a tooltip with the field's `description`
+ * from the protocol docs (`[data-tooltip]`, a manual popover; Escape or leaving hides it).
  * Data hooks: `[data-byte="<offset>"]` (hex cells), `[data-ascii="<offset>"]`,
  * `[data-node="<path>"]` / `[data-name]` (tree rows), `[data-action="copy-hex|copy-json"]`.
  */
@@ -69,6 +71,7 @@ export class McPacketInspector extends LitElement {
     hovered: { state: true },
     selected: { state: true },
     copied: { state: true },
+    tip: { state: true },
   };
   declare annotation: Annotation | null;
   declare bytes: Uint8Array;
@@ -79,7 +82,11 @@ export class McPacketInspector extends LitElement {
   declare hovered: string | null;
   declare selected: string | null;
   declare copied: string;
+  /** Node id whose description tooltip is shown. */
+  declare tip: string | null;
   #index = new Map<string, Indexed>();
+  #tipAnchor: Element | null = null;
+  #hideTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor() {
     super();
@@ -91,7 +98,23 @@ export class McPacketInspector extends LitElement {
     this.hovered = null;
     this.selected = null;
     this.copied = '';
+    this.tip = null;
   }
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    window.addEventListener('keydown', this.#onKey);
+  }
+
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    window.removeEventListener('keydown', this.#onKey);
+    clearTimeout(this.#hideTimer);
+  }
+
+  #onKey = (e: KeyboardEvent): void => {
+    if (e.key === 'Escape' && this.tip) this.#hideTip();
+  };
 
   static override styles = [
     shared,
@@ -271,6 +294,41 @@ export class McPacketInspector extends LitElement {
         font-size: 0.8rem;
         color: var(--mc-ok);
       }
+      .node.described .name {
+        text-decoration: underline dotted var(--mc-text-muted);
+        text-underline-offset: 3px;
+      }
+      [data-tooltip] {
+        position: fixed;
+        inset: auto;
+        margin: 0;
+        max-width: min(28rem, calc(100vw - 16px));
+        padding: 8px 10px;
+        border: 1px solid var(--mc-border);
+        border-radius: 8px;
+        background: var(--mc-surface);
+        color: var(--mc-text);
+        box-shadow: 0 4px 16px rgb(0 0 0 / 0.2);
+        font-size: 0.8125rem;
+        line-height: 1.4;
+      }
+      [data-tooltip] .tip-head {
+        display: flex;
+        gap: 8px;
+        align-items: baseline;
+        margin-block-end: 4px;
+      }
+      [data-tooltip] .tip-head .range {
+        color: var(--mc-text-muted);
+        font-family: var(--mc-mono);
+        font-size: 0.75rem;
+      }
+      [data-tooltip] p {
+        margin: 0;
+      }
+      [data-tooltip] p + p {
+        margin-block-start: 6px;
+      }
     `,
   ];
 
@@ -279,7 +337,72 @@ export class McPacketInspector extends LitElement {
       this.#index = this.annotation ? index(this.annotation) : new Map();
       this.hovered = null;
       this.selected = null;
+      this.tip = null;
     }
+  }
+
+  protected override updated(): void {
+    const el = this.renderRoot.querySelector<HTMLElement>('[data-tooltip]');
+    if (!el) return;
+    const open = el.matches(':popover-open');
+    if (!this.tip || !this.#tipAnchor?.isConnected) {
+      if (open) el.hidePopover();
+      return;
+    }
+    if (!open) el.showPopover();
+    // Below the anchor, or above it when there is no room; kept inside the viewport.
+    const r = this.#tipAnchor.getBoundingClientRect();
+    const t = el.getBoundingClientRect();
+    const gap = 6;
+    let top = r.bottom + gap;
+    if (top + t.height > window.innerHeight - 8 && r.top - gap - t.height >= 8) top = r.top - gap - t.height;
+    const left = Math.max(8, Math.min(r.left, window.innerWidth - t.width - 8));
+    el.style.top = `${top}px`;
+    el.style.left = `${left}px`;
+  }
+
+  /** Shows the description of node `id` next to `anchor` (if it has one). */
+  #showTip(id: string | null, anchor: Element): void {
+    clearTimeout(this.#hideTimer);
+    if (!id || !this.#index.get(id)?.node.description) {
+      this.#hideTip();
+      return;
+    }
+    this.#tipAnchor = anchor;
+    this.tip = id;
+  }
+
+  /** Hides after a short grace period so the pointer can move onto the tooltip. */
+  #leaveTip(): void {
+    clearTimeout(this.#hideTimer);
+    this.#hideTimer = setTimeout(() => this.#hideTip(), 200);
+  }
+
+  #hideTip(): void {
+    clearTimeout(this.#hideTimer);
+    this.tip = null;
+    this.#tipAnchor = null;
+  }
+
+  #rangeLabel(n: AnnotationNode): string {
+    return n.bits ? `bits ${n.bits.mask.toString(2).padStart(8, '0')}` : n.length === 1 ? `[${n.offset}]` : `[${n.offset}..${n.offset + n.length - 1}]`;
+  }
+
+  #tooltip(): TemplateResult {
+    const n = this.tip ? this.#index.get(this.tip)?.node : undefined;
+    return html`<div
+      data-tooltip
+      id="tip"
+      popover="manual"
+      role="tooltip"
+      @mouseenter=${() => clearTimeout(this.#hideTimer)}
+      @mouseleave=${() => this.#leaveTip()}
+    >
+      ${n
+        ? html`<div class="tip-head"><strong>${n.name}</strong><span class="range">${this.#rangeLabel(n)}</span></div>
+            ${(n.description ?? '').split('\n\n').map((para) => html`<p>${para}</p>`)}`
+        : nothing}
+    </div>`;
   }
 
   /** Byte range of a node id. */
@@ -330,22 +453,36 @@ export class McPacketInspector extends LitElement {
       rows.push(html`<div class="row">
         <span class="off">${r.toString(16).padStart(4, '0')}</span>
         <span class="bytes">${idx.map(
-          (i) => html`<span data-byte=${i} class=${cls(i)} @mouseenter=${() => this.#hoverByte(i)} @click=${() => this.selectByte(i)}
+          (i) => html`<span data-byte=${i} class=${cls(i)} @mouseenter=${(e: Event) => this.#hoverByte(i, e)} @click=${() => this.selectByte(i)}
             >${b[i]!.toString(16).padStart(2, '0')}</span
           >`,
         )}</span>
         <span class="ascii" aria-hidden="true">${idx.map(
-          (i) => html`<span data-ascii=${i} class=${cls(i)} @mouseenter=${() => this.#hoverByte(i)} @click=${() => this.selectByte(i)}
+          (i) => html`<span data-ascii=${i} class=${cls(i)} @mouseenter=${(e: Event) => this.#hoverByte(i, e)} @click=${() => this.selectByte(i)}
             >${printable(b[i]!)}</span
           >`,
         )}</span>
       </div>`);
     }
-    return html`<div class="hex" role="group" aria-label="Hex dump" @mouseleave=${() => (this.hovered = null)}>${rows}</div>`;
+    return html`<div
+      class="hex"
+      role="group"
+      aria-label="Hex dump"
+      @mouseleave=${() => {
+        this.hovered = null;
+        this.#leaveTip();
+      }}
+    >
+      ${rows}
+    </div>`;
   }
 
-  #hoverByte(i: number): void {
-    if (this.annotation) this.hovered = deepestNodeAt(this.annotation, i);
+  #hoverByte(i: number, e: Event): void {
+    if (!this.annotation) return;
+    this.hovered = deepestNodeAt(this.annotation, i);
+    // anchored under the whole dump so it never hides the bytes being scanned
+    const target = e.currentTarget as Element;
+    this.#showTip(this.hovered, target.closest('.hex') ?? target);
   }
 
   #bits(parent: AnnotationNode, n: AnnotationNode): TemplateResult {
@@ -367,16 +504,27 @@ export class McPacketInspector extends LitElement {
     const isSel = this.selected === id;
     const isHl = !isSel && this.hovered === id;
     const kids = n.children ?? [];
-    const range = n.bits ? `bits ${n.bits.mask.toString(2).padStart(8, '0')}` : n.length === 1 ? `[${n.offset}]` : `[${n.offset}..${n.offset + n.length - 1}]`;
+    const range = this.#rangeLabel(n);
     return html`<li role="treeitem" aria-selected=${isSel ? 'true' : 'false'} aria-expanded=${kids.length ? 'true' : nothing}>
       <div
-        class="node ${isSel ? 'sel' : ''} ${isHl ? 'hl' : ''} ${n.decrypted ? 'decrypted' : ''}"
+        class="node ${isSel ? 'sel' : ''} ${isHl ? 'hl' : ''} ${n.decrypted ? 'decrypted' : ''} ${n.description ? 'described' : ''}"
         data-node=${id}
         data-name=${n.name}
         tabindex="0"
-        @mouseenter=${() => (this.hovered = id)}
-        @mouseleave=${() => (this.hovered = this.hovered === id ? null : this.hovered)}
-        @focus=${() => (this.hovered = id)}
+        aria-describedby=${this.tip === id ? 'tip' : nothing}
+        @mouseenter=${(e: Event) => {
+          this.hovered = id;
+          this.#showTip(id, e.currentTarget as Element);
+        }}
+        @mouseleave=${() => {
+          this.hovered = this.hovered === id ? null : this.hovered;
+          this.#leaveTip();
+        }}
+        @focus=${(e: Event) => {
+          this.hovered = id;
+          this.#showTip(id, e.currentTarget as Element);
+        }}
+        @blur=${() => this.#leaveTip()}
         @click=${(e: Event) => {
           e.stopPropagation();
           this.selected = isSel ? null : id;
@@ -419,6 +567,7 @@ export class McPacketInspector extends LitElement {
         : nothing}
       ${this.#hexDump()}
       ${a ? html`<ul class="tree" role="tree" aria-label="Fields">${this.#node(a, '0', null)}</ul>` : nothing}
+      ${this.#tooltip()}
     `;
   }
 }

@@ -161,7 +161,8 @@ frame exchanged with it). **Packets** shows them live:
 - **Packets** tab: time, direction (↓ rx received, ↑ tx sent), type, route, path/hops,
   SNR/RSSI, size and a summary. Filter by direction (all / rx / tx), type, node and time.
   Click a row to open the **inspector**: a hex dump and a tree explaining every byte (header
-  bits, path, payload fields); hovering a field highlights its bytes and vice versa.
+  bits, path, payload fields); hovering a field highlights its bytes and vice versa, and shows a
+  tooltip explaining the field from the protocol specification (dotted-underlined names have one).
 - **Sent packets** (tx) are logged when the app asks the radio to transmit (messages, channel
   posts, adverts, logins and requests, traces, raw data). The radio does not report what it
   actually put on air, so for packets it builds and encrypts itself (DMs, channel messages,

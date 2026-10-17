@@ -32,6 +32,7 @@ import {
   errName,
   isPushCode,
 } from './constants.js';
+import { describeFrameTree } from './frame-field-docs.js';
 
 /** 'in' = device → host (response / push), 'out' = host → device (command). */
 export type FrameAnnotationDirection = 'in' | 'out';
@@ -231,6 +232,7 @@ class Cursor {
 function nest(node: AnnotationNode, ann: Annotation, start: number, errors: string[]): void {
   node.value = ann.value;
   if (ann.meaning) node.meaning = ann.meaning;
+  if (ann.description) node.description = ann.description;
   node.children = (ann.children ?? []).map((c) => shiftAnnotation(c, start));
   for (const e of ann.errors) errors.push(`${node.name}: ${e}`);
 }
@@ -242,6 +244,7 @@ export function annotateFrame(direction: FrameAnnotationDirection, bytes: Uint8A
   if (bytes.length === 0) {
     errors.push('empty frame');
     root.children = [];
+    describeFrameTree(root, direction, undefined);
     return root;
   }
   const code = bytes[0]!;
@@ -262,6 +265,7 @@ export function annotateFrame(direction: FrameAnnotationDirection, bytes: Uint8A
     c.finish('unparsed');
   }
   root.children = c.nodes;
+  describeFrameTree(root, direction, name);
   return root;
 }
 

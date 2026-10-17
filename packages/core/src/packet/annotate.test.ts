@@ -202,6 +202,37 @@ describe('annotatePacket — every fixture is tiled exactly', () => {
   }
 });
 
+/** Paths of nodes without a description. */
+function undescribed(n: AnnotationNode, path = n.name): string[] {
+  const own = n.description ? [] : [path];
+  return [...own, ...(n.children ?? []).flatMap((c) => undescribed(c, `${path}/${c.name}`))];
+}
+
+describe('annotatePacket — every field has a description (docs/mesh-packet-format.md)', () => {
+  for (const [name, make] of Object.entries(fixtures)) {
+    it(name, async () => {
+      const bytes = await make();
+      const ann = await annotatePacket(bytes, { keys: KEYS });
+      // 'unparsed' payload of a reserved type has nothing to say beyond its name
+      expect(undescribed(ann)).toEqual([]);
+    });
+  }
+
+  it('header bits describe the selected route and payload type', async () => {
+    const ann = await annotatePacket(await fixtures['TXT_MSG direct 2-byte path']!());
+    const header = find(ann, 'header')!;
+    expect(header.children![0]!.description).toContain('DIRECT (2): follows the path');
+    expect(header.children![1]!.description).toContain('TXT_MSG (2)');
+    expect(find(ann, 'payload')!.description).toMatch(/^TXT_MSG \(2\)/);
+  });
+
+  it('bare payloads are described too', async () => {
+    const ann = await annotatePayload(PayloadType.CONTROL, buildDiscoverReqPayload({ typeFilter: 4, tag: 7 }));
+    expect(ann.description).toMatch(/^CONTROL \(11\)/);
+    expect(undescribed(ann)).toEqual([]);
+  });
+});
+
 describe('annotatePacket — content', () => {
   it('header/path_len bits and path entries', async () => {
     const ann = await annotatePacket(await fixtures['TXT_MSG direct 2-byte path']!());
