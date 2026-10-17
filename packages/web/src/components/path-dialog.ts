@@ -3,13 +3,15 @@
  * `mc-show-path` with a core `PathRequest`, which `<mc-app>` answers by opening its single
  * `<mc-path-dialog>`. The dialog lists the stops (origin, each hop, destination) with resolved
  * names / candidates / hex hashes, and draws the route on a `<mc-tile-map>`; estimated positions
- * (hops without a location, ambiguous hashes) are dashed markers with a "?" and dashed legs.
+ * (hops without a location, ambiguous hashes) are dashed markers with a "?" and dashed legs, shown
+ * only while the "approximate positions" setting is on (the dialog has a checkbox for it).
  * Resolution and layout live in core (`app.paths`, path-geometry.ts).
  *
  * Each stop that resolves to one known node links to its contact page.
  *
  * Test hooks: `mc-hops-link`, `[data-path-dialog]`, `[data-path-list] li[data-stop]` with
- * `data-role` / `data-position`, `a[data-node-link]`, `mc-map-marker[data-stop]`, `[data-action="close-path"]`.
+ * `data-role` / `data-position`, `a[data-node-link]`, `mc-map-marker[data-stop]`, `[data-action="close-path"]`,
+ * `[data-approximate]` (the estimate checkbox), `[data-field="unplaced"]`.
  */
 import { LitElement, css, html, nothing, type TemplateResult } from 'lit';
 import {
@@ -191,6 +193,13 @@ export class McPathDialog extends AppElement {
         margin-block-start: 8px;
         font-size: 0.85rem;
       }
+      .estimate {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-block-start: 6px;
+        font-size: 0.85rem;
+      }
     `,
   ];
 
@@ -270,9 +279,18 @@ export class McPathDialog extends AppElement {
     </dialog>`;
   }
 
+  #setEstimate(on: boolean): void {
+    this.app.appSettings.setApproximatePositions(on);
+    this.#fitPending = true;
+  }
+
   #body(spec: PathSpec, g: PathGeometry) {
     const hopsKnown = spec.hashes.length;
     const count = hopsKnown || spec.hopCount || 0;
+    const estimate = this.app.appSettings.approximatePositions.value;
+    // whether estimating would place stops that have no (single) location
+    const estimable = this.app.paths.geometry(spec, { estimate: true }).placed > g.known;
+    const unplaced = g.stops.filter((s) => s.position === 'none').length;
     return html`
       ${spec.note ? html`<p class="muted" data-field="path-note">${spec.note}</p>` : nothing}
       <ol data-path-list aria-label="Stops">
@@ -291,7 +309,16 @@ export class McPathDialog extends AppElement {
         ${count === 0 ? 'Direct (no hops).' : count === 1 ? '1 hop.' : `${count} hops.`}
         ${g.placed > 1 ? html` Drawn length ${formatDistance(g.distanceM)}.` : nothing}
         ${g.placed > g.known ? html` Dashed markers with “?” are estimated positions.` : nothing}
+        ${g.placed > 0 && unplaced > 0
+          ? html`<span data-field="unplaced">${unplaced === 1 ? '1 stop has' : `${unplaced} stops have`} no known location and ${unplaced === 1 ? 'is' : 'are'} not on the map.</span>`
+          : nothing}
       </p>
+      ${estimable
+        ? html`<label class="estimate"
+            ><input type="checkbox" data-approximate .checked=${estimate} @change=${(e: Event) => this.#setEstimate((e.target as HTMLInputElement).checked)} />
+            Approximate positions of nodes without a location</label
+          >`
+        : nothing}
     `;
   }
 

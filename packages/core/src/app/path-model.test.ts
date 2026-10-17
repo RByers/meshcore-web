@@ -22,7 +22,7 @@ import {
   pathNodesFromContacts,
   selfPathNode,
 } from './path-model.js';
-import { signal } from './signal.js';
+import { signal, type Signal } from './signal.js';
 
 const T = 1_800_000_000_000;
 
@@ -201,14 +201,16 @@ describe('packetPathSpec', () => {
 });
 
 describe('PathModel', () => {
-  async function setup(): Promise<{ store: RadioStore; model: PathModel }> {
+  async function setup(approximate = true): Promise<{ store: RadioStore; model: PathModel; approximatePositions: Signal<boolean> }> {
     const store = await openStore(0x01);
+    const approximatePositions = signal(approximate);
     const model = new PathModel({
       contacts: signal<readonly ContactView[]>([ALICE, HILL]).readonly,
       selfInfo: signal<SelfInfo | null>(SELF_INFO).readonly,
       store: signal<RadioStore | null>(store).readonly,
+      approximatePositions: approximatePositions.readonly,
     });
-    return { store, model };
+    return { store, model, approximatePositions };
   }
 
   it('resolves a contact path and lays it out with an interpolated unknown hop', async () => {
@@ -221,6 +223,19 @@ describe('PathModel', () => {
       ['22', 'interpolated'],
       ['Alice', 'known'],
     ]);
+    expect(await model.resolve({ kind: 'contact', key: 'ff' })).toBeNull();
+    store.close();
+  });
+
+  it('estimates positions only while the approximate positions setting is on, or when asked', async () => {
+    const { store, model, approximatePositions } = await setup(false);
+    const spec = (await model.resolve({ kind: 'contact', key: ALICE.key }))!;
+    const positions = (g: { stops: { position: string }[] }): string[] => g.stops.map((s) => s.position);
+    expect(positions(model.geometry(spec))).toEqual(['known', 'known', 'none', 'known']);
+    expect(positions(model.geometry(spec, { estimate: true }))).toEqual(['known', 'known', 'interpolated', 'known']);
+    approximatePositions.value = true;
+    expect(positions(model.geometry(spec))).toEqual(['known', 'known', 'interpolated', 'known']);
+    expect(positions(model.geometry(spec, { estimate: false }))).toEqual(['known', 'known', 'none', 'known']);
     expect(await model.resolve({ kind: 'contact', key: 'ff' })).toBeNull();
     store.close();
   });

@@ -106,13 +106,29 @@ describe('path view (issue #2)', () => {
 
     await openedPath(t, link);
     await t.until(() => stops(t).length === 4, 3000, 'hops from the packet');
+    // with the "approximate positions" setting off, stops without a location stay off the map
+    expect(t.app.appSettings.approximatePositions.peek()).toBe(false);
+    expect(stops(t).map((s) => s.position)).toEqual(['none', 'known', 'none', 'known']);
+    let map = dialog(t).shadowRoot!.querySelector<McTileMap>('mc-tile-map')!;
+    await t.until(() => map.shadowRoot!.querySelectorAll('path[data-line]').length === 1, 3000, 'known leg only');
+    expect(map.querySelectorAll('mc-map-marker[data-stop]').length).toBe(2);
+    expect(map.querySelector<McMapMarker>('mc-map-marker[approximate]')).toBeNull();
+    expect(t.query('[data-field="unplaced"]')!.textContent).toContain('2 stops have no known location');
+    expect(t.text()).not.toContain('estimated positions');
+
+    // the path view's checkbox turns the setting on
+    const box = t.query<HTMLInputElement>('[data-path-dialog] [data-approximate]')!;
+    expect(box.checked).toBe(false);
+    box.click();
+    expect(t.app.appSettings.approximatePositions.peek()).toBe(true);
+    await t.until(() => stops(t)[2]?.position === 'interpolated', 3000, 'estimated positions');
     expect(stops(t)).toEqual([
       { role: 'from', position: 'extrapolated', label: 'Dave', hash: undefined },
       { role: 'hop', position: 'known', label: 'Hilltop Repeater', hash: repeater.slice(0, 2) },
       { role: 'hop', position: 'interpolated', label: '99', hash: '99' },
       { role: 'to', position: 'known', label: 'Emulator (you)', hash: undefined },
     ]);
-    const map = dialog(t).shadowRoot!.querySelector<McTileMap>('mc-tile-map')!;
+    map = dialog(t).shadowRoot!.querySelector<McTileMap>('mc-tile-map')!;
     await t.until(() => map.shadowRoot!.querySelectorAll('path[data-line]').length === 3, 3000, 'polyline');
     const unknown = map.querySelector<McMapMarker>('mc-map-marker[data-stop="2"]')!;
     expect(unknown.approximate).toBe(true);
@@ -120,6 +136,7 @@ describe('path view (issue #2)', () => {
     // dashed legs touch the estimated stops (Dave → repeater, repeater → 99, 99 → self)
     expect(map.shadowRoot!.querySelectorAll('path[data-dashed]').length).toBe(3);
     expect(t.text()).toContain('estimated positions');
+    expect(t.query('[data-field="unplaced"]')).toBeNull();
   });
 
   it('packet log rows: the path cell opens the path view without opening the packet', async () => {

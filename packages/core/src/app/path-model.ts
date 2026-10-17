@@ -195,6 +195,8 @@ export interface PathModelSources {
   contacts: ReadonlySignal<readonly ContactView[]>;
   selfInfo: ReadonlySignal<SelfInfo | null>;
   store: ReadonlySignal<RadioStore | null>;
+  /** The "approximate positions" app setting: estimate positions of hops without a location. */
+  approximatePositions?: ReadonlySignal<boolean>;
 }
 
 /** `app.paths`: path specs for the "N hops" links and their geometry. */
@@ -208,9 +210,14 @@ export class PathModel {
     this.self = computed(() => selfPathNode(src.selfInfo.value));
   }
 
-  /** Lays out `spec` against the current contacts (reads signals: reactive in a render). */
-  geometry(spec: PathSpec): PathGeometry {
-    return buildPathGeometry(spec, this.nodes.value, this.self.value);
+  /**
+   * Lays out `spec` against the current contacts (reads signals: reactive in a render). Stops
+   * without a location get estimated positions only while the "approximate positions" setting is
+   * on, or when `estimate` asks for them explicitly.
+   */
+  geometry(spec: PathSpec, opts: { estimate?: boolean } = {}): PathGeometry {
+    const estimate = opts.estimate ?? this.src.approximatePositions?.value ?? false;
+    return buildPathGeometry(spec, this.nodes.value, this.self.value, { estimate });
   }
 
   contactSpec(key: string): PathSpec | null {

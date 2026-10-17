@@ -91,7 +91,7 @@ describe('interpolatePositions', () => {
 describe('buildPathGeometry', () => {
   it('lists the stops in order with names, hashes and positions', () => {
     // Delta (48.0) → cc (Charlie 47.9) → bb (Bravo, no location) → aa (Alpha 47.7) → me (47.6)
-    const g = buildPathGeometry({ title: 't', hashes: ['cc', 'bb', 'aa'], from: { kind: 'contact', key: NODES[3]!.key }, to: { kind: 'self' } }, NODES, SELF);
+    const g = buildPathGeometry({ title: 't', hashes: ['cc', 'bb', 'aa'], from: { kind: 'contact', key: NODES[3]!.key }, to: { kind: 'self' } }, NODES, SELF, { estimate: true });
     expect(g.stops.map((s) => [s.role, s.label, s.hash, s.position])).toEqual([
       ['from', 'Delta', undefined, 'known'],
       ['hop', 'Charlie', 'cc', 'known'],
@@ -115,7 +115,9 @@ describe('buildPathGeometry', () => {
   });
 
   it('shows unknown hashes as hex and extrapolates past the last located stop', () => {
-    const g = buildPathGeometry({ title: 't', hashes: ['aa', '42'], from: { kind: 'self' }, to: { kind: 'unknown', label: 'Somewhere' } }, NODES, SELF);
+    const g = buildPathGeometry({ title: 't', hashes: ['aa', '42'], from: { kind: 'self' }, to: { kind: 'unknown', label: 'Somewhere' } }, NODES, SELF, {
+      estimate: true,
+    });
     expect(g.stops.map((s) => [s.label, s.position])).toEqual([
       ['Me (you)', 'known'],
       ['Alpha', 'known'],
@@ -134,6 +136,7 @@ describe('buildPathGeometry', () => {
       { title: 't', hashes: ['ee'], from: { kind: 'self' }, to: { kind: 'point', name: 'West', lat: 48.0, lon: -122.9 } },
       NODES,
       SELF,
+      { estimate: true },
     );
     const hop = g.stops[1]!;
     expect(hop.node).toBeUndefined();
@@ -141,6 +144,25 @@ describe('buildPathGeometry', () => {
     expect(hop.label).toBe('Echo One / Echo Two');
     expect(hop.position).toBe('ambiguous');
     expect([hop.lat, hop.lon]).toEqual([47.8, -122.6]); // Echo Two, the western one
+  });
+
+  it('without estimate, places only stops resolved to a located node', () => {
+    const route = { title: 't', hashes: ['cc', 'bb', 'aa', 'ee', '42'], from: { kind: 'contact', key: NODES[3]!.key }, to: { kind: 'self' } } as const;
+    const g = buildPathGeometry(route, NODES, SELF);
+    expect(g.stops.map((s) => [s.label, s.position, s.lat === undefined])).toEqual([
+      ['Delta', 'known', false],
+      ['Charlie', 'known', false],
+      ['Bravo', 'none', true],
+      ['Alpha', 'known', false],
+      ['Echo One / Echo Two', 'none', true],
+      ['42', 'none', true],
+      ['Me (you)', 'known', false],
+    ]);
+    expect(g.placed).toBe(4);
+    expect(g.known).toBe(4);
+    expect(g.stops.some((s) => isApproximate(s.position))).toBe(false);
+    // the same route with estimates fills the gaps
+    expect(buildPathGeometry(route, NODES, SELF, { estimate: true }).placed).toBe(7);
   });
 
   it('places nothing when no stop has a location', () => {

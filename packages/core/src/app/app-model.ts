@@ -240,7 +240,12 @@ export class AppModel {
 
   /** Path views for the "N hops" links: contact / message / packet routes and their map layout (issue #2). */
   get paths(): PathModel {
-    return (this.#paths ??= new PathModel({ contacts: this.contacts.views, selfInfo: this.connection.selfInfo, store: this.connection.store }));
+    return (this.#paths ??= new PathModel({
+      contacts: this.contacts.views,
+      selfInfo: this.connection.selfInfo,
+      store: this.connection.store,
+      approximatePositions: this.appSettings.approximatePositions,
+    }));
   }
 
   /** Contact paths: set path, path history with delivery stats, repeater candidates (issue #6). */

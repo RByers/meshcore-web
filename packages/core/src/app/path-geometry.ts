@@ -6,7 +6,9 @@
  * (docs/mesh-packet-format.md §1.3), so a hop resolves to every known node whose key starts with
  * that hex (several → ambiguous). Hops without a known location get a position interpolated
  * between the neighbouring located stops (or extrapolated along the line before the first /
- * after the last located stop), flagged so the UI can draw them as approximate.
+ * after the last located stop), flagged so the UI can draw them as approximate. Those estimates
+ * (and ambiguous picks) are only placed with `estimate: true` (the "approximate positions" app
+ * setting); otherwise such stops are left off the map.
  *
  * Pure functions, no store access. Interpolation is linear in Web Mercator space so the
  * interpolated points sit on the straight segments the map draws.
@@ -227,12 +229,21 @@ export function interpolatePositions(points: readonly (LatLon | undefined)[]): (
   return out;
 }
 
+export interface PathGeometryOptions {
+  /**
+   * Place stops whose position is a guess: interpolated / extrapolated ones without a location,
+   * and ambiguous hashes at their nearest candidate (default false: only stops resolved to a
+   * single located node are placed).
+   */
+  estimate?: boolean;
+}
+
 /**
  * Builds the stops of a path (origin, hops, destination) with labels and map positions.
  * Ambiguous hops whose candidates have locations take the candidate closest to the position
  * estimated from the unambiguous stops.
  */
-export function buildPathGeometry(spec: PathSpec, nodes: readonly PathGeoNode[], self: PathGeoNode | null): PathGeometry {
+export function buildPathGeometry(spec: PathSpec, nodes: readonly PathGeoNode[], self: PathGeoNode | null, opts: PathGeometryOptions = {}): PathGeometry {
   const stops: PathStop[] = [
     resolvePathEndpoint(spec.from, 'from', nodes, self),
     ...spec.hashes.map((h) => stopFor('hop', h, nodes, true)),
@@ -258,7 +269,7 @@ export function buildPathGeometry(spec: PathSpec, nodes: readonly PathGeoNode[],
   let known = 0;
   stops.forEach((s, i) => {
     const e = est[i];
-    if (!e) return;
+    if (!e || (!opts.estimate && (e.kind !== 'known' || ambiguous.has(i)))) return;
     s.lat = e.lat;
     s.lon = e.lon;
     s.position = ambiguous.has(i) ? 'ambiguous' : e.kind;
