@@ -162,6 +162,30 @@ export function receivedSignal(m: { pathLen: number; snr?: number | undefined })
   return out;
 }
 
+/** Where a message sender links to (issue #12). */
+export type SenderTarget =
+  | { kind: 'contact'; key: string }
+  /** Several contacts share the name: open the contact list searched by it. */
+  | { kind: 'search'; name: string; count: number }
+  | { kind: 'unknown' };
+
+/**
+ * Resolves a channel sender name ("Alice" of "Alice: hi") to a contact. Names are not unique,
+ * so a name match (exact first, then case-insensitive) must be unique to link to one contact.
+ */
+export function resolveSenderName(name: string | undefined, contacts: readonly { key: string; name: string }[]): SenderTarget {
+  const n = name?.trim();
+  if (!n) return { kind: 'unknown' };
+  let matches = contacts.filter((c) => c.name.trim() === n);
+  if (matches.length === 0) {
+    const lower = n.toLowerCase();
+    matches = contacts.filter((c) => c.name.trim().toLowerCase() === lower);
+  }
+  if (matches.length === 1) return { kind: 'contact', key: matches[0]!.key };
+  if (matches.length > 1) return { kind: 'search', name: n, count: matches.length };
+  return { kind: 'unknown' };
+}
+
 export type ContactKind = 'chat' | 'repeater' | 'room' | 'sensor';
 
 export function contactTypeName(type: number): ContactKind {

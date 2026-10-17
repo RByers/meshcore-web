@@ -112,6 +112,29 @@ export class McChatPage extends AppElement {
         color: var(--mc-accent);
         margin-inline: 10px;
       }
+      a.sender {
+        text-decoration: none;
+      }
+      a.sender:hover,
+      button.sender:hover {
+        text-decoration: underline;
+      }
+      button.sender {
+        min-height: 0;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        font: inherit;
+        font-size: 0.8rem;
+        cursor: pointer;
+      }
+      header h2 a {
+        color: inherit;
+        text-decoration: none;
+      }
+      header h2 a:hover {
+        text-decoration: underline;
+      }
       .bubble {
         padding: 6px 10px;
         border-radius: 14px;
@@ -466,7 +489,7 @@ export class McChatPage extends AppElement {
     const quoted = reply ? chat.quotedMessage(m) : undefined;
     const showSender = this.convType === 'channel' && m.direction === 'in';
     return html`<li class="msg" data-id=${m.id} data-dir=${m.direction} data-status=${m.status}>
-      ${showSender ? html`<span class="sender" data-field="sender">${m.senderName ?? 'unknown'}</span>` : nothing}
+      ${showSender ? this.#sender(m) : nothing}
       <div
         class="bubble"
         @contextmenu=${(e: Event) => {
@@ -520,6 +543,29 @@ export class McChatPage extends AppElement {
     >`;
   }
 
+  /** A channel sender: links to the contact, or to the contacts searched by a shared name (issue #12). */
+  #sender(m: MessageRecord) {
+    const name = m.senderName ?? 'unknown';
+    const target = this.app.contacts.senderTarget(m.senderName);
+    if (target.kind === 'contact') {
+      return html`<a class="sender" data-field="sender" data-sender="contact" href=${hrefFor(`/contact/${target.key}`)} title="Contact info">${name}</a>`;
+    }
+    if (target.kind === 'search') {
+      return html`<button
+        type="button"
+        class="sender"
+        data-field="sender"
+        data-sender="search"
+        title=${`${target.count} contacts are named ${target.name}`}
+        @click=${() => {
+          this.app.contacts.showByName(target.name);
+          location.hash = hrefFor('/contacts');
+        }}
+      >${name}</button>`;
+    }
+    return html`<span class="sender" data-field="sender" data-sender="unknown">${name}</span>`;
+  }
+
   #subtitle(chat: ChatModel) {
     if (this.convType === 'channel') {
       const ch = chat.channel.value;
@@ -552,7 +598,9 @@ export class McChatPage extends AppElement {
         <a class="back" href=${hrefFor(channel ? '/channels' : '/contacts')} aria-label="Back">←</a>
         ${avatar(kind)}
         <div class="who">
-          <h2 data-field="title">${chat.title.value}</h2>
+          <h2 data-field="title">${channel
+              ? chat.title.value
+              : html`<a href=${hrefFor(`/contact/${this.key}`)} data-action="contact-info" title="Contact info">${chat.title.value}</a>`}</h2>
           <div class="muted" data-field="subtitle">${this.#subtitle(chat)}</div>
         </div>
         ${channel

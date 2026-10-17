@@ -156,6 +156,11 @@ tooltip; 0xFF path_len reads "direct route"). The capture pipeline records a per
 signal (`ContactRecord.directSnr` / `directSnrAt`, local fields kept across syncs) from zero-hop
 adverts and messages, shown as "direct SNR" in the contacts list, chat header and node page.
 
+**Contact info (issue #12).** `/contact/:key` shows a contact's type, key, path, direct signal,
+last seen, location and notes, with links to chat / node / map. Channel sender names link to it
+when exactly one contact has the name (several → the contacts list searched by name; core
+`resolveSenderName`, `ContactsModel.senderTarget` / `showByName`); the DM header name links too.
+
 **Show on map (issue #13).** `/map/node/:key` (same page, nav highlights Map via the route's
 `navParent`) calls `MapModel.focus(key)`, which selects the contact's marker and re-enables a
 kind / age filter that would hide it; the page centres on it at zoom ≥ 14. The chat header

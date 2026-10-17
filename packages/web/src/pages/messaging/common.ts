@@ -215,6 +215,11 @@ export const listStyles = css`
     text-align: start;
     background: transparent;
   }
+  .menu a {
+    padding: 8px 12px;
+    color: inherit;
+    text-decoration: none;
+  }
   .empty {
     padding: 24px;
     text-align: center;

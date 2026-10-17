@@ -170,6 +170,7 @@ export class McContactsPage extends AppElement {
       </a>
       <button class="menu-btn" popovertarget=${menuId} aria-label=${`Actions for ${v.name}`} data-menu=${v.key}>⋮</button>
       <div class="menu" id=${menuId} popover>
+        <a data-action="info" href=${hrefFor(`/contact/${v.key}`)}>Contact info</a>
         <button data-action="favourite" @click=${() => void this.#act(v, 'favourite')}>
           ${v.favourite ? 'Remove favourite' : 'Add favourite'}
         </button>

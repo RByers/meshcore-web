@@ -22,6 +22,8 @@ import {
   type PathDisplay,
   parseReply,
   receivedHops,
+  resolveSenderName,
+  type SenderTarget,
 } from './messaging.js';
 
 export type ContactSort = 'recent' | 'name';
@@ -180,6 +182,17 @@ export class ContactsModel extends StoreBoundModel {
   view(key: string): ContactView | undefined {
     const k = key.toLowerCase();
     return this.views.value.find((v) => v.key === k);
+  }
+
+  /** Where a message sender name links to: one contact, a name search, or nowhere (tracked). */
+  senderTarget(name: string | undefined): SenderTarget {
+    return resolveSenderName(name, this.views.value);
+  }
+
+  /** Opens the list searched for `name` (all types), e.g. for an ambiguous sender name. */
+  showByName(name: string): void {
+    this.#filter.value = 'all';
+    this.#search.value = name;
   }
 
   protected override bind(store: RadioStore) {

@@ -21,6 +21,7 @@ import {
   receivedHops,
   receivedPathLabel,
   receivedSignal,
+  resolveSenderName,
   replyPrefix,
   resolveChannelPsk,
   splitChannelSender,
@@ -154,5 +155,21 @@ describe('receivedSignal (issue #11: SNR only for zero-hop messages)', () => {
     expect(receivedSignal({ pathLen: 0xff, snr: 3 })).toEqual({ hops: null, zeroHop: false, pathLabel: 'direct route', lastHopSnr: 3 });
     expect(receivedSignal({ pathLen: 0 })).toEqual({ hops: 0, zeroHop: true, pathLabel: 'zero hop' });
     expect(receivedHops(encodePathLen(3, 2))).toBe(3);
+  });
+});
+
+describe('resolveSenderName (issue #12)', () => {
+  const cs = [
+    { key: 'aa', name: 'Alice' },
+    { key: 'bb', name: 'Bob' },
+    { key: 'b2', name: 'Bob' },
+    { key: 'cc', name: 'carol' },
+  ];
+  it('links a unique name, searches a shared one, and gives up on unknown ones', () => {
+    expect(resolveSenderName('Alice', cs)).toEqual({ kind: 'contact', key: 'aa' });
+    expect(resolveSenderName('Carol', cs)).toEqual({ kind: 'contact', key: 'cc' });
+    expect(resolveSenderName('Bob', cs)).toEqual({ kind: 'search', name: 'Bob', count: 2 });
+    expect(resolveSenderName('Dave', cs)).toEqual({ kind: 'unknown' });
+    expect(resolveSenderName(undefined, cs)).toEqual({ kind: 'unknown' });
   });
 });
