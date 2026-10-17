@@ -6,7 +6,7 @@
  * - contact / channel message pushes → `MessagesRepo.append` (which bumps unread counts); emoji
  *   reactions (`r:…`) attach to their target message instead (`MessagesRepo.addReaction`); a
  *   SMAZ-compressed DM can turn on the sender's compression (`smazAutoEnable`, §2.4a);
- * - `contactsChanged` → `ContactsRepo.syncFromDevice` / `markRemovedFromDevice`;
+ * - `contactsChanged` → `ContactsRepo.syncFromDevice` (with the sync cursor) / `markRemovedFromDevice`;
  * - `selfInfo` updates → `DevicesRepo.update`;
  * - SEND_CONFIRMED pushes → `MessagesRepo.markDeliveredByAck` (outgoing DMs expecting that ACK).
  *
@@ -230,7 +230,8 @@ export class CapturePipeline {
 
   async #contactsChanged(store: RadioStore, e: ContactsChangedEvent): Promise<void> {
     const now = this.client.clock.now();
-    if (e.updated.length > 0 || e.full) await store.contacts.syncFromDevice(e.updated, { full: e.full, now });
+    // the cursor is saved with the contacts it covers (seeds the next connect's incremental sync)
+    if (e.updated.length > 0 || e.full) await store.contacts.syncFromDevice(e.updated, { full: e.full, now, since: e.since });
     for (const k of e.removed) await store.contacts.markRemovedFromDevice(k);
   }
 

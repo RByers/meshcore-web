@@ -8,7 +8,9 @@ import { LoopbackTransport, type FrameTransport } from '../transport/index.js';
 import { CompanionClient } from './companion-client.js';
 import { DeviceError, DisconnectedError, LoginFailedError, RemoteTimeoutError, RequestTimeoutError } from './errors.js';
 import { SteppingClock, drive, runFor } from './testing.js';
-import type { CompanionClientEvents, CompanionClientOptions, FrameLogEntry, SendProgress } from './types.js';
+import type { CompanionClientEvents, CompanionClientOptions, ContactsChangedEvent, ContactsSnapshot, FrameLogEntry, SendProgress } from './types.js';
+import { encodeCommand } from '../protocol/encode.js';
+import type { SelfInfo } from '../protocol/types.js';
 
 const START = Date.UTC(2026, 9, 15, 12, 0, 0);
 const START_SECS = START / 1000;
@@ -446,6 +448,172 @@ describe('contacts', () => {
     expect(deleted).toHaveLength(1);
     expect(s.client.findContact(deleted[0]!.pubKey)).toBeUndefined();
     expect(s.client.findContact(scenarioKey('hank'))?.name).toBe('Hank');
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+/** What an app would have saved from the previous session. */
+function snapshotOf(s: Setup): ContactsSnapshot {
+  return { selfPubKey: s.keys.self, contacts: s.client.contacts, since: s.client.contactsSince };
+}
+
+const keysOf = (cs: readonly { pubKey: Uint8Array }[]): string[] => cs.map((c) => toHex(c.pubKey)).sort();
+
+/** Connects a fresh client (as after a page reload) to the same emulator, offering `snap`. */
+async function reopen(s: Setup, snap: ContactsSnapshot | (() => never) | undefined, client: CompanionClientOptions = {}) {
+  const c = new CompanionClient({ clock: s.clock, autoRefreshContacts: false, ...client });
+  const frames: FrameLogEntry[] = [];
+  c.events.on('frame', (f) => frames.push(f));
+  const changes: ContactsChangedEvent[] = [];
+  c.events.on('contactsChanged', (e) => changes.push(e));
+  const errors: Error[] = [];
+  c.events.on('error', (e) => errors.push(e));
+  const loads: SelfInfo[] = [];
+  await s.run(
+    c.connect(s.emu.createLoopbackTransport(), {
+      contactsSnapshot: (self) => {
+        loads.push(self);
+        return typeof snap === 'function' ? snap() : snap;
+      },
+    }),
+  );
+  return {
+    client: c,
+    changes,
+    errors,
+    loads,
+    sent: frames.filter((f) => f.direction === 'out').map((f) => f.command ?? '?'),
+    /** `since` of each GET_CONTACTS sent (§7.2: `[0x04]` or `[0x04, since u32]`; undefined = full). */
+    getContacts: frames.filter((f) => f.command === 'getContacts').map((f) => (f.bytes.length === 5 ? readU32LE(f.bytes, 1) : undefined)),
+    /** RESP_CODE_CONTACT frames received. */
+    received: frames.filter((f) => f.frame?.kind === 'contact').length,
+  };
+}
+
+describe('incremental contacts sync on reconnect', () => {
+  it('asks only for the boundary second when nothing changed', async () => {
+    const s = await connected({ client: { autoRefreshContacts: false } });
+    const snap = snapshotOf(s);
+    await s.run(s.client.disconnect());
+    s.clock.advance(60_000);
+
+    const r = await reopen(s, snap);
+    expect(toHex(r.loads[0]!.pubKey)).toBe(toHex(s.keys.self));
+    expect(r.getContacts).toEqual([snap.since - 1]);
+    const boundary = s.emu.contacts.filter((c) => c.lastMod === snap.since).length;
+    expect(boundary).toBeGreaterThan(0);
+    expect(r.received).toBe(boundary);
+    expect(r.received).toBeLessThan(s.emu.contacts.length);
+    expect(keysOf(r.client.contacts)).toEqual(keysOf(s.emu.contacts));
+    expect(r.client.contacts.map((c) => c.name).sort()).toEqual(s.emu.contacts.map((c) => c.name).sort());
+    expect(r.client.contactsSince).toBe(snap.since);
+    expect(r.changes).toHaveLength(1);
+    expect(r.changes[0]).toMatchObject({ full: false, removed: [], since: snap.since });
+    expect(r.changes[0]!.contacts).toHaveLength(6);
+  });
+
+  it('picks up contacts modified or added while disconnected', async () => {
+    const s = await connected({ client: { autoRefreshContacts: false } });
+    const snap = snapshotOf(s);
+    await s.run(s.client.disconnect());
+    s.clock.advance(5000);
+    const erin = scenarioKey('erin');
+    s.emu.injectAdvert({ pubKey: s.keys.carol, name: 'Carol 2', timestamp: START_SECS + 5 });
+    s.emu.injectAdvert({ pubKey: erin, name: 'Erin', type: ContactType.CHAT, timestamp: START_SECS + 5 });
+    await runFor(s.clock, 10);
+    expect(s.emu.contacts).toHaveLength(7);
+
+    const r = await reopen(s, snap);
+    expect(r.getContacts).toEqual([snap.since - 1]);
+    const boundary = snap.contacts.filter((c) => c.lastMod === snap.since).length;
+    expect(r.received).toBe(boundary + 2);
+    expect(r.client.findContact(s.keys.carol)?.name).toBe('Carol 2');
+    expect(r.client.findContact(erin)?.name).toBe('Erin');
+    expect(keysOf(r.client.contacts)).toEqual(keysOf(s.emu.contacts));
+    expect(r.client.contactsSince).toBeGreaterThan(snap.since);
+    expect(r.changes.at(-1)).toMatchObject({ full: false, removed: [] });
+    expect(r.changes.at(-1)!.updated.map((c) => c.name)).toEqual(expect.arrayContaining(['Carol 2', 'Erin']));
+  });
+
+  it('falls back to a full sync when the count shows a contact was removed while disconnected', async () => {
+    const s = await connected({ client: { autoRefreshContacts: false } });
+    const snap = snapshotOf(s);
+    await s.run(s.client.disconnect());
+    s.emu.handleFrame(encodeCommand({ kind: 'removeContact', pubKey: s.keys.bob })); // e.g. by another app
+    expect(s.emu.getContact(s.keys.bob)).toBeUndefined();
+
+    const r = await reopen(s, snap);
+    // the incremental reply had total 5 but the merged cache 6: re-read everything
+    expect(r.getContacts).toEqual([snap.since - 1, undefined]);
+    expect(r.client.findContact(s.keys.bob)).toBeUndefined();
+    expect(keysOf(r.client.contacts)).toEqual(keysOf(s.emu.contacts));
+    expect(r.changes).toHaveLength(1);
+    expect(r.changes[0]).toMatchObject({ full: true });
+    expect(r.changes[0]!.removed.map(toHex)).toEqual([toHex(s.keys.bob)]);
+    expect(r.changes[0]!.updated).toHaveLength(5);
+  });
+
+  it('ignores a snapshot of another radio', async () => {
+    const s = await connected({ client: { autoRefreshContacts: false } });
+    const snap = { ...snapshotOf(s), selfPubKey: DAVE };
+    await s.run(s.client.disconnect());
+    const r = await reopen(s, snap);
+    expect(r.getContacts).toEqual([undefined]);
+    expect(r.received).toBe(6);
+    expect(r.changes[0]).toMatchObject({ full: true });
+  });
+
+  it('ignores the snapshot when the device clock is earlier than its cursor (RTC went backwards)', async () => {
+    const s = await connected({ client: { autoRefreshContacts: false } });
+    const snap = snapshotOf(s);
+    await s.run(s.client.disconnect());
+    s.emu.setRtc(snap.since - 3600); // rebooted without an RTC battery
+    const r = await reopen(s, snap);
+    // the RTC read by the time sync (before it is corrected) decides
+    expect(r.sent.slice(2, 5)).toEqual(['getDeviceTime', 'setDeviceTime', 'getContacts']);
+    expect(r.getContacts).toEqual([undefined]);
+    expect(keysOf(r.client.contacts)).toEqual(keysOf(s.emu.contacts));
+  });
+
+  it('reads the RTC for the snapshot check when time sync is off or always sets it', async () => {
+    const s = await connected({ client: { autoRefreshContacts: false } });
+    const snap = snapshotOf(s);
+    await s.run(s.client.disconnect());
+
+    const never = await reopen(s, snap, { timeSync: 'never' });
+    expect(never.sent.slice(2, 4)).toEqual(['getDeviceTime', 'getContacts']);
+    expect(never.getContacts).toEqual([snap.since - 1]);
+    await s.run(never.client.disconnect());
+
+    s.emu.setRtc(snap.since - 10);
+    const always = await reopen(s, snap, { timeSync: 'always' });
+    expect(always.sent.slice(2, 5)).toEqual(['getDeviceTime', 'setDeviceTime', 'getContacts']);
+    expect(always.getContacts).toEqual([undefined]);
+    await s.run(always.client.disconnect());
+
+    s.emu.setRtc(snap.since - 10);
+    const neverBehind = await reopen(s, snap, { timeSync: 'never' });
+    expect(neverBehind.getContacts).toEqual([undefined]);
+  });
+
+  it('does a full sync when the snapshot loader fails, and when asked to', async () => {
+    const s = await connected({ client: { autoRefreshContacts: false } });
+    const snap = snapshotOf(s);
+    await s.run(s.client.disconnect());
+    const r = await reopen(s, () => {
+      throw new Error('IndexedDB unavailable');
+    });
+    expect(r.errors.map((e) => e.message)).toEqual(['IndexedDB unavailable']);
+    expect(r.getContacts).toEqual([undefined]);
+    await s.run(r.client.disconnect());
+
+    const again = await reopen(s, snap);
+    expect(again.getContacts).toEqual([snap.since - 1]);
+    await s.run(again.client.syncContacts({ full: true }));
+    const last = again.changes.at(-1)!;
+    expect(last.full).toBe(true);
+    expect(last.updated).toHaveLength(6);
   });
 });
 

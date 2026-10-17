@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import 'fake-indexeddb/auto';
 import { ContactType } from '../protocol/constants.js';
-import { hexKey, key32, makeContact, openStore } from './test-helpers.js';
+import { RadioStore } from './radio-store.js';
+import { CONTACTS_SINCE_SETTING } from './contacts.js';
+import { freshFactory, hexKey, key32, makeContact, openStore } from './test-helpers.js';
 
 describe('ContactsRepo', () => {
   it('upserts device contacts and preserves local fields', async () => {
@@ -78,5 +80,30 @@ describe('ContactsRepo', () => {
     await s.contacts.updateLocal(c.pubKey, { smaz: false });
     expect((await s.contacts.get(c.pubKey))?.smaz).toBe(false);
     s.close();
+  });
+
+  it('saves the sync cursor with the contacts and returns a device snapshot across reopen', async () => {
+    const factory = freshFactory();
+    const s = await RadioStore.open(key32(1), { factory });
+    expect(await s.contacts.deviceSnapshot()).toBeUndefined(); // never synced
+    await s.contacts.syncFromDevice([makeContact(1), makeContact(2, { lastMod: 1_700_000_005 })], { full: true, since: 1_700_000_005 });
+    await s.contacts.updateLocal(key32(1), { notes: 'roof', unreadCount: 2 });
+    await s.contacts.markRemovedFromDevice(key32(2)); // CONTACT_DELETED push: no longer on the device
+    await s.contacts.syncFromDevice([makeContact(3)]); // a push refresh: cursor untouched
+    expect(await s.settings.get(CONTACTS_SINCE_SETTING)).toBe(1_700_000_005);
+    s.close();
+
+    const again = await RadioStore.open(key32(1), { factory });
+    const snap = await again.contacts.deviceSnapshot();
+    expect(snap?.since).toBe(1_700_000_005);
+    // on-device contacts only, with device fields only (app-local ones stripped)
+    expect(snap?.contacts.map((c) => c.name).sort()).toEqual(['node-1', 'node-3']);
+    expect(snap?.contacts.find((c) => c.name === 'node-1')).toEqual(makeContact(1));
+
+    await again.contacts.syncFromDevice([makeContact(1, { lastMod: 1_700_000_009 })], { since: 1_700_000_009 });
+    expect((await again.contacts.deviceSnapshot())?.since).toBe(1_700_000_009);
+    await again.contacts.syncFromDevice([], { full: true, since: 0 }); // device emptied: next sync is full
+    expect(await again.contacts.deviceSnapshot()).toBeUndefined();
+    again.close();
   });
 });

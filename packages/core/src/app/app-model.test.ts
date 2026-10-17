@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
-import { toHex } from '../util/bytes.js';
+import { readU32LE, toHex } from '../util/bytes.js';
+import { CMD } from '../protocol/constants.js';
+import { encodeCommand } from '../protocol/encode.js';
+import type { RadioStore } from '../store/radio-store.js';
 import { TypedEmitter } from '../util/events.js';
 import { channelKeyForPsk } from '../store/channels.js';
 import type { FrameTransport, TransportEvents } from '../transport/transport.js';
@@ -340,6 +343,48 @@ describe('ConnectionModel errors', () => {
     const third = load();
     await third.init();
     expect(third.connection.phase.value).toBe('idle');
+  });
+
+  it('reconnects after a reload with an incremental contacts sync from the saved contacts', async () => {
+    // page loads sharing storage and the emulated radio
+    const base = testApp();
+    const shared: AppModelOptions = { indexedDB: new IDBFactory(), createEmulatorTransport: base.emulator, preferences: base.prefs };
+    const load = () => testApp({ app: shared }).app;
+    /** `since` of every GET_CONTACTS in the frame log (undefined = full sync). */
+    const getContactsSent = async (store: RadioStore) =>
+      (await store.frames.query({ limit: 10_000, order: 'asc' })).items
+        .filter((f) => f.direction === 'out' && f.bytes[0] === CMD.GET_CONTACTS)
+        .map((f) => (f.bytes.length === 5 ? readU32LE(f.bytes, 1) : undefined));
+    const { emulator, keys } = base.emulator.scenario();
+
+    const first = load();
+    expect(await first.connection.connect('emulator')).toBe(true);
+    await first.connection.capture!.idle();
+    const since = first.connection.client.value!.contactsSince;
+    const snap = await first.connection.store.value!.contacts.deviceSnapshot();
+    expect(snap?.since).toBe(since);
+    expect(snap?.contacts).toHaveLength(6);
+    expect(await getContactsSent(first.connection.store.value!)).toEqual([undefined]);
+    await first.dispose();
+
+    const second = load();
+    expect(await second.connection.connect('emulator')).toBe(true);
+    await second.connection.capture!.idle();
+    await second.contacts.settled();
+    expect(await getContactsSent(second.connection.store.value!)).toEqual([undefined, since - 1]);
+    expect(second.contacts.contacts.value.map((c) => c.name).sort()).toEqual(['Alice', 'Bob', 'Carol', 'Hilltop Repeater', 'Town Square', 'Weather Station']);
+    await second.dispose();
+
+    // removed by another app while we were away: the count check forces a full sync, which prunes
+    emulator.handleFrame(encodeCommand({ kind: 'removeContact', pubKey: keys.bob }));
+    const third = load();
+    expect(await third.connection.connect('emulator')).toBe(true);
+    await third.connection.capture!.idle();
+    const store = third.connection.store.value!;
+    expect((await getContactsSent(store)).slice(2)).toEqual([since - 1, undefined]);
+    expect((await store.contacts.get(keys.bob))?.onDevice).toBe(false);
+    expect((await store.contacts.deviceSnapshot())?.contacts.map((c) => c.name).sort()).toEqual(['Alice', 'Carol', 'Hilltop Repeater', 'Town Square', 'Weather Station']);
+    await third.dispose();
   });
 
   it('does not resume on load without autoReconnect or for a kind that needs a chooser', async () => {

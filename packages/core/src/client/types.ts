@@ -125,6 +125,11 @@ export interface ContactsChangedEvent {
   removed: readonly Uint8Array[];
   /** True after a full (since = 0) sync. */
   full: boolean;
+  /**
+   * The client's {@link CompanionClient.contactsSince} after the change: persist it with
+   * `contacts` to seed the next connect's incremental sync ({@link ContactsSnapshot}).
+   */
+  since: number;
 }
 
 /** A step of {@link CompanionClient.connect}, in the order they run. */
@@ -177,6 +182,28 @@ export interface CompanionClientEvents {
 // ---------------------------------------------------------------------------
 // Results / options
 // ---------------------------------------------------------------------------
+
+/**
+ * A saved copy of a radio's contact list, offered to {@link CompanionClient.connect} so the
+ * connect-time sync can be incremental (only contacts changed since `since` cross the wire).
+ */
+export interface ContactsSnapshot {
+  /** Public key of the radio the contacts came from (must match SELF_INFO, else ignored). */
+  selfPubKey: Uint8Array;
+  /** The device contacts as last synced (device fields only). */
+  contacts: readonly Contact[];
+  /** {@link ContactsChangedEvent.since} the contacts reflect (≤ 0: none, full sync). */
+  since: number;
+}
+
+export interface ConnectOptions {
+  /**
+   * Called once SELF_INFO is known (before the contacts sync) to load the saved contacts of that
+   * radio. Ignored (full sync) when it returns undefined, throws, belongs to another radio, or the
+   * device clock is earlier than its `since`. Only used with `syncContactsOnConnect`.
+   */
+  contactsSnapshot?: (self: SelfInfo) => Promise<ContactsSnapshot | undefined> | ContactsSnapshot | undefined;
+}
 
 export interface ContactsResult {
   /** CONTACTS_START total (all contacts on the device, not the filtered count). */

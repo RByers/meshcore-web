@@ -4,12 +4,41 @@ import type { Contact } from '../protocol/types.js';
 import { ContactType } from '../protocol/constants.js';
 import type { TypedEmitter } from '../util/events.js';
 import type { IdbDatabase } from './idb.js';
-import { DEFAULT_CONTACT_LOCAL, STORE, pubKeyHex, type ContactLocalFields, type ContactRecord } from './schema.js';
+import { DEFAULT_CONTACT_LOCAL, STORE, pubKeyHex, type ContactLocalFields, type ContactRecord, type SettingRecord } from './schema.js';
 import { safeEmit, type RadioStoreEvents } from './events.js';
 
 /** Unread counts are not kept for repeaters (feature-inventory.md §3.7). */
 export function countsUnread(c: Pick<Contact, 'type'>): boolean {
   return c.type !== ContactType.REPEATER;
+}
+
+/**
+ * Settings key of the contact sync cursor: the client's `contactsSince` after the last sync stored
+ * here, i.e. the `since` from which the stored device contacts are complete.
+ */
+export const CONTACTS_SINCE_SETTING = 'contacts.since';
+
+/** The stored device contacts and their sync cursor (see {@link ContactsRepo.deviceSnapshot}). */
+export interface DeviceContactsSnapshot {
+  contacts: Contact[];
+  since: number;
+}
+
+/** The device fields of a stored record (drops the app-only ones). */
+export function deviceContact(r: ContactRecord): Contact {
+  return {
+    pubKey: r.pubKey,
+    type: r.type,
+    flags: r.flags,
+    outPathLen: r.outPathLen,
+    outPathInfo: r.outPathInfo,
+    outPath: r.outPath,
+    name: r.name,
+    lastAdvert: r.lastAdvert,
+    lat: r.lat,
+    lon: r.lon,
+    lastMod: r.lastMod,
+  };
 }
 
 export class ContactsRepo {
@@ -58,12 +87,15 @@ export class ContactsRepo {
 
   /**
    * Stores a full contact list from the device in one transaction. With `full` (a complete
-   * GET_CONTACTS sync), contacts not in the list are kept but marked `onDevice: false`.
+   * GET_CONTACTS sync), contacts not in the list are kept but marked `onDevice: false`. `since`
+   * (the client's cursor after the sync) is saved in the same transaction, so the cursor never
+   * runs ahead of the stored contacts.
    */
-  async syncFromDevice(contacts: readonly Contact[], opts: { full?: boolean; now?: number } = {}): Promise<ContactRecord[]> {
+  async syncFromDevice(contacts: readonly Contact[], opts: { full?: boolean; now?: number; since?: number } = {}): Promise<ContactRecord[]> {
     const now = opts.now ?? this.now();
-    const changed = await this.db.transaction(STORE.contacts, 'readwrite', async (t) => {
+    const changed = await this.db.transaction([STORE.contacts, STORE.settings], 'readwrite', async (t) => {
       const s = t.store<ContactRecord>(STORE.contacts);
+      if (opts.since !== undefined) await t.store<SettingRecord>(STORE.settings).put({ key: CONTACTS_SINCE_SETTING, value: opts.since });
       const out: ContactRecord[] = [];
       const seen = new Set<string>();
       for (const c of contacts) {
@@ -126,6 +158,19 @@ export class ContactsRepo {
     });
     if (rec) safeEmit(this.emitter, 'contact', { type: 'put', record: rec });
     return rec;
+  }
+
+  /**
+   * The contacts last seen on the device (`onDevice`, device fields only) and the cursor they are
+   * complete up to, for an incremental connect-time sync. Undefined before the first saved sync.
+   */
+  async deviceSnapshot(): Promise<DeviceContactsSnapshot | undefined> {
+    return this.db.transaction([STORE.contacts, STORE.settings], 'readonly', async (t) => {
+      const since = (await t.store<SettingRecord>(STORE.settings).get(CONTACTS_SINCE_SETTING))?.value;
+      if (typeof since !== 'number' || since <= 0) return undefined;
+      const all = await t.store<ContactRecord>(STORE.contacts).getAll();
+      return { contacts: all.filter((r) => r.onDevice).map(deviceContact), since };
+    });
   }
 
   async delete(pubKey: Uint8Array | string): Promise<void> {

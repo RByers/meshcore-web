@@ -64,6 +64,8 @@ import {
   type CompanionClientEvents,
   type CompanionClientOptions,
   type ConnectedEvent,
+  type ConnectOptions,
+  type ContactsSnapshot,
   type ConnectStep,
   type ContactRef,
   type ContactsResult,
@@ -161,6 +163,8 @@ export class CompanionClient {
   // contacts cache
   #contacts = new Map<string, Contact>();
   #contactsSince = 0;
+  /** Device RTC read during this connect's time sync (before any SET_DEVICE_TIME). */
+  #rtcAtConnect: number | undefined;
   #refreshing = new Set<string>();
 
   // acks
@@ -242,12 +246,16 @@ export class CompanionClient {
    * Opens `transport` (if needed) and performs the session start (§2): DEVICE_QUERY, APP_START,
    * optional time sync, contacts sync and message drain. Resolves with the connection info.
    * Emits `connectProgress` as each step starts and while contacts / messages stream in.
+   *
+   * With `opts.contactsSnapshot` the contacts step starts from the saved contacts and only asks for
+   * those modified since (see {@link ConnectOptions.contactsSnapshot} and {@link syncContacts}).
    */
-  async connect(transport: FrameTransport): Promise<ConnectedEvent> {
+  async connect(transport: FrameTransport, opts: ConnectOptions = {}): Promise<ConnectedEvent> {
     if (this.#state !== 'disconnected') throw new Error(`cannot connect while ${this.#state}`);
     this.#transport = transport;
     this.#contacts.clear();
     this.#contactsSince = 0;
+    this.#rtcAtConnect = undefined;
     this.#recentAcks.clear();
     this.#selfInfo = undefined;
     this.#deviceInfo = undefined;
@@ -284,10 +292,11 @@ export class CompanionClient {
 
       if (this.#opts.timeSync !== 'never') {
         this.#connectProgress('timeSync');
-        await this.#syncTimeOnConnect();
+        await this.#syncTimeOnConnect(opts.contactsSnapshot !== undefined);
       }
       if (this.#opts.syncContactsOnConnect) {
         this.#connectProgress('contacts');
+        if (opts.contactsSnapshot) await this.#seedContacts(opts.contactsSnapshot);
         await this.syncContacts();
       }
       if (this.#opts.syncMessagesOnConnect) {
@@ -672,7 +681,7 @@ export class CompanionClient {
   // =========================================================================
 
   #contactsChanged(updated: Contact[], removed: Uint8Array[], full: boolean): void {
-    this.#emit('contactsChanged', { contacts: this.contacts, updated, removed, full });
+    this.#emit('contactsChanged', { contacts: this.contacts, updated, removed, full, since: this.#contactsSince });
   }
 
   #fullKey(ref: ContactRef): Uint8Array {
@@ -714,13 +723,26 @@ export class CompanionClient {
   /**
    * Updates the contact cache. Incremental (since = largest lastmod seen) unless `full`, or on
    * the first sync. A full sync also drops cached contacts the device no longer has.
+   *
+   * An incremental reply cannot report deletions, so it is checked against CONTACTS_START's total
+   * (all contacts on the device, §5.2): additions always carry a fresh lastmod and are in the
+   * reply, so if the merged cache's size differs from the total something was removed (or the
+   * cache is stale) and a full sync follows at once. The result is then the full sync's.
    */
   async syncContacts(opts: { full?: boolean } = {}): Promise<ContactsResult> {
-    const full = opts.full === true || this.#contactsSince === 0;
+    let full = opts.full === true || this.#contactsSince === 0;
     // The firmware filter is strict (`lastmod > since`, MyMesh.cpp L2397) at 1 s resolution, so a
     // contact modified later in the same second as the previous mostRecentLastMod would be missed;
     // re-ask for that boundary second (re-sent contacts just overwrite the cache).
-    const r = await this.getContacts(full ? undefined : this.#contactsSince - 1);
+    let r = await this.getContacts(full ? undefined : this.#contactsSince - 1);
+    if (!full) {
+      const merged = new Set(this.#contacts.keys());
+      for (const c of r.contacts) merged.add(toHex(c.pubKey));
+      if (merged.size !== r.total) {
+        full = true;
+        r = await this.getContacts();
+      }
+    }
     const removed: Uint8Array[] = [];
     if (full) {
       const keep = new Set(r.contacts.map((c) => toHex(c.pubKey)));
@@ -732,9 +754,41 @@ export class CompanionClient {
       }
     }
     for (const c of r.contacts) this.#contacts.set(toHex(c.pubKey), c);
-    if (r.mostRecentLastMod > this.#contactsSince) this.#contactsSince = r.mostRecentLastMod;
+    // a full reply's max lastmod is the true cursor (it may be lower after an RTC regression)
+    if (full || r.mostRecentLastMod > this.#contactsSince) this.#contactsSince = r.mostRecentLastMod;
     this.#contactsChanged(r.contacts, removed, full);
     return r;
+  }
+
+  /**
+   * Seeds the cache and cursor from a saved snapshot (connect, before the first syncContacts)
+   * unless it is unusable: none, another radio's, or newer than the device clock, which means the
+   * RTC went backwards (e.g. a reboot without an RTC battery) and contacts changed since then may
+   * carry a lastmod below the cursor. The seed emits nothing: the snapshot's owner already has it.
+   */
+  async #seedContacts(load: NonNullable<ConnectOptions['contactsSnapshot']>): Promise<void> {
+    const self = this.#selfInfo;
+    if (!self) return;
+    let snap: ContactsSnapshot | undefined;
+    try {
+      snap = await load(self);
+    } catch (err) {
+      this.#emit('error', err instanceof Error ? err : new Error(String(err)));
+      return;
+    }
+    if (!snap || snap.since <= 0 || !bytesEqual(snap.selfPubKey, self.pubKey)) return;
+    let rtc = this.#rtcAtConnect;
+    if (rtc === undefined) {
+      try {
+        rtc = await this.getDeviceTime();
+      } catch (err) {
+        if (err instanceof DeviceError || err instanceof RequestTimeoutError) return;
+        throw err;
+      }
+    }
+    if (rtc < snap.since) return;
+    for (const c of snap.contacts) this.#contacts.set(toHex(c.pubKey), c);
+    this.#contactsSince = snap.since;
   }
 
   /** The `since` value the next incremental syncContacts() will use. */
@@ -1104,17 +1158,26 @@ export class CompanionClient {
    * Returns true if it was set.
    */
   async syncDeviceTime(thresholdSecs = this.#opts.timeSyncThresholdSecs): Promise<boolean> {
-    const dev = await this.getDeviceTime();
+    return this.#syncDeviceTime(await this.getDeviceTime(), thresholdSecs);
+  }
+
+  async #syncDeviceTime(dev: number, thresholdSecs: number): Promise<boolean> {
     const host = this.#nowSecs();
     if (dev >= host - thresholdSecs) return false;
     await this.setDeviceTime(host);
     return true;
   }
 
-  async #syncTimeOnConnect(): Promise<void> {
+  /** `readRtc`: also read the RTC before setting it in 'always' mode (to vet a contacts snapshot). */
+  async #syncTimeOnConnect(readRtc: boolean): Promise<void> {
     try {
-      if (this.#opts.timeSync === 'always') await this.setDeviceTime(this.#nowSecs());
-      else await this.syncDeviceTime();
+      if (this.#opts.timeSync === 'always') {
+        if (readRtc) this.#rtcAtConnect = await this.getDeviceTime();
+        await this.setDeviceTime(this.#nowSecs());
+      } else {
+        this.#rtcAtConnect = await this.getDeviceTime();
+        await this.#syncDeviceTime(this.#rtcAtConnect, this.#opts.timeSyncThresholdSecs);
+      }
     } catch (err) {
       if (err instanceof DeviceError) return; // device clock ahead of ours: it cannot go backwards
       throw err;

@@ -16,6 +16,7 @@ import type { BattAndStorage, DeviceInfo, SelfInfo } from '../protocol/types.js'
 import type { FrameTransport, TransportInfo } from '../transport/transport.js';
 import { systemClock, type Clock } from '../util/clock.js';
 import { TypedEmitter } from '../util/events.js';
+import { toHex } from '../util/bytes.js';
 import type { DevicesRepo } from '../store/devices.js';
 import type { RadioStore } from '../store/radio-store.js';
 import type { DeviceRecord } from '../store/schema.js';
@@ -336,12 +337,29 @@ export class ConnectionModel {
           if (live()) this.deps.notifications.error(`Could not save ${step}`, err);
         },
       });
-      const info = await client.connect(transport);
+      const info = await client.connect(transport, {
+        // SELF_INFO names the radio: open its store now, so its saved contacts and sync cursor
+        // make the connect-time contacts sync incremental
+        contactsSnapshot: async (self) => {
+          const opened = await this.deps.openStore(self.pubKey);
+          if (!live()) {
+            opened.close();
+            return undefined;
+          }
+          s.store = opened;
+          const snap = await opened.contacts.deviceSnapshot();
+          return snap && { selfPubKey: self.pubKey, ...snap };
+        },
+      });
       if (!live()) throw new CancelledError();
 
       progress('store');
-      const store = await this.deps.openStore(info.selfInfo.pubKey);
-      s.store = store;
+      let store = s.store;
+      if (store?.pubKey !== toHex(info.selfInfo.pubKey)) {
+        store?.close();
+        store = await this.deps.openStore(info.selfInfo.pubKey);
+        s.store = store;
+      }
       if (!live()) throw new CancelledError();
       s.pipeline.attachStore(store, async (st) => {
         await devices?.recordConnection(
