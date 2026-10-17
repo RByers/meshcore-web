@@ -85,7 +85,7 @@ describe('PacketLogModel — packets', () => {
     const grp = rows.find((r) => r.record.payloadType === PayloadType.GRP_TXT)!;
     expect(grp.summary).toBe('GRP_TXT Public: "Bob: hello mesh"');
     const txt = rows.find((r) => r.record.payloadType === PayloadType.TXT_MSG)!;
-    expect(txt.summary).toBe('TXT_MSG Alice → Emulator');
+    expect(txt.summary).toBe('TXT_MSG Alice → Emulator (encrypted)');
     expect(log.packets.total.value).toBe(rows.length);
     expect(log.packets.matching.value).toBe(rows.length);
     // the repeater re-floods Alice's advert: a 1-hop copy via the repeater
@@ -277,5 +277,43 @@ describe('PacketLogModel — export / import / clear', () => {
     const one = await log.importJson(await log.exportPackets());
     expect(one).toEqual({ packets, frames: 0 });
     expect(await log.prune()).toEqual({ frames: 0, packets: 0 });
+  });
+});
+
+describe('PacketLogModel — packets from other nodes (#10)', () => {
+  it('logs DMs and channel messages others send to this radio, with DM text once decryptable', async () => {
+    const { app, log, scenario } = await connected();
+    await log.packets.setFilter({ direction: 'rx' });
+    scenario.nodes.alice.sendText(scenario.keys.self, 'dm for you');
+    scenario.nodes.bob.sendChannelMessage('Public', 'channel hello');
+    await vi.waitFor(
+      async () => {
+        await app.connection.capture!.idle();
+        await log.settled();
+        const s = log.packets.rows.value.map((r) => r.summary);
+        expect(s).toContain('TXT_MSG Alice → Emulator (encrypted)');
+        expect(s).toContain('GRP_TXT Public: "Bob: channel hello"');
+      },
+      { timeout: 3000 },
+    );
+    const dm = log.packets.rows.value.find((r) => r.typeName === 'TXT_MSG')!;
+    expect(dm.record).toMatchObject({ direction: 'rx', source: 'logRxData', format: 'packet' });
+    const store = app.connection.store.value!;
+    await vi.waitFor(async () => expect((await store.messages.list(toHex(scenario.keys.alice))).items.map((m) => m.text)).toContain('dm for you'));
+
+    // with the radio key stored (opt-in), the DM row shows its text and search finds it
+    await log.storeSelfKeyFromDevice();
+    await vi.waitFor(async () => {
+      await log.settled();
+      expect(log.packets.rows.value.map((r) => r.summary)).toContain('TXT_MSG Alice → Emulator: "dm for you"');
+    });
+    await log.packets.setFilter({ text: 'dm for you' });
+    expect(new Set(log.packets.rows.value.map((r) => r.typeName))).toEqual(new Set(['TXT_MSG'])); // original + the repeater's copy
+    await log.setSelfPrivateKey(null);
+    await log.packets.clearFilter();
+    await vi.waitFor(async () => {
+      await log.settled();
+      expect(log.packets.rows.value.map((r) => r.summary)).toContain('TXT_MSG Alice → Emulator (encrypted)');
+    });
   });
 });

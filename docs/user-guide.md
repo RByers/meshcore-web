@@ -151,13 +151,17 @@ example your own tile server. Tiles are not stored for offline use.
 
 ## Packet log and inspector
 
-The radio reports every packet it hears (and the app logs every frame exchanged with it).
-**Packets** shows them live:
+The radio reports every packet it hears while the app is connected (and the app logs every
+frame exchanged with it). **Packets** shows them live:
 
 - **Packets** tab: time, direction, type, route, path/hops, SNR/RSSI, size and a summary.
   Filter by direction, type, node and time. Click a row to open the **inspector**: a hex
   dump and a tree explaining every byte (header bits, path, payload fields); hovering a
   field highlights its bytes and vice versa.
+- Messages the radio received while no app was connected (delivered later from its message
+  queue) have no packet in the log: the radio only reports packets as it hears them.
+- Direct messages show as `TXT_MSG sender → recipient (encrypted)` unless the radio key is
+  stored (below), in which case the row shows the text.
 - **Frames** tab: the raw host↔radio companion-protocol frames.
 - **Export** / **Import** the log as JSON; **Clear** deletes it. Retention is set in
   Settings (packets older than that are removed).

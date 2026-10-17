@@ -11,6 +11,7 @@
 
 import { fromHex, toHex } from '../util/bytes.js';
 import { annotatePacket, annotatePayload, type AnnotateKeys, type Annotation } from '../packet/annotate.js';
+import { calcSharedSecret } from '../packet/crypto.js';
 import { channelHash } from '../packet/payloads.js';
 import { annotateFrame } from '../protocol/annotate-frame.js';
 import { PRIVATE_KEY_SIZE } from '../protocol/constants.js';
@@ -29,6 +30,7 @@ import {
   packetMentionsNode,
   summarizePacket,
   viewPacket,
+  type DmKeys,
   type PacketView,
   type SummaryContext,
 } from './packet-summary.js';
@@ -42,7 +44,6 @@ import { batch, computed, signal, type ReadonlySignal, type Signal } from './sig
 export const SELF_PRIVATE_KEY_SETTING = 'packetLog.selfPrivateKey';
 
 export const BUNDLE_FORMAT = 'meshcore-web/log-bundle';
-
 // ---------------------------------------------------------------------------
 // Filters and rows
 // ---------------------------------------------------------------------------
@@ -300,6 +301,8 @@ export class PacketLogModel extends StoreBoundModel {
   readonly #selfKey = signal<Uint8Array | null>(null);
   /** Decrypted summaries by packet id (search uses them for already-seen packets). */
   readonly #summaries = new Map<number, string>();
+  /** ECDH shared secrets by contact key hex (only while the radio key is stored). */
+  readonly #secrets = new Map<string, Promise<Uint8Array | null>>();
 
   /** Names / channel hashes used to describe packets. */
   readonly context: ReadonlySignal<SummaryContext> = this.#ctx.readonly;
@@ -350,7 +353,11 @@ export class PacketLogModel extends StoreBoundModel {
       store.events.on('contact', () => void this.reload()),
       store.events.on('channel', () => void this.reload()),
       store.events.on('setting', (e) => {
-        if (e.key === SELF_PRIVATE_KEY_SETTING) this.#selfKey.value = parseKey(e.value);
+        if (e.key !== SELF_PRIVATE_KEY_SETTING) return;
+        this.#selfKey.value = parseKey(e.value);
+        this.#secrets.clear();
+        this.#summaries.clear();
+        void this.packets.reload(); // DM rows gain / lose their decrypted text
       }),
     ];
     return () => offs.forEach((off) => off());
@@ -367,6 +374,7 @@ export class PacketLogModel extends StoreBoundModel {
     this.#contactKeys.value = [];
     this.#selfKey.value = null;
     this.#summaries.clear();
+    this.#secrets.clear();
     this.packets.reset();
     this.frames.reset();
   }
@@ -467,11 +475,31 @@ export class PacketLogModel extends StoreBoundModel {
     const view = viewPacket(r, ctx);
     let summary = this.#summaries.get(r.id);
     if (summary === undefined) {
-      summary = await summarizePacket(r, ctx, view);
+      summary = await summarizePacket(r, ctx, view, this.#dmKeys());
       if (this.#summaries.size > 20_000) this.#summaries.clear();
       this.#summaries.set(r.id, summary);
     }
     return { id: r.id, record: r, typeName: view.typeName, routeName: view.routeName, hops: view.hops, path: view.path, summary };
+  }
+
+  /** DM decryption keys for summaries, when the radio's private key is stored (opt-in). */
+  #dmKeys(): DmKeys | undefined {
+    const priv = this.#selfKey.peek();
+    const pub = this.store?.pubKey;
+    if (!priv || !pub) return undefined;
+    return {
+      selfPublicKey: fromHex(pub),
+      contacts: this.#contactKeys.peek(),
+      sharedSecret: (peer) => {
+        const k = toHex(peer);
+        let s = this.#secrets.get(k);
+        if (!s) {
+          s = calcSharedSecret(priv, peer).catch(() => null);
+          this.#secrets.set(k, s);
+        }
+        return s;
+      },
+    };
   }
 
   // ---- inspection ----
@@ -496,7 +524,7 @@ export class PacketLogModel extends StoreBoundModel {
       record.format === 'packet' ? await annotatePacket(record.bytes, { keys }) : await annotatePayload(record.payloadType, record.bytes, { keys });
     const ctx = this.#ctx.peek();
     const view = viewPacket(record, ctx);
-    const summary = await summarizePacket(record, ctx, view);
+    const summary = await summarizePacket(record, ctx, view, this.#dmKeys());
     const [sourceFrame, copies] = await Promise.all([
       record.sourceFrameId !== undefined ? store.frames.get(record.sourceFrameId) : Promise.resolve(undefined),
       record.hash ? store.packets.count({ hash: record.hash }) : Promise.resolve(1),

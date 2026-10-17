@@ -9,7 +9,15 @@ import { smazTryDecode } from '../util/smaz.js';
 import { ContactType, cmdName, decodePathLen, deviceFrameName, isValidPathLen } from '../protocol/constants.js';
 import { PayloadType, payloadTypeName, routeTypeName } from '../packet/constants.js';
 import { parsePacket, splitPath } from '../packet/packet.js';
-import { decryptPayload, parseGrpDataPlaintext, parseGrpTxtPlaintext, parsePayload, type ParsedPayload } from '../packet/payloads.js';
+import {
+  decryptPayload,
+  parseGrpDataPlaintext,
+  parseGrpTxtPlaintext,
+  parsePayload,
+  parseTxtMsgPlaintext,
+  type ParsedPayload,
+  type PeerDatagramPayload,
+} from '../packet/payloads.js';
 import type { FrameRecord, PacketRecord } from '../store/schema.js';
 
 /** Names and keys known to the store, used to resolve hashes and decrypt channel traffic. */
@@ -172,11 +180,31 @@ function describePayload(typeName: string, p: ParsedPayload, ctx: SummaryContext
 }
 
 /**
- * Full summary: the structural one, plus decrypted content where a channel PSK from `ctx`
- * verifies (GRP_TXT shows the text, GRP_DATA the data type and length).
+ * Keys for decrypting direct messages to / from this radio in summaries (only available when the
+ * user opted in to storing the radio's private key).
  */
-export async function summarizePacket(rec: PacketRecord, ctx: SummaryContext = EMPTY_SUMMARY_CONTEXT, view = viewPacket(rec, ctx)): Promise<string> {
+export interface DmKeys {
+  selfPublicKey: Uint8Array;
+  /** Known contact public keys. */
+  contacts: readonly Uint8Array[];
+  /** ECDH shared secret with a contact (callers cache it); null if it cannot be computed. */
+  sharedSecret(peer: Uint8Array): Promise<Uint8Array | null>;
+}
+
+/**
+ * Full summary: the structural one, plus decrypted content where a channel PSK from `ctx`
+ * verifies (GRP_TXT shows the text, GRP_DATA the data type and length), and, with `dm` keys, the
+ * text of TXT_MSG packets between this radio and a contact.
+ */
+export async function summarizePacket(
+  rec: PacketRecord,
+  ctx: SummaryContext = EMPTY_SUMMARY_CONTEXT,
+  view = viewPacket(rec, ctx),
+  dm?: DmKeys,
+): Promise<string> {
   const p = view.payload;
+  // a DM's text needs the radio's private key (opt-in); say so rather than look like a non-message
+  if (p?.kind === 'txtMsg') return (dm ? await dmSummary(p, view, dm) : null) ?? `${view.summary} (encrypted)`;
   if (!p || (p.kind !== 'grpTxt' && p.kind !== 'grpData')) return view.summary;
   for (const ch of ctx.channels) {
     if (ch.hash !== p.channelHash) continue;
@@ -200,6 +228,28 @@ export async function summarizePacket(rec: PacketRecord, ctx: SummaryContext = E
     }
   }
   return view.summary;
+}
+
+async function dmSummary(p: PeerDatagramPayload, view: PacketView, dm: DmKeys): Promise<string | null> {
+  const mine = dm.selfPublicKey[0];
+  for (const c of dm.contacts) {
+    if (!((c[0] === p.srcHash && mine === p.destHash) || (c[0] === p.destHash && mine === p.srcHash))) continue;
+    const secret = await dm.sharedSecret(c);
+    if (!secret) continue;
+    let pt: Uint8Array | null = null;
+    try {
+      pt = await decryptPayload(p, secret);
+    } catch {
+      pt = null;
+    }
+    if (!pt) continue;
+    try {
+      return `${view.summary}: ${quote(parseTxtMsgPlaintext(pt).text)}`;
+    } catch {
+      return `${view.summary} (decrypted, malformed)`;
+    }
+  }
+  return null;
 }
 
 /** True when the packet references `node` (hex: a 1-3 byte hash or a public key / prefix). */
