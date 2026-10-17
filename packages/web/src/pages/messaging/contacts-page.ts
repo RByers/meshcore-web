@@ -19,6 +19,7 @@ import { formatRelative, formatSnr } from '../../format.js';
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
 import { avatar, copyText, errorText, listStyles, unreadBadge } from './common.js';
+import { contactNote } from '../../components/node-link.js';
 
 const FILTER_LABEL: Record<ContactFilter, string> = {
   all: 'All',
@@ -319,7 +320,7 @@ export class McContactsPage extends AppElement {
     const main = html`${avatar(v.typeName)}
       <span class="row-main">
         <span class="row-title">
-          <span class="name">${v.name}</span>
+          <span class="name">${v.name}${contactNote(v.note)}</span>
           ${v.favourite && this.#selecting ? html`<span class="flags" title="Favourite">★</span>` : nothing}
           ${!v.onDevice ? html`<span class="flags muted" title="Not on the radio">(not on radio)</span>` : nothing}
           <span class="when">${v.lastActivity ? formatRelative(v.lastActivity, now) : ''}</span>
@@ -478,7 +479,7 @@ export class McContactsPage extends AppElement {
         <form method="dialog">
           <h3 id="bulk-h">Delete ${selected.length} contact${selected.length === 1 ? '' : 's'}?</h3>
           <ul class="bulk-names" data-field="bulk-names">
-            ${selected.slice(0, 5).map((v) => html`<li>${v.name}</li>`)}
+            ${selected.slice(0, 5).map((v) => html`<li>${v.name}${contactNote(v.note)}</li>`)}
             ${selected.length > 5 ? html`<li class="muted">and ${selected.length - 5} more</li>` : nothing}
           </ul>
           <p>They are removed from the radio and their messages are deleted from this browser.</p>

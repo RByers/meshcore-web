@@ -44,6 +44,7 @@ function view(fill: number, name: string, type: number, over: Partial<ContactRec
     lastSnr: undefined,
     favourite: false,
     onDevice: true,
+    note: '',
   };
 }
 

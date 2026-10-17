@@ -1,4 +1,4 @@
-/** ContactsModel actions not covered by messaging-models.test.ts: favourites, share, refreshOne, remove keeping history, bulk remove and stale selection. */
+/** ContactsModel actions not covered by messaging-models.test.ts: favourites, notes, share, refreshOne, remove keeping history, bulk remove and stale selection. */
 
 import { describe, expect, it, vi } from 'vitest';
 import { bytesEqual, toHex } from '../util/bytes.js';
@@ -41,6 +41,37 @@ describe('ContactsModel actions', () => {
     expect(m.view(hex.bob)!.favourite).toBe(false);
     m.setFilter('favourites');
     expect(m.visible.value.map((v) => v.name)).toEqual(['Alice']); // Alice: FAVOURITE flag on the device
+  });
+
+  it('setNote is local, trimmed, searchable and survives refresh() and a device sync', async () => {
+    const { app, s, m, store, hex } = await connected();
+    expect(m.view(hex.bob)!.note).toBe('');
+    expect(m.noteFor(hex.bob)).toBe('');
+    expect(m.noteFor(undefined)).toBe('');
+    await m.setNote(hex.bob.toUpperCase(), '  Owes me a pint  \n');
+    expect(m.view(hex.bob)!.note).toBe('Owes me a pint');
+    expect(m.noteFor(hex.bob)).toBe('Owes me a pint');
+    expect(m.noteFor(hex.bob.toUpperCase())).toBe('Owes me a pint');
+    expect((await store.contacts.get(hex.bob))!.notes).toBe('Owes me a pint');
+
+    await m.refresh(); // full GET_CONTACTS → syncFromDevice
+    expect(m.view(hex.bob)!.note).toBe('Owes me a pint');
+    const bobOnDevice = app.connection.client.value!.findContact(s.keys.bob);
+    expect(bobOnDevice).toBeDefined();
+    await store.contacts.syncFromDevice([bobOnDevice!], { full: false });
+    expect((await store.contacts.get(hex.bob))!.notes).toBe('Owes me a pint');
+    await m.reload();
+    expect(m.noteFor(hex.bob)).toBe('Owes me a pint');
+
+    // search matches the note text, case-insensitively
+    m.setSearch('PINT');
+    expect(m.visible.value.map((v) => v.name)).toEqual(['Bob']);
+
+    await m.setNote(hex.bob, '   ');
+    expect(m.view(hex.bob)!.note).toBe('');
+    expect(m.noteFor(hex.bob)).toBe('');
+    expect((await store.contacts.get(hex.bob))!.notes).toBe('');
+    expect(m.visible.value).toEqual([]);
   });
 
   it("share() re-broadcasts the contact's advert zero-hop on the mesh", async () => {

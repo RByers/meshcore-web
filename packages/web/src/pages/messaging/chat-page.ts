@@ -12,7 +12,7 @@ import { formatDuration, formatRelative, formatSnr, formatTime } from '../../for
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
 import { avatar, listStyles } from './common.js';
-import { pathLabelView } from '../../components/node-link.js';
+import { contactNote, pathLabelView } from '../../components/node-link.js';
 import { LongPress, reactionChipsTemplate, reactionStyles, type McReactionPicker } from './reactions.js';
 
 /** Joins strings / templates with " · ". */
@@ -541,7 +541,7 @@ export class McChatPage extends AppElement {
     const title = [path.title, sig.lastHopSnr !== undefined ? `SNR ${formatSnr(sig.lastHopSnr)}${sig.zeroHop ? '' : ' (last hop)'}` : '']
       .filter(Boolean)
       .join('\n');
-    const link = pathLabelView(path, (sig.hops ?? 0) > 0 ? { kind: 'message', message: m } : null);
+    const link = pathLabelView(path, (sig.hops ?? 0) > 0 ? { kind: 'message', message: m } : null, this.#notes);
     return html`<span data-field="route"
       ><span data-field="signal" title=${title || nothing}
         ><span data-field="path">${link}</span>${sig.snr !== undefined ? html` · <span data-field="snr">SNR ${formatSnr(sig.snr)}</span>` : nothing}</span
@@ -549,12 +549,15 @@ export class McChatPage extends AppElement {
     >`;
   }
 
+  /** Contact note lookup for path hop tooltips. */
+  #notes = (key: string): string => this.app.contacts.noteFor(key);
+
   /** A channel sender: links to the contact, or to the contacts searched by a shared name (issue #12). */
   #sender(m: MessageRecord) {
     const name = m.senderName ?? 'unknown';
     const target = this.app.contacts.senderTarget(m.senderName);
     if (target.kind === 'contact') {
-      return html`<a class="sender" data-field="sender" data-sender="contact" href=${hrefFor(`/contact/${target.key}`)} title="Contact info">${name}</a>`;
+      return html`<a class="sender" data-field="sender" data-sender="contact" href=${hrefFor(`/contact/${target.key}`)} title="Contact info">${name}${contactNote(this.app.contacts.noteFor(target.key))}</a>`;
     }
     if (target.kind === 'search') {
       return html`<button
@@ -582,7 +585,7 @@ export class McChatPage extends AppElement {
     const c = chat.contact.value;
     if (!c) return '';
     const path = v ? this.app.contacts.outPathLabel(v, this.app.appSettings.pathNames.value) : undefined;
-    const parts: (string | TemplateResult)[] = [path ? pathLabelView(path, v?.path.kind === 'hops' ? { kind: 'contact', key: this.key } : null) : ''];
+    const parts: (string | TemplateResult)[] = [path ? pathLabelView(path, v?.path.kind === 'hops' ? { kind: 'contact', key: this.key } : null, this.#notes) : ''];
     if (v?.directSnr !== undefined) parts.push(`direct SNR ${formatSnr(v.directSnr)}`);
     if (c.lastSeen) parts.push(`seen ${formatRelative(c.lastSeen, this.app.clock.now())}`);
     return dotJoin(parts);
@@ -606,7 +609,7 @@ export class McChatPage extends AppElement {
         <div class="who">
           <h2 data-field="title">${channel
               ? chat.title.value
-              : html`<a href=${hrefFor(`/contact/${this.key}`)} data-action="contact-info" title="Contact info">${chat.title.value}</a>`}</h2>
+              : html`<a href=${hrefFor(`/contact/${this.key}`)} data-action="contact-info" title="Contact info">${chat.title.value}</a>${contactNote(this.app.contacts.noteFor(this.key))}`}</h2>
           <div class="muted" data-field="subtitle">${this.#subtitle(chat)}</div>
         </div>
         <div class="actions" data-field="header-actions">

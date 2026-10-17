@@ -16,7 +16,7 @@ import { formatDuration, formatRelative } from '../../format.js';
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
 import { avatar, errorText, listStyles } from './common.js';
-import { nodeLink } from '../../components/node-link.js';
+import { contactNote, nodeLink } from '../../components/node-link.js';
 
 interface DraftHop {
   hash: Uint8Array;
@@ -149,6 +149,12 @@ export class McPathPage extends AppElement {
     return m.length === 1 ? m[0]!.key : undefined;
   }
 
+  /** A draft hop's name (linked when known) followed by its contact's note. */
+  #draftHop(h: DraftHop) {
+    const key = this.#draftKey(h);
+    return html`${nodeLink(h.label, key)}${contactNote(this.app.contacts.noteFor(key))}`;
+  }
+
   #remove(i: number): void {
     this.#draft = this.#draft.filter((_, k) => k !== i);
     this.requestUpdate();
@@ -187,7 +193,10 @@ export class McPathPage extends AppElement {
   #pathText(p: ResolvedPath) {
     if (p.kind !== 'hops') return html`<span class="chain">${p.label}</span>`;
     return html`<span class="chain"
-      >${p.hops.map((h, i) => html`${i ? ' → ' : ''}<span data-hop=${h.hex}>${nodeLink(h.label, h.matches.length === 1 ? h.matches[0]!.key : undefined, h.hex)}</span>`)}</span
+      >${p.hops.map((h, i) => {
+        const key = h.matches.length === 1 ? h.matches[0]!.key : undefined;
+        return html`${i ? ' → ' : ''}<span data-hop=${h.hex}>${nodeLink(h.label, key, h.hex)}${contactNote(this.app.contacts.noteFor(key))}</span>`;
+      })}</span
     >`;
   }
 
@@ -213,7 +222,7 @@ export class McPathPage extends AppElement {
               (c) => c.key,
               (c) => html`<li data-candidate=${c.key}>
                 ${avatar(c.kind)}
-                <span class="grow">${c.name} <span class="muted mono">${c.prefix.slice(0, this.#hashSize * 2)}</span></span>
+                <span class="grow">${c.name}${contactNote(this.app.contacts.noteFor(c.key))} <span class="muted mono">${c.prefix.slice(0, this.#hashSize * 2)}</span></span>
                 <button class="small" data-action="add-hop" @click=${() => this.#add(c)}>Add</button>
               </li>`,
             )}
@@ -299,7 +308,7 @@ export class McPathPage extends AppElement {
       <div class="page-head">
         <a href=${hrefFor(back)} aria-label="Back">←</a>
         ${avatar(contact.typeName)}
-        <h2>Path to ${contact.name}</h2>
+        <h2>Path to ${contact.name}${contactNote(contact.note)}</h2>
       </div>
 
       <section>
@@ -315,7 +324,7 @@ export class McPathPage extends AppElement {
               ${this.#draft.map(
                 (h, i) => html`<li data-draft-hop=${i}>
                   <span class="muted">${i + 1}.</span>
-                  <span class="grow">${nodeLink(h.label, this.#draftKey(h))} <span class="muted mono">${toHex(h.hash)}</span></span>
+                  <span class="grow">${this.#draftHop(h)} <span class="muted mono">${toHex(h.hash)}</span></span>
                   <button class="small" data-action="hop-up" aria-label="Move up" ?disabled=${i === 0} @click=${() => this.#move(i, -1)}>↑</button>
                   <button class="small" data-action="hop-down" aria-label="Move down" ?disabled=${i === this.#draft.length - 1} @click=${() => this.#move(i, 1)}>↓</button>
                   <button class="small" data-action="hop-remove" aria-label="Remove hop" @click=${() => this.#remove(i)}>✕</button>

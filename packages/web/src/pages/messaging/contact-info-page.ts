@@ -14,7 +14,7 @@ import { formatRelative, formatSnr, shortKey } from '../../format.js';
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
 import { avatar, listStyles, TYPE_LABEL } from './common.js';
-import { pathLabelView } from '../../components/node-link.js';
+import { contactNote, pathLabelView } from '../../components/node-link.js';
 import '../../components/activity-chart.js';
 import './contact-stats.js';
 
@@ -82,6 +82,18 @@ export class McContactInfoPage extends AppElement {
         display: flex;
         gap: 8px;
         align-items: center;
+      }
+      .note-form {
+        display: flex;
+        gap: 8px;
+        align-items: end;
+      }
+      .note-label {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        min-width: 0;
       }
       .hint {
         color: var(--mc-text-muted);
@@ -212,7 +224,7 @@ export class McContactInfoPage extends AppElement {
         <a href=${hrefFor('/contacts')} aria-label="Back to contacts">←</a>
         ${avatar(v.typeName)}
         <div>
-          <h2 data-field="name">${v.name}</h2>
+          <h2><span data-field="name">${v.name}</span>${contactNote(v.note)}</h2>
           <span class="muted" data-field="type">${TYPE_LABEL[v.typeName]}${v.favourite ? ' · ★ favourite' : ''}${v.onDevice ? '' : ' · not on radio'}</span>
         </div>
       </header>
@@ -225,6 +237,39 @@ export class McContactInfoPage extends AppElement {
       </div>
       ${this.tab === 'stats' ? html`<mc-contact-stats role="tabpanel" .key=${v.key}></mc-contact-stats>` : this.#renderInfo(v)}
     `;
+  }
+
+  /** Local note shown after the contact's name everywhere (app-only, never sent to the radio). */
+  #noteSetting(v: ContactView) {
+    return html`<section class="card" data-section="note">
+      <form class="note-form" @submit=${(e: SubmitEvent) => void this.#saveNote(e, v.key)} novalidate>
+        <label class="note-label"
+          >Note
+          <input
+            name="note"
+            data-field="note-input"
+            maxlength="100"
+            autocomplete="off"
+            placeholder="Add a note…"
+            .value=${v.note}
+          />
+        </label>
+        <button type="submit" data-action="save-note">Save</button>
+      </form>
+      <p class="hint">Shown after the name wherever this contact appears. Stored in this app only.</p>
+    </section>`;
+  }
+
+  async #saveNote(e: SubmitEvent, key: string): Promise<void> {
+    e.preventDefault();
+    const input = (e.currentTarget as HTMLFormElement).elements.namedItem('note') as HTMLInputElement;
+    try {
+      await this.app.contacts.setNote(key, input.value);
+      input.value = input.value.trim();
+      this.app.notifications.success(input.value ? 'Note saved' : 'Note cleared');
+    } catch (err) {
+      this.app.notifications.error('Could not save note', err);
+    }
   }
 
   /** Per-contact SMAZ setting for outgoing DMs (feature-inventory.md §2.4a); explicit off blocks auto-enable. */
@@ -261,7 +306,7 @@ export class McContactInfoPage extends AppElement {
           <dt>Public key</dt>
           <dd class="mono" data-field="key">${v.key}</dd>
           <dt>Path</dt>
-          <dd data-field="path" title=${path.title || nothing}>${pathLabelView(path, v.path.kind === 'hops' ? { kind: 'contact', key: v.key } : null)}</dd>
+          <dd data-field="path" title=${path.title || nothing}>${pathLabelView(path, v.path.kind === 'hops' ? { kind: 'contact', key: v.key } : null, (k) => this.app.contacts.noteFor(k))}</dd>
           <dt>Direct signal</dt>
           <dd data-field="direct-signal">
             ${v.directSnr !== undefined
@@ -271,9 +316,9 @@ export class McContactInfoPage extends AppElement {
           <dt>Last seen</dt>
           <dd data-field="last-seen">${v.lastSeen ? formatRelative(v.lastSeen, this.app.clock.now()) : 'never'}</dd>
           ${located ? html`<dt>Location</dt><dd data-field="location">${c.lat.toFixed(5)}, ${c.lon.toFixed(5)}</dd>` : nothing}
-          ${c.notes ? html`<dt>Notes</dt><dd data-field="notes">${c.notes}</dd>` : nothing}
         </dl>
       </section>
+      ${this.#noteSetting(v)}
       ${v.typeName === 'chat' || v.typeName === 'room' ? this.#smazSetting(v) : nothing}
       <div class="actions">
         ${v.typeName === 'chat' || v.typeName === 'room'

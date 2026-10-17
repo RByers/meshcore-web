@@ -17,7 +17,7 @@ import { shared } from '../../styles.js';
 import { formatLogTime, frameInspectorProps, fromDatetimeLocal, packetInspectorProps, toDatetimeLocal, type InspectorProps } from './inspection.js';
 import { jsonReplacer } from './packet-inspector.js';
 import { hopsLink } from '../../components/path-dialog.js';
-import { pathHops } from '../../components/node-link.js';
+import { contactNote, pathHops } from '../../components/node-link.js';
 import './packet-inspector.js';
 import './packet-stats.js';
 
@@ -58,6 +58,8 @@ export class McPacketsPage extends AppElement {
   #loadSeq = 0;
   /** First visible row before an update, so rows added above it don't move it (see #keepAnchor). */
   #anchor: { attr: string; id: string; top: number } | null = null;
+  /** Contact note lookup for path hop tooltips. */
+  #notes = (key: string): string => this.app.contacts.noteFor(key);
 
   constructor() {
     super();
@@ -485,7 +487,7 @@ export class McPacketsPage extends AppElement {
     return html`<div class="filters" role="search" aria-label="Packet filters">
       ${f.src
         ? html`<span class="chip" data-filter="src" title=${`Packets originated by ${f.src}`}
-            >From ${this.app.contacts.view(f.src)?.name ?? `${f.src.slice(0, 8)}…`}
+            >From ${this.app.contacts.view(f.src)?.name ?? `${f.src.slice(0, 8)}…`}${contactNote(this.app.contacts.noteFor(f.src))}
             <button data-action="clear-src" aria-label="Show packets from every node" @click=${() => this.#clearSrc()}>✕</button></span
           >`
         : nothing}
@@ -646,7 +648,7 @@ export class McPacketsPage extends AppElement {
     const hops = this.app.contacts.resolvePath(r.path);
     const names = this.app.appSettings.pathNames.value;
     return html`<td class="mono" data-field="path" title=${resolvedPathTitle(hops)}
-      >${pathHops(hops, names ? { names } : { names, sep: '→' })} ${hopsLink(`(${r.hops})`, { kind: 'packet', id: r.id })}</td
+      >${pathHops(hops, names ? { names, notes: this.#notes } : { names, sep: '→', notes: this.#notes })} ${hopsLink(`(${r.hops})`, { kind: 'packet', id: r.id })}</td
     >`;
   }
 

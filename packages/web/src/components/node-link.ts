@@ -14,6 +14,14 @@ export function contactHref(key: string): string {
   return hrefFor(`/contact/${key}`);
 }
 
+/**
+ * A contact's local note after its name: smaller, muted text (`.contact-note` in `shared` styles).
+ * Nothing when there's no note. Test hook: `[data-field="contact-note"]`.
+ */
+export function contactNote(note: string | undefined): TemplateResult | typeof nothing {
+  return note ? html`<span class="contact-note" data-field="contact-note">${note}</span>` : nothing;
+}
+
 /** Link clicks must not reach row handlers (packet rows open the inspector on click). */
 const stop = (e: Event): void => e.stopPropagation();
 
@@ -29,23 +37,33 @@ export function hopKey(h: ResolvedHop): string | undefined {
   return only ? toHex(only.pubKey) : undefined;
 }
 
+/** Looks up a contact's local note by key ('' when none), e.g. `(k) => app.contacts.noteFor(k)`. */
+export type NoteLookup = (key: string) => string;
+
+/** A hop's tooltip, with the linked contact's note appended when it has one. */
+function hopTitle(h: ResolvedHop, key: string | undefined, notes: NoteLookup | undefined): string {
+  const note = key && notes ? notes(key) : '';
+  return note ? `${h.title} (${note})` : h.title;
+}
+
 /**
  * The hops of a path, each linked to its contact where known. `names` shows resolved names
- * (else the hex hashes).
+ * (else the hex hashes). Chains stay compact: a contact's note (`notes`) goes in the hop's tooltip.
  */
-export function pathHops(hops: readonly ResolvedHop[], opts: { names?: boolean; sep?: string } = {}): TemplateResult {
+export function pathHops(hops: readonly ResolvedHop[], opts: { names?: boolean; sep?: string; notes?: NoteLookup } = {}): TemplateResult {
   const names = opts.names ?? true;
   const sep = opts.sep ?? PATH_SEPARATOR;
-  return html`${hops.map(
-    (h, i) => html`${i ? sep : ''}<span data-hop=${h.hash}>${nodeLink(names ? h.label : h.hash, hopKey(h), h.title)}</span>`,
-  )}`;
+  return html`${hops.map((h, i) => {
+    const key = hopKey(h);
+    return html`${i ? sep : ''}<span data-hop=${h.hash}>${nodeLink(names ? h.label : h.hash, key, hopTitle(h, key, opts.notes))}</span>`;
+  })}`;
 }
 
 /**
  * A displayed path label: the name chain with per-node links plus a small path-view button when
- * names are shown, else the clickable hop-count label (as before).
+ * names are shown, else the clickable hop-count label (as before). `notes` adds hop notes to tooltips.
  */
-export function pathLabelView(p: PathLabel, req: PathRequest | null): TemplateResult {
+export function pathLabelView(p: PathLabel, req: PathRequest | null, notes?: NoteLookup): TemplateResult {
   if (!p.named) return hopsLink(p.label, req);
-  return html`${pathHops(p.resolved)}${req ? pathViewButton(req) : nothing}`;
+  return html`${pathHops(p.resolved, notes ? { notes } : {})}${req ? pathViewButton(req) : nothing}`;
 }

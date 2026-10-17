@@ -21,6 +21,7 @@ import { AppElement } from '../../app-context.js';
 import '../../components/tile-map.js';
 import { KIND_COLORS, type McTileMap, type TileMapView } from '../../components/tile-map.js';
 import { hopsLink } from '../../components/path-dialog.js';
+import { contactNote } from '../../components/node-link.js';
 import { formatRelative } from '../../format.js';
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
@@ -46,6 +47,7 @@ function describe(m: MapMarker): string {
   const parts: string[] = [TYPE_LABEL[m.kind]];
   if (m.estimate) parts.push(`approximate position near ${m.estimate.viaName}`);
   if (m.distanceM !== undefined) parts.push(`${formatDistance(m.distanceM)} ${m.compass ?? ''}`.trim());
+  if (m.view.note) parts.push(`note: ${m.view.note}`);
   return parts.join(', ');
 }
 
@@ -367,7 +369,7 @@ export class McMapPage extends AppElement {
     const m = this.app.map;
     return html`<section class="card info" data-card aria-labelledby="card-title">
       <header>
-        <h3 id="card-title">${x.name}</h3>
+        <h3 id="card-title">${x.name}${contactNote(x.view.note)}</h3>
         <button class="close" aria-label="Close details" @click=${() => m.select(null)}>✕</button>
       </header>
       <dl>

@@ -24,7 +24,7 @@ import { formatRelative, formatSnr, formatTime, shortKey } from '../../format.js
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
 import { avatar, listStyles, TYPE_LABEL } from '../messaging/common.js';
-import { nodeLink, pathLabelView } from '../../components/node-link.js';
+import { contactNote, nodeLink, pathLabelView, type NoteLookup } from '../../components/node-link.js';
 
 export const NODE_TABS = ['overview', 'telemetry', 'cli', 'tools', 'messages'] as const;
 export type NodeTab = (typeof NODE_TABS)[number];
@@ -47,8 +47,8 @@ function loginLabel(s: LoginState): string {
   }
 }
 
-function hopLabel(h: HopRef): TemplateResult {
-  return html`<span class="mono">${h.hash}</span>${h.name ? html` ${nodeLink(`${h.name}${h.ambiguous ? '?' : ''}`, h.key)}` : nothing}`;
+function hopLabel(h: HopRef, notes: NoteLookup): TemplateResult {
+  return html`<span class="mono">${h.hash}</span>${h.name ? html` ${nodeLink(`${h.name}${h.ambiguous ? '?' : ''}`, h.key)}${contactNote(h.key ? notes(h.key) : '')}` : nothing}`;
 }
 
 /** Swallows a model action's rejection (the model records it in `errors`). */
@@ -253,6 +253,9 @@ export class McNodeAdminPage extends AppElement {
     `,
   ];
 
+  /** Contact note lookup for hop labels and path tooltips. */
+  #notes = (key: string): string => this.app.contacts.noteFor(key);
+
   get #key(): string {
     return (this.params?.['key'] ?? '').toLowerCase();
   }
@@ -296,10 +299,10 @@ export class McNodeAdminPage extends AppElement {
         <a href=${hrefFor('/contacts')} aria-label="Back to contacts">←</a>
         ${avatar(v.typeName)}
         <div class="head-main">
-          <h2 data-field="name">${v.name}</h2>
+          <h2><span data-field="name">${v.name}</span>${contactNote(v.note)}</h2>
           <div class="muted">
             <span class="type-badge" data-field="type">${TYPE_LABEL[v.typeName]}</span>
-            <span data-field="path" title=${outPath.title || nothing}>${pathLabelView(outPath, v.path.kind === 'hops' ? { kind: 'contact', key } : null)}</span>
+            <span data-field="path" title=${outPath.title || nothing}>${pathLabelView(outPath, v.path.kind === 'hops' ? { kind: 'contact', key } : null, this.#notes)}</span>
             ${v.directSnr !== undefined ? html` · <span data-field="direct-signal">direct SNR ${formatSnr(v.directSnr)}</span>` : nothing}
             · <a href=${hrefFor(`/contact/${v.key}`)} data-action="contact-info">info</a>
             · last seen ${v.lastSeen ? formatRelative(v.lastSeen, this.app.clock.now()) : 'never'}
@@ -651,7 +654,7 @@ export class McNodeAdminPage extends AppElement {
         ${this.traceError ? html`<p class="error" role="alert">${this.traceError}</p>` : nothing} ${this.#err(node, 'trace')}
         ${trace
           ? html`<ol class="hops" data-field="trace-result">
-                ${trace.hops.map((h) => html`<li data-trace-hop=${h.hash}>${hopLabel(h)} — <span data-field="snr">${formatSnr(h.snr)}</span></li>`)}
+                ${trace.hops.map((h) => html`<li data-trace-hop=${h.hash}>${hopLabel(h, this.#notes)} — <span data-field="snr">${formatSnr(h.snr)}</span></li>`)}
                 <li data-trace-hop="self">You — ${formatSnr(trace.finalSnr)}</li>
               </ol>
               <p class="muted">Round trip ${trace.roundTripMs} ms</p>`
@@ -664,6 +667,7 @@ export class McNodeAdminPage extends AppElement {
               ? pathLabelView(
                   this.app.contacts.outPathLabel(node.contact.value, this.app.appSettings.pathNames.value),
                   node.contact.value.path.kind === 'hops' ? { kind: 'contact', key: this.#key } : null,
+                  this.#notes,
                 )
               : '—'}</strong
           ></p>
@@ -679,8 +683,8 @@ export class McNodeAdminPage extends AppElement {
         ${this.#err(node, 'discovery')} ${this.#err(node, 'resetPath')}
         ${pd
           ? html`<dl class="stats" data-field="discovery-result">
-              <div class="stat"><div class="label">Out (to node)</div><div class="value">${pd.outPath.length ? pd.outPath.map((h, i) => html`${i ? ' → ' : ''}${hopLabel(h)}`) : 'direct'}</div></div>
-              <div class="stat"><div class="label">In (from node)</div><div class="value">${pd.inPath.length ? pd.inPath.map((h, i) => html`${i ? ' → ' : ''}${hopLabel(h)}`) : 'direct'}</div></div>
+              <div class="stat"><div class="label">Out (to node)</div><div class="value">${pd.outPath.length ? pd.outPath.map((h, i) => html`${i ? ' → ' : ''}${hopLabel(h, this.#notes)}`) : 'direct'}</div></div>
+              <div class="stat"><div class="label">In (from node)</div><div class="value">${pd.inPath.length ? pd.inPath.map((h, i) => html`${i ? ' → ' : ''}${hopLabel(h, this.#notes)}`) : 'direct'}</div></div>
               <div class="stat"><div class="label">Round trip</div><div class="value">${pd.roundTripMs} ms</div></div>
             </dl>`
           : nothing}
@@ -697,7 +701,7 @@ export class McNodeAdminPage extends AppElement {
                 ? html`<div class="table-wrap"><table>
                     <thead><tr><th>Node</th><th>Heard</th><th>SNR</th></tr></thead>
                     <tbody>
-                      ${nb.items.map((n) => html`<tr data-neighbour=${n.hash}><td>${hopLabel(n)}</td><td>${formatSeconds(n.heardSecsAgo)} ago</td><td>${formatSnr(n.snr)}</td></tr>`)}
+                      ${nb.items.map((n) => html`<tr data-neighbour=${n.hash}><td>${hopLabel(n, this.#notes)}</td><td>${formatSeconds(n.heardSecsAgo)} ago</td><td>${formatSnr(n.snr)}</td></tr>`)}
                     </tbody>
                   </table></div>
                   ${nb.total > nb.items.length ? html`<p class="muted">${nb.items.length} of ${nb.total}</p>` : nothing}`
@@ -717,7 +721,7 @@ export class McNodeAdminPage extends AppElement {
             ? html`<div class="table-wrap"><table>
                 <thead><tr><th>Client</th><th>Role</th></tr></thead>
                 <tbody>
-                  ${acl.items.map((a) => html`<tr data-acl=${a.hash}><td>${hopLabel(a)}</td><td>${a.role}</td></tr>`)}
+                  ${acl.items.map((a) => html`<tr data-acl=${a.hash}><td>${hopLabel(a, this.#notes)}</td><td>${a.role}</td></tr>`)}
                 </tbody>
               </table></div>`
             : html`<p class="muted">The access list is empty.</p>`

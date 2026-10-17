@@ -6,6 +6,7 @@ import { formatRelative } from '../../format.js';
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
 import { avatar, listStyles, unreadBadge } from './common.js';
+import { contactNote } from '../../components/node-link.js';
 
 export function conversationHref(c: Pick<ConversationView, 'convType' | 'key' | 'icon'>): string {
   if (c.convType === 'channel') return hrefFor(`/channel/${c.key}`);
@@ -32,7 +33,7 @@ export class McMessagesPage extends AppElement {
                   ${avatar(c.icon)}
                   <span class="row-main">
                     <span class="row-title">
-                      <span class="name">${c.name}</span>
+                      <span class="name">${c.name}${c.convType === 'channel' ? nothing : contactNote(this.app.contacts.noteFor(c.key))}</span>
                       ${c.muted ? html`<span title="Muted" aria-label="Muted">🔕</span>` : nothing}
                       <span class="when">${c.lastActivity ? formatRelative(c.lastActivity, this.app.clock.now()) : ''}</span>
                     </span>

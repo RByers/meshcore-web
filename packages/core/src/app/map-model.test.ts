@@ -29,6 +29,7 @@ function view(name: string, type: number, lat: number, lon: number, lastSeen = N
     lastSnr: undefined,
     favourite: false,
     onDevice: true,
+    note: '',
   };
 }
 

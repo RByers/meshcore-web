@@ -56,6 +56,8 @@ export interface ContactView {
   lastSnr: number | undefined;
   favourite: boolean;
   onDevice: boolean;
+  /** Local free-text note (app-only, trimmed; '' when none). */
+  note: string;
 }
 
 export interface ContactExport {
@@ -196,6 +198,7 @@ export class ContactsModel extends StoreBoundModel {
         lastSnr: direct?.snr,
         favourite: c.favourite || (c.flags & ContactFlag.FAVOURITE) !== 0,
         onDevice: c.onDevice,
+        note: c.notes?.trim() ?? '',
       };
     });
   });
@@ -209,7 +212,7 @@ export class ContactsModel extends StoreBoundModel {
       if (filter === 'favourites' && !v.favourite) return false;
       if (filter === 'unread' && v.unread === 0) return false;
       if (filter !== 'all' && filter !== 'favourites' && filter !== 'unread' && v.typeName !== filter) return false;
-      if (q && !v.name.toLowerCase().includes(q) && !v.key.startsWith(q)) return false;
+      if (q && !v.name.toLowerCase().includes(q) && !v.key.startsWith(q) && !v.note.toLowerCase().includes(q)) return false;
       return true;
     });
     const byName = (a: ContactView, b: ContactView): number =>
@@ -241,6 +244,21 @@ export class ContactsModel extends StoreBoundModel {
   view(key: string): ContactView | undefined {
     const k = key.toLowerCase();
     return this.views.value.find((v) => v.key === k);
+  }
+
+  readonly #notes = computed(() => {
+    const out = new Map<string, string>();
+    for (const c of this.#contacts.value) {
+      const n = c.notes?.trim();
+      if (n) out.set(c.key, n);
+    }
+    return out;
+  });
+
+  /** A contact's local note, '' when none (tracked; cheap for lists). */
+  noteFor(key: string | undefined): string {
+    const notes = this.#notes.value;
+    return key ? (notes.get(key.toLowerCase()) ?? '') : '';
   }
 
   /** Where a message sender name links to: one contact, a name search, or nowhere (tracked). */
@@ -492,6 +510,14 @@ export class ContactsModel extends StoreBoundModel {
    */
   async setSmaz(key: string, smaz: boolean): Promise<void> {
     await this.store?.contacts.updateLocal(key, { smaz });
+  }
+
+  /** Sets a contact's local note (app-only, never sent to the radio); trimmed, '' clears it. */
+  async setNote(key: string, text: string): Promise<void> {
+    const store = this.store;
+    if (!store) throw new Error('Not connected');
+    await store.contacts.updateLocal(key.toLowerCase(), { notes: text.trim() });
+    await this.reload();
   }
 
   /** Re-reads one contact from the device (path / advert changes). */

@@ -23,6 +23,7 @@ import {
 import { AppElement } from '../app-context.js';
 import { hrefFor } from '../router.js';
 import { shared } from '../styles.js';
+import { contactNote } from './node-link.js';
 import './tile-map.js';
 import type { MapLine, McTileMap } from './tile-map.js';
 
@@ -302,7 +303,7 @@ export class McPathDialog extends AppElement {
       <span class="role">${s.role === 'hop' ? `Hop ${hopNo}` : ROLE_LABEL[s.role]}</span>
       <span class="who">
         ${s.node && s.node.kind !== 'self'
-          ? html`<a data-field="label" data-node-link=${s.node.key} href=${hrefFor(`/contact/${s.node.key}`)} title="Contact details" @click=${() => this.close()}>${s.label}</a>`
+          ? html`<a data-field="label" data-node-link=${s.node.key} href=${hrefFor(`/contact/${s.node.key}`)} title="Contact details" @click=${() => this.close()}>${s.label}</a>${contactNote(this.app.contacts.noteFor(s.node.key))}`
           : html`<span data-field="label">${s.label}</span>`}
         ${s.hash && s.label !== s.hash ? html` <span class="hash">${s.hash}</span>` : nothing}
       </span>

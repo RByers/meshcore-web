@@ -117,6 +117,13 @@ export const shared = css`
   .muted {
     color: var(--mc-text-muted);
   }
+  /* a contact's local note, shown after its name (contactNote() in components/node-link.ts) */
+  .contact-note {
+    font-size: 0.8em;
+    font-weight: 400;
+    color: var(--mc-text-muted);
+    margin-inline-start: 0.35em;
+  }
   .mono {
     font-family: var(--mc-mono);
   }
