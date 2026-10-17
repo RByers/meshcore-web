@@ -44,50 +44,59 @@ If `.ref/` is missing, clone those three repos into it.
 - Feature logic goes in `packages/core/src/app/*-model.ts` (see `packages/core/src/app/README.md`).
 
 ## Git workflow
-- `main` is the primary branch; origin and local should be kept in sync.
-- Before starting any task, ALWAYS fetch and rebase onto `origin/main`. DO NOT work from a stale local main.
-- In particular, before entering a worktree, fast-forward the local `main` checkout to `origin/main`
-  (`git fetch origin && git merge --ff-only origin/main` on `main`), so the new branch starts from the
-  latest main. If local `main` can't fast-forward (it has commits origin lacks), stop and report.
-- Do all work in a branch on a worktree (`EnterWorktree`), branched from the up-to-date main.
-- Whenever a set of changes is complete (typecheck and tests pass), commit and push it to `origin/main`
-  (`git push origin HEAD:main`; no pull requests).
-- Then, before cleaning up the worktree, fast-forward main by rebasing from `origin/main`.
-- Only then clean up and delete the worktree and branch you created.
 
-Multiple agents work against `origin/main` at once, so fetch the latest before planning a task and again
-when finalizing it.
+**No pull requests, no pushing, and history is always linear** — no merge commits. Work is done in
+worktrees branched from local `main` and fast-forwarded into local `main` when done. The operator
+manually tests local `main` and pushes it to `origin` themselves; the agent never pushes.
 
-### Pushing to origin/main is expected — don't stop to ask
+- Create worktrees (`EnterWorktree`) on branches forked from the local `main` branch and develop there.
+- After the worktree is created, check it's up to date with local `main` and rebase onto `main` if
+  needed so you don't work on stale code. Don't rebase onto `origin/main`: local `main` is usually
+  ahead of origin until the operator pushes.
+- Run `npm install` in a new worktree (otherwise web resolves core from the main checkout).
+- When work is complete, rebase the branch onto `main`, then verify `npm run typecheck` and `npm test`
+  both pass before committing.
+- Then exit the worktree and land it from the main checkout with `git merge --ff-only <branch>`, then
+  delete the worktree and branch.
+- After landing, report the size of what was merged as lines added/removed, split five ways — core,
+  core tests, UI, UI tests, docs — over the commits that landed (`main@{1}` is normally `main`'s tip
+  before the merge):
 
-This repo has no PR review step, so pushing straight to `origin/main` *is* the normal way work lands here.
-Treat this section as standing authorization.
+  ```sh
+  git diff --numstat main@{1}..main | awk '
+    $3 ~ /^packages\/core\/src\//                      {c="core"}
+    $3 ~ /^packages\/core\/.*\.test\.ts$/              {c="core tests"}
+    $3 ~ /^packages\/web\/src\//                       {c="UI"}
+    $3 ~ /^packages\/web\/(test\/|src\/testing\/|.*\.test\.ts$)/ {c="UI tests"}
+    $3 ~ /\.md$/                                       {c="docs"}
+    c=="" {c="other"} {a[c]+=$1; d[c]+=$2; c=""}
+    END {for (k in a) printf "%-11s +%d / -%d\n", k, a[k], d[k]}'
+  ```
 
-Some agents carry a general "never push to main" rule. That rule does not apply to this repo: it exists to
-protect a reviewed shared branch, and there isn't one here. Push when the work is complete and verified,
-rather than leaving it on a branch and asking. If your harness makes that genuinely impossible, push the
-branch and say so explicitly — don't silently leave the work unlanded.
+  Later rules override earlier ones, so tests and `*.md` files win over their directory. Report all
+  five categories even when a row is zero, and keep the "other" row (config, scripts).
+- If the fast-forward fails, the branch has fallen behind — rebase it onto `main` again. Never use
+  `--no-ff` or `-m` to get unstuck, and never rebase commits already reachable from `origin/main`.
+- **`main` only ever moves forward.** Never `reset`, `branch -f` or `checkout -B` it: other agents land
+  here concurrently, and a failed fast-forward means your branch is stale, not that `main` is wrong.
+- To revise work already on `main`, commit the fix on top of current `main`.
+- Don't open PRs, don't create branches on `origin`, and don't push. Pushing `main` to `origin` is a
+  step the operator does by hand after manual testing. Never force-push.
+- Older history contains merge commits from earlier flows; leave them alone.
 
-Do still stop and ask before anything that could destroy work: force-pushing, rewriting already-pushed
-history, deleting branches you didn't create, or pushing when the push isn't a fast-forward.
+### Local git config
 
-### The credentials are restricted — GitHub is the backstop
+The linear-history workflow is enforced by repo-local git config (`.git/config`, not committed — re-apply
+on a fresh clone):
 
-The agent pushes with restricted credentials, and GitHub permissions block the genuinely unsafe operations
-rather than relying on the agent to hold back. Force-pushes and non-fast-forward pushes to main are rejected
-by the server, so an ordinary push can add commits but can never drop or rewrite one that already landed.
+```sh
+git config --local pull.rebase false   # override a global pull.rebase=true
+git config --local pull.ff only        # a pull may only fast-forward
+git config --local merge.ff only       # `git merge <branch>` fails unless it fast-forwards
+git config --local merge.conflictStyle zdiff3  # conflict markers include the common ancestor
+git config --local rerere.enabled true # remember conflict resolutions
+git config --local rerere.autoupdate true
+```
 
-So a normal `git push origin HEAD:main` is low-risk here: the worst realistic outcome is a commit you'd
-rather not have, fixable with a follow-up commit. Don't try to route around a rejected push: rebase onto
-`origin/main` and push again, and if it still refuses, stop and report rather than reaching for `--force`.
-
-Anything destructive that the permissions *don't* cover — deleting branches, discarding a worktree with
-unpushed commits — still needs asking first.
-
-### Don't leave stray branches on origin
-
-Work lands on main, so a branch on origin is just noise once it's merged. Push your worktree branch only if
-you actually need it shared. After landing on main, delete any remote branch you created:
-`git push origin --delete <branch>`. Before deleting, confirm nothing is lost with
-`git merge-base --is-ancestor <branch> origin/main`. If that fails, the branch still has unique commits:
-check whether main already supersedes their content and say what you found rather than deleting.
+`merge.ff = only` keeps history linear: a stale branch errors out instead of creating a merge commit.
+`pull.rebase = false` is needed because `pull.rebase` outranks `pull.ff`.
