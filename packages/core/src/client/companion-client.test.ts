@@ -114,6 +114,43 @@ describe('CompanionClient handshake', () => {
     ]);
   });
 
+  it('emits connectProgress per step, per contact (done/total) and per drained message', async () => {
+    const s = makeSetup();
+    const progress = s.record('connectProgress');
+    const msgs = s.record('contactMessage');
+    const chans = s.record('channelMessage');
+    await s.run(s.client.connect(s.transport));
+
+    const steps = ['deviceQuery', 'appStart', 'timeSync', 'contacts', 'messages'];
+    for (const p of progress) expect(p.steps).toEqual(steps);
+    const n = s.client.contacts.length;
+    const drained = msgs.length + chans.length;
+    expect(progress.map(({ step, done, total }) => ({ step, done, total }))).toEqual([
+      { step: 'deviceQuery', done: undefined, total: undefined },
+      { step: 'appStart', done: undefined, total: undefined },
+      { step: 'timeSync', done: undefined, total: undefined },
+      { step: 'contacts', done: undefined, total: undefined },
+      ...Array.from({ length: n + 1 }, (_, i) => ({ step: 'contacts', done: i, total: n })),
+      ...Array.from({ length: drained + 1 }, (_, i) => ({ step: 'messages', done: i, total: undefined })),
+    ]);
+    expect(n).toBe(6);
+    expect(drained).toBeGreaterThan(0);
+
+    // nothing after the handshake (a later sync is not part of connect)
+    const before = progress.length;
+    await s.run(s.client.syncContacts({ full: true }));
+    await s.run(s.client.syncMessages());
+    expect(progress).toHaveLength(before);
+  });
+
+  it('leaves disabled steps out of connectProgress', async () => {
+    const s = makeSetup({ client: { timeSync: 'never', syncContactsOnConnect: false } });
+    const progress = s.record('connectProgress');
+    await s.run(s.client.connect(s.transport));
+    expect(progress[0]?.steps).toEqual(['deviceQuery', 'appStart', 'messages']);
+    expect([...new Set(progress.map((p) => p.step))]).toEqual(['deviceQuery', 'appStart', 'messages']);
+  });
+
   it('records every frame in wire order with direction, decoded frame and timestamp', async () => {
     const s = await connected();
     const head = s.frames.slice(0, 4).map((f) => [f.direction, f.command ?? f.frame?.kind]);

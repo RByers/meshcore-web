@@ -127,8 +127,25 @@ export interface ContactsChangedEvent {
   full: boolean;
 }
 
+/** A step of {@link CompanionClient.connect}, in the order they run. */
+export type ConnectStep = 'deviceQuery' | 'appStart' | 'timeSync' | 'contacts' | 'messages';
+
+/**
+ * Handshake progress (`connectProgress` event). Emitted when each step starts and, during the
+ * contacts sync, once CONTACTS_START gives the total and per CONTACT (`done`/`total`); during the
+ * message drain per message received (`done` only: the queue length is unknown).
+ */
+export interface ConnectProgressEvent {
+  step: ConnectStep;
+  /** The steps this connect runs (disabled options are left out), in order. */
+  steps: readonly ConnectStep[];
+  done?: number;
+  total?: number;
+}
+
 export interface CompanionClientEvents {
   connected: ConnectedEvent;
+  connectProgress: ConnectProgressEvent;
   disconnected: DisconnectedEvent;
   state: ClientState;
   selfInfo: SelfInfo;

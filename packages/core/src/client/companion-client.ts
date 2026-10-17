@@ -64,6 +64,7 @@ import {
   type CompanionClientEvents,
   type CompanionClientOptions,
   type ConnectedEvent,
+  type ConnectStep,
   type ContactRef,
   type ContactsResult,
   type OtherParams,
@@ -154,6 +155,8 @@ export class CompanionClient {
   #drainAgain = false;
   /** MSG_WAITING seen during the handshake outside a drain. */
   #waitingDuringHandshake = false;
+  /** Steps of the running connect() (for connectProgress); empty when not connecting. */
+  #connectSteps: ConnectStep[] = [];
 
   // contacts cache
   #contacts = new Map<string, Contact>();
@@ -238,6 +241,7 @@ export class CompanionClient {
   /**
    * Opens `transport` (if needed) and performs the session start (§2): DEVICE_QUERY, APP_START,
    * optional time sync, contacts sync and message drain. Resolves with the connection info.
+   * Emits `connectProgress` as each step starts and while contacts / messages stream in.
    */
   async connect(transport: FrameTransport): Promise<ConnectedEvent> {
     if (this.#state !== 'disconnected') throw new Error(`cannot connect while ${this.#state}`);
@@ -255,10 +259,16 @@ export class CompanionClient {
       transport.events.on('error', (e) => this.#emit('error', e)),
     ];
     this.#setState('connecting');
+    const steps: ConnectStep[] = ['deviceQuery', 'appStart'];
+    if (this.#opts.timeSync !== 'never') steps.push('timeSync');
+    if (this.#opts.syncContactsOnConnect) steps.push('contacts');
+    if (this.#opts.syncMessagesOnConnect) steps.push('messages');
+    this.#connectSteps = steps;
     try {
       if (transport.state !== 'connected') await transport.connect();
       this.#assertSession(transport);
 
+      this.#connectProgress('deviceQuery');
       try {
         const di = await this.request({ kind: 'deviceQuery', appTargetVer: this.#opts.protocolVersion }, ['deviceInfo']);
         this.#deviceInfo = di.info;
@@ -268,14 +278,25 @@ export class CompanionClient {
         if (!(err instanceof DeviceError || err instanceof RequestTimeoutError)) throw err;
       }
 
+      this.#connectProgress('appStart');
       const si = await this.request({ kind: 'appStart', appName: this.#opts.appName, appVersion: this.#opts.appVersion }, ['selfInfo']);
       this.#selfInfo = si.info;
 
-      if (this.#opts.timeSync !== 'never') await this.#syncTimeOnConnect();
-      if (this.#opts.syncContactsOnConnect) await this.syncContacts();
-      if (this.#opts.syncMessagesOnConnect) await this.syncMessages();
+      if (this.#opts.timeSync !== 'never') {
+        this.#connectProgress('timeSync');
+        await this.#syncTimeOnConnect();
+      }
+      if (this.#opts.syncContactsOnConnect) {
+        this.#connectProgress('contacts');
+        await this.syncContacts();
+      }
+      if (this.#opts.syncMessagesOnConnect) {
+        this.#connectProgress('messages', 0);
+        await this.syncMessages();
+      }
       this.#assertSession(transport);
     } catch (err) {
+      this.#connectSteps = [];
       const e = err instanceof Error ? err : new Error(String(err));
       if (this.#transport === transport && this.#state !== 'disconnected') {
         this.#teardown(e);
@@ -283,6 +304,7 @@ export class CompanionClient {
       }
       throw e;
     }
+    this.#connectSteps = [];
     this.#setState('connected');
     if (this.#waitingDuringHandshake && this.#opts.autoSyncMessages) this.#background(this.syncMessages());
     this.#waitingDuringHandshake = false;
@@ -296,6 +318,17 @@ export class CompanionClient {
     const t = this.#transport;
     if (this.#state !== 'disconnected') this.#teardown(undefined);
     if (t) await t.disconnect().catch(() => undefined);
+  }
+
+  /** Emits connectProgress while connect() runs (no-op otherwise, e.g. a later syncContacts()). */
+  #connectProgress(step: ConnectStep, done?: number, total?: number): void {
+    if (this.#state !== 'connecting' || !this.#connectSteps.includes(step)) return;
+    this.#emit('connectProgress', {
+      step,
+      steps: this.#connectSteps,
+      ...(done !== undefined ? { done } : {}),
+      ...(total !== undefined ? { total } : {}),
+    });
   }
 
   #assertSession(transport: FrameTransport): void {
@@ -659,11 +692,13 @@ export class CompanionClient {
       switch (f.kind) {
         case 'contactsStart':
           total = f.total;
+          this.#connectProgress('contacts', 0, total);
           ctl.touch();
           return true;
         case 'contact':
           if (total === undefined) return false;
           contacts.push(f.contact);
+          this.#connectProgress('contacts', contacts.length, total);
           ctl.touch();
           return true;
         case 'endOfContacts':
@@ -823,6 +858,7 @@ export class CompanionClient {
             if (f.kind === 'noMoreMessages') break;
             n++;
             this.#dispatchMessage(f);
+            this.#connectProgress('messages', n);
           }
         } while (this.#drainAgain);
       } finally {

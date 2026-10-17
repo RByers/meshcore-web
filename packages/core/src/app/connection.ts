@@ -7,10 +7,11 @@
  *     connected ─link lost→ disconnected (error set)
  *     connecting / handshaking ─failure→ error
  *   connect() is allowed again from idle, disconnected and error.
+ *   `handshake` reports the running step and an overall fraction from connect() until it settles.
  */
 
 import { CompanionClient } from '../client/companion-client.js';
-import type { CompanionClientOptions } from '../client/types.js';
+import type { CompanionClientOptions, ConnectProgressEvent, ConnectStep } from '../client/types.js';
 import type { BattAndStorage, DeviceInfo, SelfInfo } from '../protocol/types.js';
 import type { FrameTransport, TransportInfo } from '../transport/transport.js';
 import { systemClock, type Clock } from '../util/clock.js';
@@ -36,6 +37,84 @@ export const CONNECTION_KIND_LABEL: Record<ConnectionKind, string> = {
 };
 
 export type ConnectionPhase = 'idle' | 'connecting' | 'handshaking' | 'connected' | 'disconnecting' | 'disconnected' | 'error';
+
+/** A step of {@link ConnectionModel.connect}: the transport, the client handshake, the local store. */
+export type HandshakeStep = 'transport' | ConnectStep | 'store';
+
+/** Progress of a connect in progress ({@link ConnectionModel.handshake}). */
+export interface HandshakeProgress {
+  step: HandshakeStep;
+  /** Human label for the step, with counts where known ("Syncing contacts (12/40)"). */
+  label: string;
+  done?: number;
+  total?: number;
+  /** Overall progress 0..1; non-decreasing within one connect. */
+  fraction: number;
+}
+
+/** Relative share of the progress bar per step (only enabled steps count). */
+const HANDSHAKE_WEIGHTS: Record<HandshakeStep, number> = {
+  transport: 10,
+  deviceQuery: 5,
+  appStart: 5,
+  timeSync: 5,
+  contacts: 50,
+  messages: 15,
+  store: 10,
+};
+
+/** Messages drained at which the messages step is half full (the queue length is unknown). */
+const MESSAGES_HALF = 10;
+
+export function handshakeLabel(step: HandshakeStep, done?: number, total?: number): string {
+  switch (step) {
+    case 'transport':
+      return 'Opening connection';
+    case 'deviceQuery':
+      return 'Querying device';
+    case 'appStart':
+      return 'Starting session';
+    case 'timeSync':
+      return 'Syncing clock';
+    case 'contacts':
+      return total !== undefined ? `Syncing contacts (${done ?? 0}/${total})` : 'Syncing contacts';
+    case 'messages':
+      return done ? `Fetching messages (${done})` : 'Fetching messages';
+    case 'store':
+      return 'Opening local database';
+  }
+}
+
+/**
+ * Progress for `step` of a connect running the client steps `clientSteps` (between 'transport'
+ * and 'store'). The fraction is the weight of the finished steps plus the done share of the
+ * current one (contacts: done/total; messages: asymptotic in done), over the enabled total.
+ */
+export function handshakeProgress(
+  step: HandshakeStep,
+  clientSteps: readonly ConnectStep[],
+  done?: number,
+  total?: number,
+): HandshakeProgress {
+  const steps: HandshakeStep[] = ['transport', ...clientSteps, 'store'];
+  let sum = 0;
+  let before = 0;
+  for (const st of steps) {
+    if (st === step) before = sum;
+    sum += HANDSHAKE_WEIGHTS[st];
+  }
+  let within = 0;
+  if (step === 'contacts' && total) within = Math.min(1, (done ?? 0) / total);
+  else if (step === 'messages' && done) within = done / (done + MESSAGES_HALF);
+  const fraction = steps.includes(step) ? Math.min(1, (before + HANDSHAKE_WEIGHTS[step] * within) / sum) : 0;
+  return {
+    step,
+    label: handshakeLabel(step, done, total),
+    ...(done !== undefined ? { done } : {}),
+    ...(total !== undefined ? { total } : {}),
+    fraction,
+  };
+}
 
 export interface TransportRequest {
   kind: ConnectionKind;
@@ -135,6 +214,7 @@ export class ConnectionModel {
   readonly #deviceInfo = signal<DeviceInfo | null>(null);
   readonly #transportInfo = signal<TransportInfo | null>(null);
   readonly #battery = signal<BattAndStorage | null>(null);
+  readonly #handshake = signal<HandshakeProgress | null>(null);
   readonly #lastKind: Signal<ConnectionKind | null>;
 
   readonly phase: ReadonlySignal<ConnectionPhase> = this.#phase.readonly;
@@ -149,6 +229,8 @@ export class ConnectionModel {
   readonly deviceInfo: ReadonlySignal<DeviceInfo | null> = this.#deviceInfo.readonly;
   readonly transportInfo: ReadonlySignal<TransportInfo | null> = this.#transportInfo.readonly;
   readonly battery: ReadonlySignal<BattAndStorage | null> = this.#battery.readonly;
+  /** Current step and overall fraction while connecting / handshaking; null otherwise. */
+  readonly handshake: ReadonlySignal<HandshakeProgress | null> = this.#handshake.readonly;
   /** Last successfully used kind (persisted in preferences). */
   readonly lastKind: ReadonlySignal<ConnectionKind | null>;
   readonly connected: ReadonlySignal<boolean> = computed(() => this.#phase.value === 'connected');
@@ -207,8 +289,16 @@ export class ConnectionModel {
       this.#kind.value = kind;
       this.#error.value = null;
       this.#battery.value = null;
+      this.#handshake.value = handshakeProgress('transport', []);
     });
     const live = (): boolean => this.#session === s;
+    let clientSteps: readonly ConnectStep[] = [];
+    const progress = (step: HandshakeStep, done?: number, total?: number): void => {
+      if (!live()) return;
+      const next = handshakeProgress(step, clientSteps, done, total);
+      const prev = this.#handshake.peek();
+      this.#handshake.value = prev && prev.fraction > next.fraction ? { ...next, fraction: prev.fraction } : next;
+    };
     try {
       await this.#teardown; // a previous session may still be closing its store
       const factory = this.deps.factories[kind];
@@ -230,6 +320,12 @@ export class ConnectionModel {
       this.#phase.value = 'handshaking';
       const client = new CompanionClient({ clock: this.clock, ...this.deps.clientOptions });
       s.client = client;
+      s.offs.push(
+        client.events.on('connectProgress', (e: ConnectProgressEvent) => {
+          clientSteps = e.steps;
+          progress(e.step, e.done, e.total);
+        }),
+      );
       const devices = await this.deps.devices().catch(() => null);
       s.pipeline = new CapturePipeline(client, {
         devices,
@@ -240,6 +336,7 @@ export class ConnectionModel {
       const info = await client.connect(transport);
       if (!live()) throw new CancelledError();
 
+      progress('store');
       const store = await this.deps.openStore(info.selfInfo.pubKey);
       s.store = store;
       if (!live()) throw new CancelledError();
@@ -271,6 +368,7 @@ export class ConnectionModel {
         this.#selfInfo.value = info.selfInfo;
         this.#deviceInfo.value = info.deviceInfo ?? null;
         this.#phase.value = 'connected';
+        this.#handshake.value = null;
         this.#lastKind.value = kind;
       });
       this.deps.preferences?.setItem(PREF_LAST_KIND, kind);
@@ -299,6 +397,7 @@ export class ConnectionModel {
       if (isChooserCancelled(e)) {
         batch(() => {
           this.#phase.value = 'idle';
+          this.#handshake.value = null;
           this.#transportInfo.value = null;
         });
         this.deps.notifications.info('No device selected');
@@ -306,6 +405,7 @@ export class ConnectionModel {
       }
       batch(() => {
         this.#phase.value = 'error';
+        this.#handshake.value = null;
         this.#error.value = e;
         this.#transportInfo.value = null;
       });
@@ -346,7 +446,10 @@ export class ConnectionModel {
     const s = this.#session;
     if (!s) return;
     this.#session = null;
-    this.#phase.value = 'disconnecting';
+    batch(() => {
+      this.#phase.value = 'disconnecting';
+      this.#handshake.value = null;
+    });
     await this.#cleanup(s);
     this.#phase.value = 'disconnected';
     this.events.emit('disconnected', {});

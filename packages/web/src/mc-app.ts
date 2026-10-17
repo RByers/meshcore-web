@@ -9,6 +9,7 @@ import { PHASE_LABEL } from './format.js';
 import { HashRouter, hrefFor, pages, type PageDef, type Route } from './router.js';
 import { shared, tokens } from './styles.js';
 import './components/mc-toasts.js';
+import './components/connect-progress.js';
 import { SHOW_PATH_EVENT, type McPathDialog } from './components/path-dialog.js';
 import './pages/index.js';
 import { bindTheme } from './theme.js';
@@ -104,6 +105,40 @@ export class McApp extends AppElement {
       }
       .chip[data-phase='error'] .dot {
         background: var(--mc-danger);
+      }
+      .chip .label {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      /* busy phases: a small spinner in place of the dot */
+      .spinner {
+        width: 0.75rem;
+        height: 0.75rem;
+        border-radius: 50%;
+        border: 2px solid color-mix(in oklab, var(--mc-warn) 30%, transparent);
+        border-block-start-color: var(--mc-warn);
+        box-sizing: border-box;
+        flex: none;
+        animation: spin 0.8s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        /* no rotation: a static ring still reads as "in progress" */
+        .spinner {
+          animation: none;
+          border-color: var(--mc-warn);
+          border-inline-end-color: transparent;
+        }
+      }
+      mc-connect-progress {
+        position: absolute;
+        inset-inline: 0;
+        inset-block-start: env(safe-area-inset-top, 0px);
       }
       nav {
         grid-area: nav;
@@ -285,6 +320,8 @@ export class McApp extends AppElement {
     const phase = conn.phase.value;
     const si = conn.selfInfo.value;
     const kind = conn.kind.value;
+    const busy = conn.busy.value;
+    const step = busy ? conn.handshake.value : null;
     let route = this.router.route;
     if (route?.page.requiresConnection && !conn.connected.value) {
       queueMicrotask(() => this.router.navigate('/', { replace: true }));
@@ -302,16 +339,19 @@ export class McApp extends AppElement {
       <a class="skip" href="#main" @click=${this.#skip}>Skip to content</a>
       <div class="shell">
         <header class="top">
+          <mc-connect-progress .app=${this.app}></mc-connect-progress>
           <p class="brand">MeshCore Web</p>
           <span class="spacer"></span>
           <span class="chip" data-phase=${phase} role="status" aria-label=${`Connection: ${PHASE_LABEL[phase]}`}>
-            <span class="dot" aria-hidden="true"></span>
-            <span class="label">${PHASE_LABEL[phase]}</span>
+            ${busy
+              ? html`<span class="spinner" aria-hidden="true"></span>`
+              : html`<span class="dot" aria-hidden="true"></span>`}
+            <span class="label" data-field="chip-label">${step ? step.label : PHASE_LABEL[phase]}</span>
             ${si && phase === 'connected'
               ? html`<span class="where">· ${si.name}${kind ? ` (${CONNECTION_KIND_LABEL[kind]})` : ''}</span>`
               : nothing}
           </span>
-          ${phase === 'connected' || conn.busy.value
+          ${phase === 'connected' || busy
             ? html`<button class="danger" data-action="disconnect" ?disabled=${phase === 'disconnecting'}
                 @click=${() => void conn.disconnect()}>
                 ${phase === 'connected' ? 'Disconnect' : 'Cancel'}

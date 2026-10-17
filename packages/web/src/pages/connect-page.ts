@@ -10,6 +10,7 @@ import { AppElement } from '../app-context.js';
 import { PHASE_LABEL, formatRelative, shortKey } from '../format.js';
 import { hrefFor } from '../router.js';
 import { shared } from '../styles.js';
+import '../components/connect-progress.js';
 
 interface Option {
   kind: ConnectionKind;
@@ -85,6 +86,27 @@ export class McConnectPage extends AppElement {
       .status {
         min-height: 1.5em;
       }
+      .progress {
+        display: grid;
+        gap: 6px;
+        max-width: 32rem;
+        margin-block: var(--mc-gap);
+      }
+      .progress .row {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        font-size: 0.9rem;
+      }
+      .progress .step {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .progress .pct {
+        font-variant-numeric: tabular-nums;
+      }
       ul.devices {
         list-style: none;
         padding: 0;
@@ -145,6 +167,7 @@ export class McConnectPage extends AppElement {
     const busy = conn.busy.value;
     const last = conn.lastKind.value;
     const kind = conn.kind.value;
+    const hs = busy ? conn.handshake.value : null;
     if (conn.connected.value) return this.#connected();
     return html`
       <h2>Connect a radio</h2>
@@ -153,6 +176,15 @@ export class McConnectPage extends AppElement {
         ${busy && kind ? html`${PHASE_LABEL[phase]} (${CONNECTION_KIND_LABEL[kind]})` : nothing}
         ${phase === 'error' && conn.error.value ? html`<span class="why">Last attempt failed: ${conn.error.value.message}</span>` : nothing}
       </p>
+      ${hs
+        ? html`<div class="progress" data-section="connect-progress">
+            <div class="row">
+              <span class="step" data-field="connect-step" aria-live="polite">${hs.label}</span>
+              <span class="pct muted" data-field="connect-percent" aria-hidden="true">${Math.round(hs.fraction * 100)}%</span>
+            </div>
+            <mc-progress-bar .fraction=${hs.fraction} .label=${hs.label}></mc-progress-bar>
+          </div>`
+        : nothing}
       <div class="options">${OPTIONS.map((o) => this.#option(o, busy, last))}</div>
       ${this.#devices(busy)}
     `;

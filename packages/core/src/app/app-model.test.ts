@@ -7,7 +7,7 @@ import type { FrameTransport, TransportEvents } from '../transport/transport.js'
 import { FAST_TIMING, publicChannelSecret } from '../emulator/scenarios.js';
 import { createEmulatorTransportFactory, type AppModelOptions } from './app-model.js';
 import { testApp } from './testing.js';
-import { NoGrantedDeviceError, PREF_LAST_KIND, PREF_RESUME, memoryPreferences, type ConnectionPhase } from './connection.js';
+import { NoGrantedDeviceError, PREF_LAST_KIND, PREF_RESUME, handshakeLabel, handshakeProgress, memoryPreferences, type ConnectionPhase, type HandshakeProgress } from './connection.js';
 import { NotificationsModel } from './notifications.js';
 import { ManualClock } from '../util/clock.js';
 import { effect } from './signal.js';
@@ -16,10 +16,14 @@ function makeApp(over: AppModelOptions = {}) {
   const t = testApp({ app: over });
   const { app, emulator, prefs } = t;
   const phases: ConnectionPhase[] = [];
+  const handshakes: Array<{ phase: ConnectionPhase; progress: HandshakeProgress | null }> = [];
   effect(() => {
     phases.push(app.connection.phase.value);
   });
-  return { t, app, emulator, prefs, phases };
+  effect(() => {
+    handshakes.push({ phase: app.connection.phase.peek(), progress: app.connection.handshake.value });
+  });
+  return { t, app, emulator, prefs, phases, handshakes };
 }
 
 /** A transport that fails to connect. */
@@ -51,6 +55,35 @@ describe('ConnectionModel with the emulator', () => {
     expect(app.connection.lastKind.value).toBe('emulator');
     expect(prefs.getItem(PREF_LAST_KIND)).toBe('emulator');
     await vi.waitFor(() => expect(app.connection.battery.value?.batteryMv).toBeGreaterThan(0));
+  });
+
+  it('reports handshake progress step by step with a monotonic fraction, then clears it', async () => {
+    const { app, handshakes } = makeApp();
+    expect(await app.connection.connect('emulator')).toBe(true);
+    expect(app.connection.handshake.value).toBeNull();
+    expect(handshakes.at(-1)).toEqual({ phase: 'connected', progress: null });
+
+    const progress = handshakes.slice(1, -1).map((h) => h.progress!);
+    expect(handshakes[0]?.progress).toBeNull();
+    expect(progress.every((p) => p !== null)).toBe(true);
+    expect([...new Set(progress.map((p) => p.step))]).toEqual([
+      'transport',
+      'deviceQuery',
+      'appStart',
+      'timeSync',
+      'contacts',
+      'messages',
+      'store',
+    ]);
+    const fractions = progress.map((p) => p.fraction);
+    expect(fractions[0]).toBe(0);
+    for (let i = 1; i < fractions.length; i++) expect(fractions[i]).toBeGreaterThanOrEqual(fractions[i - 1]!);
+    expect(progress.at(-1)).toMatchObject({ step: 'store', label: 'Opening local database', fraction: 0.9 });
+    expect(progress.map((p) => p.label)).toContain('Syncing contacts (6/6)');
+    expect(progress.map((p) => p.label)).toContain('Fetching messages (1)');
+    // contacts reach the end of their share before messages start
+    const lastContacts = progress.filter((p) => p.step === 'contacts').at(-1)!;
+    expect(lastContacts.fraction).toBeCloseTo(0.75);
   });
 
   it('captures every frame, persists messages, contacts, channels and the device record', async () => {
@@ -170,11 +203,36 @@ describe('ConnectionModel with the emulator', () => {
     });
     const p = app.connection.connect('emulator');
     expect(app.connection.phase.value).toBe('connecting');
+    expect(app.connection.handshake.value).toMatchObject({ step: 'transport', label: 'Opening connection', fraction: 0 });
     await app.connection.disconnect();
+    expect(app.connection.handshake.value).toBeNull();
     release();
     expect(await p).toBe(false);
     expect(app.connection.phase.value).toBe('disconnected');
     expect(app.notifications.toasts.value.filter((t) => t.kind === 'error')).toEqual([]);
+  });
+});
+
+describe('handshake progress helpers', () => {
+  it('labels steps with their counts', () => {
+    expect(handshakeLabel('contacts')).toBe('Syncing contacts');
+    expect(handshakeLabel('contacts', 12, 40)).toBe('Syncing contacts (12/40)');
+    expect(handshakeLabel('messages', 0)).toBe('Fetching messages');
+    expect(handshakeLabel('messages', 3)).toBe('Fetching messages (3)');
+  });
+
+  it('weights only the enabled steps so the bar reaches the end', () => {
+    // transport 10 + deviceQuery 5 + appStart 5 + store 10 = 30
+    const steps = ['deviceQuery', 'appStart'] as const;
+    expect(handshakeProgress('transport', steps).fraction).toBe(0);
+    expect(handshakeProgress('appStart', steps).fraction).toBeCloseTo(15 / 30);
+    expect(handshakeProgress('store', steps).fraction).toBeCloseTo(20 / 30);
+    const all = ['deviceQuery', 'appStart', 'timeSync', 'contacts', 'messages'] as const;
+    expect(handshakeProgress('contacts', all, 20, 40)).toMatchObject({ done: 20, total: 40, fraction: 0.5 });
+    expect(handshakeProgress('contacts', all, 0, 0).fraction).toBeCloseTo(0.25);
+    const m = handshakeProgress('messages', all, 1000).fraction;
+    expect(m).toBeGreaterThan(0.89);
+    expect(m).toBeLessThan(0.9);
   });
 });
 
@@ -186,6 +244,7 @@ describe('ConnectionModel errors', () => {
     expect(await app.connection.connect('serial')).toBe(false);
     expect(phases).toEqual(['idle', 'connecting', 'error']);
     expect(app.connection.error.value?.message).toBe('port busy');
+    expect(app.connection.handshake.value).toBeNull();
     const t = app.notifications.toasts.value.at(-1)!;
     expect(t).toMatchObject({ kind: 'error', message: 'Could not connect via USB Serial', detail: 'port busy' });
     expect(app.connection.store.value).toBeNull();
@@ -239,11 +298,14 @@ describe('ConnectionModel errors', () => {
     const connecting = app.connection.connect('serial');
     // the client's default 5 s request timeout (armed once the write lands): DEVICE_QUERY's is
     // tolerated (very old firmware), APP_START's fails the handshake
+    await vi.waitFor(() => expect(app.connection.handshake.value?.step).toBe('deviceQuery'));
     await t.elapsePending(5000);
+    await vi.waitFor(() => expect(app.connection.handshake.value?.label).toBe('Starting session'));
     await t.elapsePending(5000);
     expect(await connecting).toBe(false);
     expect(app.connection.phase.value).toBe('error');
     expect(app.connection.error.value?.name).toBe('RequestTimeoutError');
+    expect(app.connection.handshake.value).toBeNull();
   });
 
   it('resumes the last connection on load unless the user disconnected', async () => {
