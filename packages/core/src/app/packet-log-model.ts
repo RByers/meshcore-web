@@ -157,6 +157,8 @@ export class LogView<R extends { id: number }, F extends object, Row extends { i
   readonly #loading = signal(false);
   #gen = 0;
   #chain: Promise<void> = Promise.resolve();
+  /** The newest reload; an older one that it superseded resolves only once this one has. */
+  #latestReload: Promise<void> = Promise.resolve();
 
   readonly filter: ReadonlySignal<F>;
   /** Current page, newest first. */
@@ -223,8 +225,21 @@ export class LogView<R extends { id: number }, F extends object, Row extends { i
     return this.reload();
   }
 
-  /** Reloads the current page and counts. */
+  /**
+   * Reloads the current page and counts. Resolves once the page is current: if another reload
+   * (e.g. a context reload after a contact change) supersedes this one, after that one.
+   */
   async reload(): Promise<void> {
+    let p = this.#reloadOnce();
+    this.#latestReload = p;
+    await p;
+    while (this.#latestReload !== p) {
+      p = this.#latestReload;
+      await p;
+    }
+  }
+
+  async #reloadOnce(): Promise<void> {
     const store = this.getStore();
     if (!store) return;
     const gen = ++this.#gen;
