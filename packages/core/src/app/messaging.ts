@@ -121,9 +121,45 @@ export function pathDisplay(outPathLen: number): PathDisplay {
  * otherwise it was flooded through N hops.
  */
 export function receivedPathLabel(pathLen: number): string {
-  if ((pathLen & 0xff) === PATH_LEN_UNKNOWN) return 'direct';
+  // 0xFF: the packet followed a stored (direct) route; each repeater strips itself from such a
+  // path, so the hop count is unknown on arrival (MyMesh.cpp onMessageRecv).
+  if ((pathLen & 0xff) === PATH_LEN_UNKNOWN) return 'direct route';
   const { hops } = decodePathLen(pathLen);
   return hops === 0 ? 'zero hop' : hops === 1 ? '1 hop' : `${hops} hops`;
+}
+
+/** Hop count of a received message: 0 = heard directly, null = direct-routed (hops unknown). */
+export function receivedHops(pathLen: number): number | null {
+  if ((pathLen & 0xff) === PATH_LEN_UNKNOWN) return null;
+  return decodePathLen(pathLen).hops;
+}
+
+export interface ReceivedSignal {
+  /** See {@link receivedHops}. */
+  hops: number | null;
+  /** True only for a flood message with an empty path: the sender was heard directly. */
+  zeroHop: boolean;
+  /** "zero hop" / "N hops" / "direct route" ({@link receivedPathLabel}). */
+  pathLabel: string;
+  /**
+   * SNR to show next to the message: only for zero-hop messages, since for a relayed message
+   * the radio's SNR describes the last hop, not the sender (issue #11).
+   */
+  snr?: number;
+  /** The raw last-hop SNR as received (for details / tooltips), whatever the hop count. */
+  lastHopSnr?: number;
+}
+
+/** What the message view shows about how a received message arrived. */
+export function receivedSignal(m: { pathLen: number; snr?: number | undefined }): ReceivedSignal {
+  const hops = receivedHops(m.pathLen);
+  const zeroHop = hops === 0;
+  const out: ReceivedSignal = { hops, zeroHop, pathLabel: receivedPathLabel(m.pathLen) };
+  if (m.snr !== undefined) {
+    out.lastHopSnr = m.snr;
+    if (zeroHop) out.snr = m.snr;
+  }
+  return out;
 }
 
 export type ContactKind = 'chat' | 'repeater' | 'room' | 'sensor';

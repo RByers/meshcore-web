@@ -150,6 +150,12 @@ guard (shared styles and `index.html`), About section in Settings (version from
 `packages/web/src/build-info.ts`, MIT licence, MeshCore credits). Docs: `docs/user-guide.md`,
 rewritten `README.md`, `LICENSE`.
 
+**Message signal (issue #11).** A relayed message's SNR describes only the last hop, so the
+message meta shows the hop count and the SNR only for zero-hop messages (last-hop SNR in the
+tooltip; 0xFF path_len reads "direct route"). The capture pipeline records a per-contact direct
+signal (`ContactRecord.directSnr` / `directSnrAt`, local fields kept across syncs) from zero-hop
+adverts and messages, shown as "direct SNR" in the contacts list, chat header and node page.
+
 **Show on map (issue #13).** `/map/node/:key` (same page, nav highlights Map via the route's
 `navParent`) calls `MapModel.focus(key)`, which selects the contact's marker and re-enables a
 kind / age filter that would hide it; the page centres on it at zoom ≥ 14. The chat header

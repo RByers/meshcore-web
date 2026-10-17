@@ -149,7 +149,7 @@ export class McContactsPage extends AppElement {
     const now = Date.now();
     const meta = [
       v.path.label,
-      v.lastSnr !== undefined ? `SNR ${formatSnr(v.lastSnr)}` : '',
+      v.directSnr !== undefined ? `direct SNR ${formatSnr(v.directSnr)}` : '',
       v.lastSeen ? `seen ${formatRelative(v.lastSeen, now)}` : 'never seen',
     ].filter(Boolean);
     const menuId = `menu-${v.key}`;

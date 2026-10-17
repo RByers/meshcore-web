@@ -18,12 +18,14 @@ import type { CompanionClient } from '../client/companion-client.js';
 import type { ChannelMessageEvent, ContactMessageEvent, ContactsChangedEvent, FrameLogEntry } from '../client/types.js';
 import type { SelfInfo } from '../protocol/types.js';
 import { toHex } from '../util/bytes.js';
+import { decodePathLen, PATH_LEN_UNKNOWN } from '../protocol/constants.js';
 import type { Unsubscribe } from '../util/events.js';
 import type { DevicesRepo } from '../store/devices.js';
 import { messageInputFromChannelFrame, messageInputFromContactFrame, type MessageInput } from '../store/messages.js';
 import type { RadioStore } from '../store/radio-store.js';
 import { TxtType } from '../protocol/constants.js';
 import { parseReaction, reactionMatches, type ParsedReaction } from './reactions.js';
+import { RxPathCorrelator, type DirectHearing } from './rx-path-correlator.js';
 
 type Task = (store: RadioStore) => Promise<void>;
 
@@ -46,6 +48,8 @@ export class CapturePipeline {
   #stopped = false;
   /** id of the most recently captured incoming frame (messages link to it). */
   #lastInFrameId: number | undefined;
+  /** Spots zero-hop adverts in the logged packets (direct SNR). */
+  readonly #rx = new RxPathCorrelator();
   /** Counters, mostly for tests and the status bar. */
   framesCaptured = 0;
   messagesCaptured = 0;
@@ -124,18 +128,24 @@ export class CapturePipeline {
     const r = await store.captureFrame(e.direction, e.bytes, { ts: e.timestamp, ...(e.frame ? { decoded: e.frame } : {}) });
     if (e.direction === 'in') this.#lastInFrameId = r.frame.id;
     this.framesCaptured++;
+    if (r.packet) {
+      const heard = this.#rx.observe(r.packet);
+      if (heard) await recordDirect(store, heard);
+    }
   }
 
-  async #append(store: RadioStore, input: MessageInput): Promise<void> {
+  /** Stores an incoming message (or attaches a reaction); false only for a duplicate (already captured). */
+  async #append(store: RadioStore, input: MessageInput): Promise<boolean> {
     if ((input.txtType ?? TxtType.PLAIN) === TxtType.PLAIN) {
       const r = parseReaction(input.text);
       // MeshCore Open: a matched reaction attaches to its target; an unmatched "r:" is dropped,
       // an unmatched MeshCoreOne reaction is shown as an ordinary message.
-      if (r && ((await this.#react(store, input, r)) || r.format === 'ours')) return;
+      if (r && ((await this.#react(store, input, r)) || r.format === 'ours')) return true;
     }
-    if (await isDuplicate(store, input)) return;
+    if (await isDuplicate(store, input)) return false;
     await store.messages.append(input);
     this.messagesCaptured++;
+    return true;
   }
 
   /**
@@ -159,8 +169,12 @@ export class CapturePipeline {
     if (!key) key = (await store.contacts.findByPrefix(f.senderPrefix))[0]?.key;
     key ??= toHex(f.senderPrefix);
     const meta = this.#meta();
-    await this.#append(store, messageInputFromContactFrame(f, key, meta));
-    if (key.length === 64) await store.contacts.touch(key, meta.receivedAt);
+    const input = messageInputFromContactFrame(f, key, meta);
+    if (!(await this.#append(store, input))) return;
+    if (key.length === 64) {
+      await store.contacts.touch(key, meta.receivedAt);
+      if (f.snr !== undefined && isZeroHop(f.route.pathLen)) await recordDirect(store, { key, snr: f.snr, ts: meta.receivedAt });
+    }
   }
 
   async #channelMessage(store: RadioStore, e: ChannelMessageEvent): Promise<void> {
@@ -192,6 +206,18 @@ export class CapturePipeline {
   async #selfInfo(store: RadioStore, info: SelfInfo): Promise<void> {
     await this.opts.devices?.update(store.pubKey, { selfInfo: info, name: info.name });
   }
+}
+
+/** A flood message with an empty path: the sender was heard directly. */
+function isZeroHop(pathLen: number): boolean {
+  return (pathLen & 0xff) !== PATH_LEN_UNKNOWN && decodePathLen(pathLen).hops === 0;
+}
+
+/** Stores a zero-hop SNR on a known contact (issue #11); never moves backwards in time. */
+async function recordDirect(store: RadioStore, h: DirectHearing): Promise<void> {
+  const prev = await store.contacts.get(h.key);
+  if (!prev || (prev.directSnrAt ?? 0) > h.ts) return;
+  await store.contacts.updateLocal(h.key, { directSnr: h.snr, directSnrAt: h.ts });
 }
 
 /**

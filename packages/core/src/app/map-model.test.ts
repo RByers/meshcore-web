@@ -23,6 +23,8 @@ function view(name: string, type: number, lat: number, lon: number, lastSeen = N
     lastActivity: 0,
     unread: 0,
     path: pathDisplay(0xff),
+    directSnr: undefined,
+    directSnrAt: 0,
     lastSnr: undefined,
     favourite: false,
     onDevice: true,

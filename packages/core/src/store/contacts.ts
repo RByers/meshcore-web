@@ -143,6 +143,10 @@ function mergeContact(prev: ContactRecord | undefined, c: Contact, key: string, 
     : { ...DEFAULT_CONTACT_LOCAL };
   if (prev?.smaz !== undefined) local.smaz = prev.smaz;
   if (prev?.pathHistory !== undefined) local.pathHistory = prev.pathHistory;
+  if (prev?.directSnr !== undefined) {
+    local.directSnr = prev.directSnr;
+    if (prev.directSnrAt !== undefined) local.directSnrAt = prev.directSnrAt;
+  }
   const advertMs = c.lastAdvert * 1000;
   if (advertMs > local.lastSeen) local.lastSeen = advertMs;
   return { ...c, ...local, key, onDevice: true, updatedAt: now };

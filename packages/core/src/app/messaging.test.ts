@@ -18,7 +18,9 @@ import {
   parsePsk,
   parseReply,
   pathDisplay,
+  receivedHops,
   receivedPathLabel,
+  receivedSignal,
   replyPrefix,
   resolveChannelPsk,
   splitChannelSender,
@@ -65,7 +67,7 @@ describe('conventions (feature-inventory.md §2.4, §3.6)', () => {
     expect(pathDisplay(0)).toEqual({ kind: 'direct', hops: 0, label: 'direct' });
     expect(pathDisplay(encodePathLen(1))).toEqual({ kind: 'hops', hops: 1, label: '1 hop' });
     expect(pathDisplay(encodePathLen(3, 2))).toEqual({ kind: 'hops', hops: 3, label: '3 hops' });
-    expect(receivedPathLabel(0xff)).toBe('direct');
+    expect(receivedPathLabel(0xff)).toBe('direct route');
     expect(receivedPathLabel(encodePathLen(2))).toBe('2 hops');
   });
 });
@@ -142,5 +144,15 @@ describe('channel keys', () => {
     expect(channelNameError('x'.repeat(32))).toMatch(/31/);
     expect(channelNameError('ok')).toBeNull();
     expect(utf8Encode('x').length).toBe(1);
+  });
+});
+
+describe('receivedSignal (issue #11: SNR only for zero-hop messages)', () => {
+  it('shows SNR for zero hop, hides it (keeping the raw value) for relayed / direct-routed', () => {
+    expect(receivedSignal({ pathLen: 0, snr: 6.5 })).toEqual({ hops: 0, zeroHop: true, pathLabel: 'zero hop', snr: 6.5, lastHopSnr: 6.5 });
+    expect(receivedSignal({ pathLen: encodePathLen(2), snr: 3 })).toEqual({ hops: 2, zeroHop: false, pathLabel: '2 hops', lastHopSnr: 3 });
+    expect(receivedSignal({ pathLen: 0xff, snr: 3 })).toEqual({ hops: null, zeroHop: false, pathLabel: 'direct route', lastHopSnr: 3 });
+    expect(receivedSignal({ pathLen: 0 })).toEqual({ hops: 0, zeroHop: true, pathLabel: 'zero hop' });
+    expect(receivedHops(encodePathLen(3, 2))).toBe(3);
   });
 });

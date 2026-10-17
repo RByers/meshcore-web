@@ -39,6 +39,8 @@ function view(fill: number, name: string, type: number, over: Partial<ContactRec
     lastActivity: 0,
     unread: 0,
     path: pathDisplay(record.outPathLen),
+    directSnr: undefined,
+    directSnrAt: 0,
     lastSnr: undefined,
     favourite: false,
     onDevice: true,

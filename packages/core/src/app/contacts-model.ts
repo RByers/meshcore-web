@@ -21,6 +21,7 @@ import {
   type ContactKind,
   type PathDisplay,
   parseReply,
+  receivedHops,
 } from './messaging.js';
 
 export type ContactSort = 'recent' | 'name';
@@ -41,7 +42,14 @@ export interface ContactView {
   lastActivity: number;
   unread: number;
   path: PathDisplay;
-  /** SNR (dB) of the most recent incoming message that reported one. */
+  /**
+   * SNR (dB) of the most recent packet heard directly (zero hop) from this contact: a zero-hop
+   * advert or message (issue #11). Relayed messages do not count: their SNR is the last hop's.
+   */
+  directSnr: number | undefined;
+  /** Epoch ms {@link directSnr} was heard (0 = never). */
+  directSnrAt: number;
+  /** @deprecated alias of {@link directSnr}. */
   lastSnr: number | undefined;
   favourite: boolean;
   onDevice: boolean;
@@ -76,10 +84,16 @@ export function messagePreview(m: MessageRecord | undefined): string {
   return preview(m);
 }
 
+/** An incoming message heard zero hop, with an SNR. */
+function isDirectSnrMessage(m: MessageRecord): boolean {
+  return m.direction === 'in' && m.snr !== undefined && receivedHops(m.pathLen) === 0;
+}
+
 export class ContactsModel extends StoreBoundModel {
   readonly #contacts = signal<readonly ContactRecord[]>([]);
   readonly #last = signal<ReadonlyMap<string, MessageRecord>>(new Map());
-  readonly #lastSnr = signal<ReadonlyMap<string, number>>(new Map());
+  /** Zero-hop message SNRs found in history (fallback for contacts without `directSnr`). */
+  readonly #lastSnr = signal<ReadonlyMap<string, { snr: number; at: number }>>(new Map());
   readonly #sort = signal<ContactSort>('recent');
   readonly #filter = signal<ContactFilter>('all');
   readonly #search = signal('');
@@ -103,6 +117,11 @@ export class ContactsModel extends StoreBoundModel {
     const snr = this.#lastSnr.value;
     return this.#contacts.value.map((c): ContactView => {
       const lm = last.get(c.key);
+      const fromMsg = snr.get(c.key);
+      const direct =
+        c.directSnr !== undefined && (!fromMsg || (c.directSnrAt ?? 0) >= fromMsg.at)
+          ? { snr: c.directSnr, at: c.directSnrAt ?? 0 }
+          : fromMsg;
       return {
         key: c.key,
         record: c,
@@ -113,7 +132,9 @@ export class ContactsModel extends StoreBoundModel {
         lastActivity: lm?.receivedAt ?? 0,
         unread: c.type === ContactType.REPEATER ? 0 : c.unreadCount,
         path: pathDisplay(c.outPathLen),
-        lastSnr: snr.get(c.key),
+        directSnr: direct?.snr,
+        directSnrAt: direct?.at ?? 0,
+        lastSnr: direct?.snr,
         favourite: c.favourite || (c.flags & ContactFlag.FAVOURITE) !== 0,
         onDevice: c.onDevice,
       };
@@ -173,7 +194,7 @@ export class ContactsModel extends StoreBoundModel {
           if (prev && prev.id !== r.id && prev.receivedAt > r.receivedAt) return m;
           return new Map(m).set(r.convKey, r);
         });
-        if (r.direction === 'in' && r.snr !== undefined) this.#lastSnr.update((m) => new Map(m).set(r.convKey, r.snr!));
+        if (isDirectSnrMessage(r)) this.#lastSnr.update((m) => new Map(m).set(r.convKey, { snr: r.snr!, at: r.receivedAt }));
       }),
     ];
     return () => offs.forEach((off) => off());
@@ -183,16 +204,13 @@ export class ContactsModel extends StoreBoundModel {
     const contacts = await store.contacts.list();
     const keys = contacts.map((c) => c.key);
     const last = await store.messages.lastMessages(keys);
-    const snr = new Map<string, number>();
+    const snr = new Map<string, { snr: number; at: number }>();
     for (const c of contacts) {
+      if (c.directSnr !== undefined) continue;
       const lm = last.get(c.key);
-      if (lm?.direction === 'in' && lm.snr !== undefined) {
-        snr.set(c.key, lm.snr);
-        continue;
-      }
-      const page = await store.messages.list(c.key, { limit: 10 });
-      const m = page.items.find((x) => x.direction === 'in' && x.snr !== undefined);
-      if (m?.snr !== undefined) snr.set(c.key, m.snr);
+      let m = lm && isDirectSnrMessage(lm) ? lm : undefined;
+      if (!m) m = (await store.messages.list(c.key, { limit: 10 })).items.find(isDirectSnrMessage);
+      if (m?.snr !== undefined) snr.set(c.key, { snr: m.snr, at: m.receivedAt });
     }
     this.#contacts.value = contacts;
     this.#last.value = last;

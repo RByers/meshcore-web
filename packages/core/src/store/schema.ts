@@ -139,6 +139,13 @@ export interface ContactLocalFields {
    */
   smaz?: boolean;
   /**
+   * SNR (dB) of the last packet heard *directly* (zero hop) from this contact: a zero-hop advert
+   * or message seen by the capture pipeline. Absent until one is heard.
+   */
+  directSnr?: number;
+  /** Epoch ms when {@link directSnr} was heard. */
+  directSnrAt?: number;
+  /**
    * Paths used for (or observed towards) this contact with their delivery statistics, most
    * recently used first (issue #6, mirrors MeshCore Open's path history). Optional: absent = none.
    */

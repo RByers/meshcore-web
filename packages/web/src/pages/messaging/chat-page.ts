@@ -6,10 +6,9 @@
 import { css, html, nothing, type PropertyValues, type TemplateResult } from 'lit';
 import {
   hasLocation,
-  hopsOfPathLen,
   parseReply,
   pathDisplay,
-  receivedPathLabel,
+  receivedSignal,
   type ChatModel,
 } from '@meshcore-web/core/app';
 import type { ConversationType, MessageRecord } from '@meshcore-web/core/store';
@@ -466,11 +465,6 @@ export class McChatPage extends AppElement {
     const reply = parseReply(m.text);
     const quoted = reply ? chat.quotedMessage(m) : undefined;
     const showSender = this.convType === 'channel' && m.direction === 'in';
-    const extra: (string | TemplateResult)[] = [];
-    if (m.direction === 'in') {
-      extra.push(hopsLink(receivedPathLabel(m.pathLen), (hopsOfPathLen(m.pathLen) ?? 0) > 0 ? { kind: 'message', message: m } : null));
-      if (m.snr !== undefined) extra.push(`SNR ${formatSnr(m.snr)}`);
-    }
     return html`<li class="msg" data-id=${m.id} data-dir=${m.direction} data-status=${m.status}>
       ${showSender ? html`<span class="sender" data-field="sender">${m.senderName ?? 'unknown'}</span>` : nothing}
       <div
@@ -493,7 +487,7 @@ export class McChatPage extends AppElement {
       </div>
       <div class="meta">
         <time datetime=${new Date(m.receivedAt).toISOString()}>${formatTime(m.receivedAt)}</time>
-        ${extra.length ? html`<span data-field="route">${dotJoin(extra)}</span>` : nothing}
+        ${m.direction === 'in' ? this.#signal(m) : nothing}
         ${m.compressed ? html`<span data-field="smaz" title="Sent over the air SMAZ-compressed">SMAZ</span>` : nothing} ${this.#status(m)}
         ${chat.canReact(m)
           ? html`<button data-action="react" aria-label="React" title="React (or right-click / long-press the message)" @click=${() => this.#openReactions(m)}>☺+</button>`
@@ -511,6 +505,21 @@ export class McChatPage extends AppElement {
     return html`<a class="map-link" data-action="show-on-map" href=${hrefFor(`/map/node/${c.key}`)} title="Show on map" aria-label="Show on map"><span aria-hidden="true">🗺 Map</span></a>`;
   }
 
+  /**
+   * How an incoming message arrived (issue #11): hop count (a link to the path view, issue #2)
+   * and, only when it was heard zero hop, its SNR. The last-hop SNR stays in the tooltip.
+   */
+  #signal(m: MessageRecord) {
+    const sig = receivedSignal(m);
+    const title = sig.lastHopSnr !== undefined ? `SNR ${formatSnr(sig.lastHopSnr)}${sig.zeroHop ? '' : ' (last hop)'}` : '';
+    const path = hopsLink(sig.pathLabel, (sig.hops ?? 0) > 0 ? { kind: 'message', message: m } : null);
+    return html`<span data-field="route"
+      ><span data-field="signal" title=${title || nothing}
+        ><span data-field="path">${path}</span>${sig.snr !== undefined ? html` · <span data-field="snr">SNR ${formatSnr(sig.snr)}</span>` : nothing}</span
+      ></span
+    >`;
+  }
+
   #subtitle(chat: ChatModel) {
     if (this.convType === 'channel') {
       const ch = chat.channel.value;
@@ -522,7 +531,7 @@ export class McChatPage extends AppElement {
     if (!c) return '';
     const path = pathDisplay(c.outPathLen);
     const parts: (string | TemplateResult)[] = [hopsLink(path.label, path.kind === 'hops' ? { kind: 'contact', key: this.key } : null)];
-    if (v?.lastSnr !== undefined) parts.push(`SNR ${formatSnr(v.lastSnr)}`);
+    if (v?.directSnr !== undefined) parts.push(`direct SNR ${formatSnr(v.directSnr)}`);
     if (c.lastSeen) parts.push(`seen ${formatRelative(c.lastSeen)}`);
     return dotJoin(parts);
   }

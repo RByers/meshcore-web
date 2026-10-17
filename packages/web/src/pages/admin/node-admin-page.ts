@@ -299,7 +299,7 @@ export class McNodeAdminPage extends AppElement {
           <div class="muted">
             <span class="type-badge" data-field="type">${TYPE_LABEL[v.typeName]}</span>
             <span data-field="path">${hopsLink(v.path.label, v.path.kind === 'hops' ? { kind: 'contact', key } : null)}</span>
-            ${v.lastSnr !== undefined ? html` · SNR ${formatSnr(v.lastSnr)}` : nothing}
+            ${v.directSnr !== undefined ? html` · <span data-field="direct-signal">direct SNR ${formatSnr(v.directSnr)}</span>` : nothing}
             · last seen ${v.lastSeen ? formatRelative(v.lastSeen) : 'never'}
           </div>
           <div class="muted mono" title=${v.key}>${shortKey(v.key, 16)}</div>

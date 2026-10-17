@@ -576,3 +576,26 @@ describe('emoji reactions (MeshCore Open compatible)', () => {
     expect(chat.messages.value).toHaveLength(2);
   });
 });
+
+describe('direct signal (issue #11)', () => {
+  it('records the SNR of zero-hop adverts and messages on the contact, ignoring relayed ones', async () => {
+    const { app, s, hex, store } = await connected();
+    s.nodes.bob.advertise({ flood: false });
+    await vi.waitFor(async () => {
+      await app.connection.capture!.idle();
+      expect((await store.contacts.get(hex.bob))?.directSnr).toBe(8);
+    });
+    await app.contacts.settled();
+    const bob = app.contacts.view(hex.bob)!;
+    expect(bob.directSnr).toBe(8);
+    expect(bob.directSnrAt).toBeGreaterThan(0);
+    // the sensor is only heard through the repeater: no direct signal
+    s.nodes.sensor.advertise();
+    await new Promise((r) => setTimeout(r, 300));
+    await app.connection.capture!.idle();
+    expect((await store.contacts.get(hex.sensor))?.directSnr).toBeUndefined();
+    // a contact sync keeps the local direct-signal fields
+    await app.contacts.refresh();
+    expect((await store.contacts.get(hex.bob))?.directSnr).toBe(8);
+  });
+});
