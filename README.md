@@ -140,6 +140,13 @@ Contributions are welcome. Please:
 - run `npm run typecheck && npm test && npm run build` before opening a pull request;
 - if you find a protocol doc error, fix the doc in the same change.
 
+## Acknowledgements
+
+A big thank you to the developers of [MeshCore Open](https://github.com/zjs81/meshcore-open),
+the open-source Flutter companion app. Much of this project's feature set mirrors theirs, and
+their implementation was the reference for interoperable behaviour such as SMAZ message
+compression, reactions and path handling.
+
 ## Licence
 
 [MIT](LICENSE) © MeshCore Web contributors.
