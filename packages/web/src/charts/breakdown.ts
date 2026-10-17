@@ -3,6 +3,10 @@
  * between segments, with a legend that carries each segment's label and share. Segments keep the
  * given order; zero values are dropped; beyond 8 the remainder folds into "Other". Hovering a
  * segment shows its value, share and optional `title`.
+ *
+ * Segments with a `key` are selectable: clicking the segment or its legend entry (a real button,
+ * so keyboard users reach it) dispatches a bubbling, composed `segment-select` event
+ * ({@link SegmentSelectDetail}). Segments without a key (and the folded "Other") are plain marks.
  */
 import { css, html, nothing, type TemplateResult } from 'lit';
 import { ChartBase, chartStyles, formatNumber, formatPercent, type Describe } from './chart-base.js';
@@ -13,6 +17,15 @@ export interface BreakdownSegment {
   value: number;
   /** Extra tooltip line (e.g. packet count). */
   title?: string;
+  /** Makes the segment selectable; `segment-select` carries it. */
+  key?: string;
+  /** Highlights the segment as the active selection. */
+  selected?: boolean;
+}
+
+export interface SegmentSelectDetail {
+  key: string;
+  index: number;
 }
 
 const TRACK = 16;
@@ -49,9 +62,42 @@ export class McBreakdown extends ChartBase {
       .seg.dim {
         opacity: 0.55;
       }
+      .seg.selectable {
+        cursor: pointer;
+      }
+      .seg.selected {
+        box-shadow: inset 0 0 0 2px var(--mc-text, CanvasText);
+      }
       .legend .share {
         color: var(--mc-text, CanvasText);
         font-variant-numeric: tabular-nums;
+      }
+      .legend button {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font: inherit;
+        color: inherit;
+        background: none;
+        border: 1px solid transparent;
+        border-radius: 4px;
+        padding: 1px 4px;
+        margin: -2px -5px;
+        cursor: pointer;
+      }
+      .legend button:hover,
+      .legend li.hover button {
+        border-color: var(--mc-border, GrayText);
+        color: var(--mc-text, CanvasText);
+      }
+      .legend button[aria-pressed='true'] {
+        border-color: var(--mc-accent, Highlight);
+        color: var(--mc-text, CanvasText);
+        font-weight: 600;
+      }
+      .legend button:focus-visible {
+        outline: 2px solid var(--mc-accent, Highlight);
+        outline-offset: 1px;
       }
     `,
   ];
@@ -108,7 +154,8 @@ export class McBreakdown extends ChartBase {
       TRACK / 2,
       html`<div class="head">${s.label}</div>
         <div><strong>${formatPercent(s.value / total)}</strong> · ${this.#fmt(s.value)}</div>
-        ${s.title ? html`<div>${s.title}</div>` : nothing}`,
+        ${s.title ? html`<div>${s.title}</div>` : nothing}
+        ${s.key !== undefined ? html`<div>${s.selected ? 'Click to clear filter' : 'Click to filter'}</div>` : nothing}`,
     );
   };
 
@@ -116,6 +163,11 @@ export class McBreakdown extends ChartBase {
     this.hover = null;
     this.hideTip();
   };
+
+  #select(s: BreakdownSegment, i: number): void {
+    if (s.key === undefined) return;
+    this.dispatchEvent(new CustomEvent<SegmentSelectDetail>('segment-select', { detail: { key: s.key, index: i }, bubbles: true, composed: true }));
+  }
 
   override render(): TemplateResult {
     const segs = this.#folded();
@@ -139,22 +191,34 @@ export class McBreakdown extends ChartBase {
         >
           ${segs.map(
             (s, i) => html`<div
-              class="seg ${this.hover !== null && this.hover !== i ? 'dim' : ''}"
+              class="seg ${this.hover !== null && this.hover !== i ? 'dim' : ''} ${s.key !== undefined ? 'selectable' : ''} ${s.selected ? 'selected' : ''}"
               data-mark="segment"
               data-i=${i}
+              data-key=${s.key ?? nothing}
               style="--v:${s.value};--c:${colorOf(palette, s.label)}"
+              @click=${s.key !== undefined ? () => this.#select(s, i) : nothing}
             ></div>`,
           )}
         </div>
         ${this.renderTip()}
       </div>
       <ul class="legend" data-legend>
-        ${segs.map(
-          (s) => html`<li data-legend-key=${s.label} title=${this.describe?.(s.label) || nothing}>
-            <span class="key rect" style="--c:${colorOf(palette, s.label)}"></span><span>${s.label}</span
-            ><span class="share">${formatPercent(s.value / total)}</span>
-          </li>`,
-        )}
+        ${segs.map((s, i) => {
+          const body = html`<span class="key rect" style="--c:${colorOf(palette, s.label)}"></span><span>${s.label}</span
+            ><span class="share">${formatPercent(s.value / total)}</span>`;
+          return html`<li data-legend-key=${s.label} class=${this.hover === i ? 'hover' : ''} title=${this.describe?.(s.label) || nothing}>
+            ${s.key !== undefined
+              ? html`<button
+                  type="button"
+                  data-key=${s.key}
+                  aria-pressed=${s.selected ? 'true' : 'false'}
+                  @click=${() => this.#select(s, i)}
+                >
+                  ${body}
+                </button>`
+              : body}
+          </li>`;
+        })}
       </ul>
     </div>`;
   }

@@ -175,6 +175,51 @@ export interface HopCount {
 
 export type BinSetting = number | 'auto';
 
+/** A packet field the stats can be drilled down by (docs/packet-stats.md §6). */
+export type StatsFilterField = 'source' | 'type' | 'route' | 'direction' | 'category' | 'channel' | 'hops';
+
+/**
+ * One drill-down filter. `value` is the key the aggregations produce for the field: source →
+ * `nodeId(source)` ('' = unattributed), type → typeName, route → routeName ('unknown' when
+ * not known), direction → 'in' / 'out', category, channel → channel name (channel packets only),
+ * hops → `String(hops)`. `label` is the caller's display text (chips).
+ */
+export interface StatsFilter {
+  field: StatsFilterField;
+  value: string;
+  label: string;
+}
+
+/** The packet's key for a filter field; null when the packet has none (never matches). */
+export function filterKey(p: StatPacket, field: StatsFilterField): string | null {
+  switch (field) {
+    case 'source':
+      return p.source ? nodeId(p.source) : '';
+    case 'type':
+      return p.typeName;
+    case 'route':
+      return p.routeName || 'unknown';
+    case 'direction':
+      return p.direction;
+    case 'category':
+      return p.category;
+    case 'channel':
+      return p.category === 'channel' ? p.channel : null;
+    case 'hops':
+      return p.hops === null ? null : String(p.hops);
+  }
+}
+
+export function matchesFilter(p: StatPacket, f: StatsFilter): boolean {
+  return filterKey(p, f.field) === f.value;
+}
+
+/** The points matching every filter (AND); the same array when there are none. */
+export function filterPoints(points: readonly StatPacket[], filters: readonly StatsFilter[]): readonly StatPacket[] {
+  if (filters.length === 0) return points;
+  return points.filter((p) => filters.every((f) => matchesFilter(p, f)));
+}
+
 /** One distinct path a contact's packets arrived over. */
 export interface ContactPathStats {
   /** '' = direct. */
@@ -600,6 +645,7 @@ export class PacketStatsModel extends StoreBoundModel {
   readonly #deps: PacketStatsDeps;
   readonly #range = signal<StatsRange>({ from: null, to: null });
   readonly #bin = signal<BinSetting>('auto');
+  readonly #filters = signal<readonly StatsFilter[]>([]);
   readonly #raw = signal<readonly RawPoint[]>([]);
   readonly #bounds = signal<{ first: number; last: number } | null>(null);
   #rawIds = new Set<number>();
@@ -624,9 +670,18 @@ export class PacketStatsModel extends StoreBoundModel {
   readonly bounds: ReadonlySignal<{ first: number; last: number } | null> = this.#bounds.readonly;
   /** The radio's LoRa parameters used for airtime (from SELF_INFO), null when unknown. */
   readonly radio: ReadonlySignal<LoraParams | null>;
-  /** One point per logged packet in the range, ascending ts. */
+  /** Drill-down filters (AND, at most one per field); in memory only, kept across range changes. */
+  readonly filters: ReadonlySignal<readonly StatsFilter[]> = this.#filters.readonly;
+  /** One point per logged packet in the range, ascending ts, ignoring the filters. */
+  readonly allPoints: ReadonlySignal<readonly StatPacket[]>;
+  /** `allPoints` matching the filters: what every aggregation below counts. */
   readonly points: ReadonlySignal<readonly StatPacket[]>;
-  /** The time window the aggregations cover: the range, with open ends taken from the points; null when empty. */
+  /** `allPoints.length` ("showing X of Y"). */
+  readonly unfilteredCount: ReadonlySignal<number>;
+  /**
+   * The time window the aggregations cover: the range, with open ends taken from `allPoints`
+   * (not the filtered points, so axes stay put while drilling down); null when empty.
+   */
   readonly window: ReadonlySignal<{ from: number; to: number } | null>;
   readonly summary: ReadonlySignal<StatsSummary>;
   readonly bySource: ReadonlySignal<SourceStats>;
@@ -644,7 +699,7 @@ export class PacketStatsModel extends StoreBoundModel {
     // per-record cache, valid for one (resolver, channels, radio) snapshot
     let cache = new Map<number, StatPacket>();
     let cacheFor: readonly unknown[] = [];
-    this.points = computed(() => {
+    this.allPoints = computed(() => {
       const R = resolver.value;
       const chs = channels.value;
       const radio = this.radio.value;
@@ -662,10 +717,12 @@ export class PacketStatsModel extends StoreBoundModel {
       cache = next;
       return out;
     });
+    this.points = computed(() => filterPoints(this.allPoints.value, this.#filters.value));
+    this.unfilteredCount = computed(() => this.allPoints.value.length);
 
     this.window = computed(() => {
       const r = this.#range.value;
-      const pts = this.points.value;
+      const pts = this.allPoints.value;
       const from = r.from ?? pts[0]?.ts ?? r.to;
       const to = r.to ?? pts[pts.length - 1]?.ts ?? r.from;
       if (from === null || from === undefined || to === null || to === undefined) return null;
@@ -760,7 +817,7 @@ export class PacketStatsModel extends StoreBoundModel {
     this.hops = computed(() => hopCounts(this.points.value));
   }
 
-  /** Statistics of one contact (public key hex), from `points`; cached per key. */
+  /** Statistics of one contact (public key hex), from `allPoints` (the filters don't apply); cached per key. */
   forContact(key: string): ReadonlySignal<ContactStats> {
     const k = key.toLowerCase();
     let s = this.#contactStats.get(k);
@@ -774,7 +831,7 @@ export class PacketStatsModel extends StoreBoundModel {
   #contactStatsOf(key: string): ContactStats {
     const from: StatPacket[] = [];
     const via: StatPacket[] = [];
-    for (const p of this.points.value) {
+    for (const p of this.allPoints.value) {
       if (p.source?.key === key) from.push(p);
       else if (p.path.some((n) => n.key === key)) via.push(p);
     }
@@ -813,6 +870,23 @@ export class PacketStatsModel extends StoreBoundModel {
     if (cur.from === from && cur.to === to) return this.settled();
     this.#range.value = { from, to };
     return this.reload();
+  }
+
+  /** Adds a drill-down filter, replacing any existing one on the same field. */
+  addFilter(f: StatsFilter): void {
+    const cur = this.#filters.peek();
+    const i = cur.findIndex((x) => x.field === f.field);
+    const next = { field: f.field, value: f.value, label: f.label };
+    this.#filters.value = i < 0 ? [...cur, next] : cur.map((x, j) => (j === i ? next : x));
+  }
+
+  removeFilter(field: StatsFilterField): void {
+    const cur = this.#filters.peek();
+    if (cur.some((x) => x.field === field)) this.#filters.value = cur.filter((x) => x.field !== field);
+  }
+
+  clearFilters(): void {
+    if (this.#filters.peek().length) this.#filters.value = [];
   }
 
   /** Timeline bin size in ms, or 'auto' (60–150 bins on round steps). */

@@ -112,7 +112,7 @@ MeshCore uses a non-default value, cite the file in a comment) and the current r
 computed by hand for a couple of (SF, BW, CR, length) combinations, with the formula cited.
 `airtimeMs` is `null` when no radio params are known.
 
-### 1.6 Aggregations (all `computed` from `points`)
+### 1.6 Aggregations (all `computed` from `points`, i.e. after the §6 filters)
 
 ```ts
 summary: { packets, bytes, airtimeMs, airtimeFraction /* airtime / range span, null if unknown */, sources /* unique resolved + unresolved labels */, spanMs }
@@ -167,10 +167,10 @@ series; text is never coloured by series; thin marks; `tabular-nums` for ticks.
 Elements (all `data-chart="…"` for tests, all accept plain arrays so they can be unit-tested
 without the app):
 
-- `<mc-bar-chart>` horizontal bars: `items: { label, value, href?, title? }[]`; label column is a link when `href` is set; value label at the bar end; sorted as given.
+- `<mc-bar-chart>` horizontal bars: `items: { label, value, href?, title?, key?, selected? }[]`; label column is a link when `href` is set; value label at the bar end; sorted as given; keyed rows dispatch `bar-select` (§3 drill-down).
 - `<mc-dot-plot>` `points: { x: number, y: number | null, size: number, color: string /* series key */, id }[]`, `xDomain`, `yLabel`, `yFormat`; dot radius ∝ `sqrt(size)` (area ∝ bytes, 2–9 px); nulls in `y` dropped with a count shown ("n packets without SNR"); click → `dot-select` event with the id; legend with series → colour (≤ 8 + Other).
 - `<mc-line-chart>` `series: { key, points: { t, v }[] }[]`, `xDomain`, `stacked?: boolean`; crosshair tooltip listing all series at the hovered bin; legend.
-- `<mc-breakdown>` a single horizontal 100 % stacked bar per dimension: `segments: { label, value }[]` with a legend / inline labels; 2 px gaps between segments.
+- `<mc-breakdown>` a single horizontal 100 % stacked bar per dimension: `segments: { label, value, title?, key?, selected? }[]` with a legend / inline labels; 2 px gaps between segments; keyed segments dispatch `segment-select`.
 - `<mc-stat-tile>` label + big value + optional sub-text.
 
 Browser tests (`packages/web/test/charts.test.ts`): each element renders the expected number of
@@ -202,11 +202,22 @@ filters of the list tabs are not shown; the inspector split is hidden). Layout, 
    and say so.
 6. **Hop count** distribution (`mc-bar-chart`, vertical-ish is fine as horizontal rows 0,1,2…).
 
+**Drill-down** (model side in §6): clicking a source bar, a hop-count bar, or a breakdown segment /
+legend entry (type, route, direction, category, channel) adds a filter for that value; clicking the
+active value again removes it. On source bars the *bar* filters and the *label* stays the contact
+link. Charts opt in per item with a `key` (`<mc-bar-chart>` dispatches `bar-select`, keyed rows
+are `role=button` hit rects with Enter / Space; `<mc-breakdown>` dispatches `segment-select` from
+segments and from legend `<button>`s), with `selected` marking the active value; items without a
+key (e.g. the contact Stats tab) stay plain. While filters are active a sticky filter bar sits
+under the range: a chip per filter ("Source: Alice ×"), "Showing X of Y packets" and a *Clear
+filters* button. Filters matching nothing → "No packets match these filters." with the bar kept.
+
 Everything renders from the model's signals (read in `render()` → auto re-render). Empty log →
 one empty-state line. Browser tests (`packages/web/test/packet-stats.test.ts`, harness +
 emulator scenario that produces packets): the tab appears and renders tiles and the four chart
 elements; the source chart has links to `/contact/…`; the y/colour selectors change the dot plot's
-axis label / legend; a date preset shrinks the packet count tile.
+axis label / legend; a date preset shrinks the packet count tile; source-bar / segment / keyboard
+filtering, chip removal, *Clear filters* and the no-match state.
 
 ## 4. Docs
 
@@ -229,7 +240,7 @@ pathKey: string            // hop hashes joined with '>' ('' = direct) — ident
 and the model exposes
 
 ```ts
-forContact(key: string): ReadonlySignal<ContactStats>   // cached per key, computed from `points`
+forContact(key: string): ReadonlySignal<ContactStats>   // cached per key, computed from `allPoints` (§6 filters don't apply)
 interface ContactStats {
   from: readonly StatPacket[];     // source.key === key
   via: readonly StatPacket[];      // path contains the contact (it forwarded the packet) and source is not the contact
@@ -249,3 +260,30 @@ only for the contact's current out_path row, otherwise plain text); *Signal over
 Other), dot size = bytes); *Hop count* distribution. Browser test in
 `packages/web/test/contact-stats.test.ts`: the tab appears, the paths chart lists the direct row
 and a repeated path from the emulator scenario, the timeline renders.
+
+## 6. Drill-down filters
+
+Clicking a bar on the packets Stats tab narrows every statistic to the matching packets. The model
+holds the filters (in memory only, not persisted; they survive range changes):
+
+```ts
+type StatsFilterField = 'source' | 'type' | 'route' | 'direction' | 'category' | 'channel' | 'hops';
+interface StatsFilter { field: StatsFilterField; value: string; label: string /* chip text, from the caller */ }
+filters: ReadonlySignal<readonly StatsFilter[]>
+addFilter(f) / removeFilter(field) / clearFilters()
+allPoints: ReadonlySignal<readonly StatPacket[]>   // range only
+points: ReadonlySignal<readonly StatPacket[]>      // allPoints matching every filter
+unfilteredCount: ReadonlySignal<number>           // allPoints.length ("showing X of Y")
+matchesFilter(p, f) / filterKey(p, field) / filterPoints(points, filters)   // pure helpers
+```
+
+- `value` is the key the aggregations already produce: source → `nodeId(source)` (`''` =
+  unattributed), type → `typeName`, route → `routeName || 'unknown'`, direction → `'in'`/`'out'`,
+  category, channel → the channel name (channel packets only), hops → `String(hops)` (packets with
+  unknown hops never match).
+- Filters AND together; at most one per field — adding one on a field that already has one
+  replaces it.
+- `summary`, `bySource`, `timeline`, `utilization` and `hops` count the filtered `points`.
+  `window` (and so the bins and `summary.spanMs`) comes from the range and `allPoints`, so axes
+  don't move while drilling down.
+- `forContact()` reads `allPoints`: the packets page's filters don't leak into the contact page.

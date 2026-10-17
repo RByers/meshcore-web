@@ -31,8 +31,10 @@ import {
   SERIES_REQUESTS,
   SERIES_UNKNOWN_CHANNELS,
   autoBinMs,
+  matchesFilter,
   nodeId,
   type StatPacket,
+  type StatsFilter,
 } from './packet-stats-model.js';
 import type { SummaryContext } from './packet-summary.js';
 import { signal } from './signal.js';
@@ -444,6 +446,115 @@ describe('PacketStatsModel — per contact (§5)', () => {
     expect(hill.from.map((x) => x.ts)).toEqual([T + 5000]);
     expect(hill.via.map((x) => x.ts)).toEqual([T + 1000, T + 2000, T + 3000, T + 4000]);
     expect(hill.paths).toEqual([expect.objectContaining({ pathKey: '', count: 1, share: 1 })]);
+  });
+});
+
+describe('PacketStatsModel — drill-down filters (§6)', () => {
+  async function filtered(): Promise<Harness> {
+    return harness([
+      rx(datagram(PayloadType.TXT_MSG, 0xa1, 0x01, [0x7e]), T),
+      rx(datagram(PayloadType.TXT_MSG, 0xa1, 0x01), T + 10_000),
+      rx(await grpTxt(PSK, 'Carol', 'hi', [0x7e, 0x22]), T + 20_000),
+      rx(ack(), T + 30_000),
+      { direction: 'tx', bytes: new Uint8Array(0), format: 'none', source: 'sent', payloadType: PayloadType.GRP_TXT, routeType: RouteType.FLOOD, pathLen: 0, ts: T + 40_000 },
+    ]);
+  }
+  const f = (field: StatsFilter['field'], value: string): StatsFilter => ({ field, value, label: value });
+  const tss = (pts: readonly StatPacket[]): number[] => pts.map((p) => p.ts - T);
+
+  it('matchesFilter keys each field like the aggregations do', async () => {
+    const { model } = await filtered();
+    const pts = model.allPoints.value;
+    const alice = byTs(pts, T);
+    const chan = byTs(pts, T + 20_000);
+    const ackP = byTs(pts, T + 30_000);
+    expect(matchesFilter(alice, f('source', ALICE.key))).toBe(true);
+    expect(matchesFilter(ackP, f('source', ''))).toBe(true);
+    expect(matchesFilter(alice, f('source', ''))).toBe(false);
+    expect(matchesFilter(alice, f('type', 'TXT_MSG'))).toBe(true);
+    expect(matchesFilter(alice, f('route', 'FLOOD'))).toBe(true);
+    expect(matchesFilter(alice, f('direction', 'in'))).toBe(true);
+    expect(matchesFilter(alice, f('category', 'dm'))).toBe(true);
+    expect(matchesFilter(chan, f('channel', 'Test'))).toBe(true);
+    expect(matchesFilter(alice, f('channel', 'Test'))).toBe(false);
+    expect(matchesFilter(alice, f('hops', '1'))).toBe(true);
+    expect(matchesFilter(chan, f('hops', '1'))).toBe(false);
+  });
+
+  it('narrows every aggregation, keeps the window, and leaves forContact alone', async () => {
+    const { model } = await filtered();
+    const window = model.window.value;
+    const binMs = model.timeline.value.binMs;
+    const aliceBefore = model.forContact(ALICE.key).value;
+
+    model.addFilter({ field: 'source', value: ALICE.key, label: 'Alice' });
+    expect(model.filters.value).toEqual([{ field: 'source', value: ALICE.key, label: 'Alice' }]);
+    expect(tss(model.points.value)).toEqual([0, 10_000]);
+    expect(model.unfilteredCount.value).toBe(5);
+    const air = model.points.value.reduce((n, p) => n + (p.airtimeMs ?? 0), 0);
+    expect(model.summary.value).toMatchObject({ packets: 2, sources: 1, spanMs: 40_000 });
+    expect(model.summary.value.airtimeMs).toBeCloseTo(air, 9);
+    expect(model.bySource.value.top.map((x) => [x.node.label, x.count])).toEqual([['Alice', 2]]);
+    expect(model.bySource.value.unattributed).toBe(0);
+    expect(model.hops.value).toEqual([{ hops: 0, count: 1 }, { hops: 1, count: 1 }]);
+    expect(model.utilization.value.byType.map((b) => [b.name, b.count])).toEqual([['TXT_MSG', 2]]);
+    expect(model.utilization.value.overTime.reduce((n, o) => n + o.airtimeMs, 0)).toBeCloseTo(air, 9);
+    const total = (k: string): number => model.timeline.value.bins.reduce((n, b) => n + (b.series[k] ?? 0), 0);
+    expect(total(SERIES_DMS)).toBe(2);
+    expect(total('Test')).toBe(0);
+    // axes don't move
+    expect(model.window.value).toEqual(window);
+    expect(model.timeline.value.binMs).toBe(binMs);
+    // the contact page ignores the packets page's filters
+    model.addFilter(f('type', 'ACK'));
+    expect(model.points.value).toEqual([]);
+    expect(model.forContact(ALICE.key).value.from).toEqual(aliceBefore.from);
+    expect(model.forContact(ALICE.key).value.from).toHaveLength(2);
+  });
+
+  it('filters by channel, direction, category and hops; unknown hops never match', async () => {
+    const { model } = await filtered();
+    model.addFilter(f('channel', 'Test'));
+    expect(tss(model.points.value)).toEqual([20_000]);
+    expect(model.utilization.value.byChannel.map((b) => [b.name, b.count])).toEqual([['Test', 1]]);
+    model.clearFilters();
+    model.addFilter(f('direction', 'out'));
+    expect(tss(model.points.value)).toEqual([40_000]);
+    expect(model.bySource.value.top.map((x) => x.node.label)).toEqual(['Me']);
+    model.clearFilters();
+    model.addFilter(f('category', 'channel'));
+    expect(tss(model.points.value)).toEqual([20_000, 40_000]);
+    model.clearFilters();
+    model.addFilter(f('hops', '2'));
+    expect(tss(model.points.value)).toEqual([20_000]);
+    expect(model.hops.value).toEqual([{ hops: 2, count: 1 }]);
+  });
+
+  it('ANDs fields, replaces a field, removes and clears; survives range changes', async () => {
+    const { model } = await filtered();
+    model.addFilter(f('route', 'FLOOD'));
+    model.addFilter(f('hops', '0'));
+    expect(tss(model.points.value)).toEqual([10_000, 30_000, 40_000]);
+    model.addFilter(f('type', 'TXT_MSG'));
+    expect(tss(model.points.value)).toEqual([10_000]);
+    // same field: replaces, keeps its position
+    model.addFilter(f('type', 'ACK'));
+    expect(model.filters.value.map((x) => [x.field, x.value])).toEqual([['route', 'FLOOD'], ['hops', '0'], ['type', 'ACK']]);
+    expect(tss(model.points.value)).toEqual([30_000]);
+    model.removeFilter('type');
+    expect(model.filters.value.map((x) => x.field)).toEqual(['route', 'hops']);
+    expect(tss(model.points.value)).toEqual([10_000, 30_000, 40_000]);
+    model.removeFilter('channel'); // absent: no-op
+    expect(model.filters.value).toHaveLength(2);
+
+    await model.setRange({ from: T + 20_000, to: null });
+    expect(model.filters.value).toHaveLength(2);
+    expect(tss(model.points.value)).toEqual([30_000, 40_000]);
+    expect(model.unfilteredCount.value).toBe(3);
+
+    model.clearFilters();
+    expect(model.filters.value).toEqual([]);
+    expect(model.points.value).toEqual(model.allPoints.value);
   });
 });
 

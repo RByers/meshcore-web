@@ -154,3 +154,97 @@ describe('packet rate series', () => {
     expect(s.map((x) => x.key)).toEqual(['DMs', 'ACKs']);
   });
 });
+
+describe('/packets Stats drill-down filters', () => {
+  /** The keyed bar (role=button hit rect) whose accessible name starts with `label`. */
+  function bar(el: McPacketStats, section: string, label: string): Element {
+    const hit = inChart(el, section, 'mc-bar-chart', 'rect[role="button"]').find((r) => r.getAttribute('aria-label')!.startsWith(`${label}:`));
+    if (!hit) throw new Error(`no ${label} bar in ${section}`);
+    return hit;
+  }
+
+  function chips(t: Harness): string[] {
+    return t.queryAll('[data-chip]').map((c) => c.textContent!.replace('×', '').replace(/\s+/g, ' ').trim());
+  }
+
+  it('clicking a source bar filters every chart to that source; chips remove it, Clear filters clears all', async () => {
+    const { t, el } = await openStats();
+    expect(t.query('[data-filterbar]')).toBeNull();
+
+    bar(el, 'sources', 'Alice').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await t.until(() => t.query('[data-filterbar]'), 3000, 'filter bar');
+    await settle(t, el);
+    expect(t.app.packetStats.filters.value.map((f) => f.field)).toEqual(['source']);
+    expect(chips(t)).toEqual(['Source: Alice']);
+    // live traffic may still be landing: compare with the model's current counts, not the snapshot
+    const stats = t.app.packetStats;
+    await t.until(() => Number(tileValue(t, 'packets')) === stats.summary.value.packets, 3000, 'filtered tile');
+    const filtered = Number(tileValue(t, 'packets'));
+    expect(filtered).toBeGreaterThan(0);
+    expect(filtered).toBeLessThan(stats.unfilteredCount.value);
+    expect(stats.points.value.every((p) => p.source?.label === 'Alice')).toBe(true);
+    await settle(t, el);
+    expect(t.query('[data-field="filter-count"]')!.textContent).toBe(`Showing ${stats.summary.value.packets} of ${stats.unfilteredCount.value} packets`);
+    // the sources chart now shows only Alice, marked as the active filter
+    const hits = inChart(el, 'sources', 'mc-bar-chart', 'rect[role="button"]');
+    expect(hits).toHaveLength(1);
+    expect(hits[0]!.getAttribute('aria-pressed')).toBe('true');
+
+    // a breakdown segment adds a second filter (AND)
+    const typeChart = el.shadowRoot!.querySelector('mc-breakdown[data-breakdown="type"]')!;
+    typeChart.shadowRoot!.querySelector<HTMLElement>('[data-mark="segment"][data-key="ADVERT"]')!.click();
+    await settle(t, el);
+    expect(chips(t)).toEqual(['Source: Alice', 'Packet type: ADVERT']);
+
+    // × on the source chip leaves the type filter
+    await t.click('[data-remove-filter="source"]');
+    await settle(t, el);
+    expect(chips(t)).toEqual(['Packet type: ADVERT']);
+    expect(Number(tileValue(t, 'packets'))).toBe(t.app.packetStats.summary.value.packets);
+
+    await t.click('[data-action="clear-filters"]');
+    await settle(t, el);
+    expect(t.app.packetStats.filters.value).toEqual([]);
+    expect(t.query('[data-filterbar]')).toBeNull();
+    expect(Number(tileValue(t, 'packets'))).toBe(t.app.packetStats.unfilteredCount.value);
+  });
+
+  it('breakdown legend buttons are focusable and toggle the filter; direction chips say Received', async () => {
+    const { t, el } = await openStats();
+    const dir = el.shadowRoot!.querySelector('mc-breakdown[data-breakdown="direction"]')!;
+    const btn = (): HTMLButtonElement => dir.shadowRoot!.querySelector<HTMLButtonElement>('[data-legend] button[data-key="in"]')!;
+    btn().focus();
+    expect(dir.shadowRoot!.activeElement).toBe(btn());
+    btn().click();
+    await settle(t, el);
+    expect(chips(t)).toEqual(['Direction: Received']);
+    expect(btn().getAttribute('aria-pressed')).toBe('true');
+    // clicking the active value again removes the filter
+    btn().click();
+    await settle(t, el);
+    expect(t.query('[data-filterbar]')).toBeNull();
+  });
+
+  it('a hop-count bar filters from the keyboard', async () => {
+    const { t, el } = await openStats();
+    const hit = inChart(el, 'hops', 'mc-bar-chart', 'rect[role="button"]')[0]!;
+    const key = hit.getAttribute('data-key')!;
+    hit.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await settle(t, el);
+    expect(t.app.packetStats.filters.value).toEqual([expect.objectContaining({ field: 'hops', value: key })]);
+    expect(chips(t)[0]).toMatch(/^Hops: /);
+  });
+
+  it('shows an empty state but keeps the filter bar when nothing matches', async () => {
+    const { t, el } = await openStats();
+    t.app.packetStats.addFilter({ field: 'hops', value: '99', label: '99' });
+    await settle(t, el);
+    expect(t.query('[data-empty="filtered"]')!.textContent).toContain('No packets match these filters');
+    expect(t.query('[data-filterbar]')).not.toBeNull();
+    expect(t.query('[data-tiles]')).toBeNull();
+    await t.click('[data-action="clear-filters"]');
+    await settle(t, el);
+    expect(t.query('[data-empty="filtered"]')).toBeNull();
+    expect(t.query('[data-tiles]')).not.toBeNull();
+  });
+});

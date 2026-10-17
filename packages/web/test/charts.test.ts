@@ -6,7 +6,9 @@ import {
   legendFor,
   OTHER_COLOR,
   seriesColor,
+  type BarSelectDetail,
   type DotPoint,
+  type SegmentSelectDetail,
   type DotSelectDetail,
   type McBarChart,
   type McBreakdown,
@@ -109,6 +111,47 @@ describe('mc-bar-chart', () => {
     box.append(el);
     await el.updateComplete;
     expect(q(el, '[data-empty]')).not.toBeNull();
+  });
+
+  it('keyed rows dispatch bar-select on click and Enter / Space; the label link still navigates', async () => {
+    const el = await mount('mc-bar-chart', {
+      items: [
+        { label: 'Alice', value: 12, href: '#/contact/aa', key: 'aa' },
+        { label: 'Bob', value: 5, key: 'bb', selected: true },
+      ],
+    } satisfies Partial<McBarChart>);
+    const seen: BarSelectDetail[] = [];
+    // listening on the box: the event bubbles out of the shadow root
+    el.parentElement!.addEventListener('bar-select', (e) => seen.push((e as CustomEvent<BarSelectDetail>).detail));
+    const hits = qa(el, 'rect.hit[role="button"]') as SVGRectElement[];
+    expect(hits).toHaveLength(2);
+    expect(hits[1]!.getAttribute('aria-pressed')).toBe('true');
+    hits[0]!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(seen).toEqual([{ key: 'aa', index: 0 }]);
+    // keyboard: bars are focusable buttons
+    hits[1]!.focus();
+    expect(el.shadowRoot!.activeElement).toBe(hits[1]);
+    hits[1]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    hits[1]!.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+    hits[1]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true }));
+    expect(seen.map((d) => d.key)).toEqual(['aa', 'bb', 'bb']);
+    // the non-link label selects too; the link label is untouched
+    (qa(el, '[data-label] span')[0] as HTMLElement).click();
+    expect(seen.at(-1)).toEqual({ key: 'bb', index: 1 });
+    expect((qa(el, '[data-label] a')[0] as HTMLAnchorElement).getAttribute('href')).toBe('#/contact/aa');
+  });
+
+  it('rows without keys are not selectable', async () => {
+    const el = await mount('mc-bar-chart', { items: [{ label: 'a', value: 1 }] } satisfies Partial<McBarChart>);
+    const seen: Event[] = [];
+    el.addEventListener('bar-select', (e) => seen.push(e));
+    const hit = q<SVGRectElement>(el, 'rect.hit')!;
+    expect(hit.getAttribute('role')).toBeNull();
+    expect(hit.getAttribute('tabindex')).toBeNull();
+    expect(q(el, 'svg')!.getAttribute('role')).toBe('img');
+    hit.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    (qa(el, '[data-label] span')[0] as HTMLElement).click();
+    expect(seen).toHaveLength(0);
   });
 });
 
@@ -223,6 +266,28 @@ describe('mc-breakdown', () => {
     } satisfies Partial<McBreakdown>);
     expect(qa(el, '[data-mark="segment"]')).toHaveLength(9);
     expect(qa(el, '[data-legend-key]').at(-1)!.getAttribute('data-legend-key')).toBe('Other');
+  });
+
+  it('keyed segments and their legend buttons dispatch segment-select; unkeyed ones do not', async () => {
+    const el = await mount('mc-breakdown', {
+      segments: [
+        { label: 'Received', value: 30, key: 'in' },
+        { label: 'Sent', value: 10, key: 'out', selected: true },
+        { label: 'plain', value: 5 },
+      ],
+    } satisfies Partial<McBreakdown>);
+    const seen: SegmentSelectDetail[] = [];
+    el.parentElement!.addEventListener('segment-select', (e) => seen.push((e as CustomEvent<SegmentSelectDetail>).detail));
+    const segs = qa(el, '[data-mark="segment"]') as HTMLElement[];
+    segs[0]!.click();
+    segs[2]!.click();
+    expect(seen).toEqual([{ key: 'in', index: 0 }]);
+    const buttons = qa(el, '[data-legend] button') as HTMLButtonElement[];
+    expect(buttons.map((b) => b.dataset['key'])).toEqual(['in', 'out']);
+    expect(buttons[1]!.getAttribute('aria-pressed')).toBe('true');
+    buttons[1]!.click();
+    expect(seen.at(-1)).toEqual({ key: 'out', index: 1 });
+    expect(q(el, '[data-legend-key="plain"] button')).toBeNull();
   });
 });
 

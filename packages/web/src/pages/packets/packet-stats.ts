@@ -4,9 +4,25 @@
  * over time (dot plot with y / colour selectors), packet rate, network utilisation and the hop
  * count distribution. The date range and bin size live in the model (`<mc-stats-range>`); only
  * the chart selectors are local state. Everything here maps model output to chart props.
+ *
+ * Drill-down (§6): clicking a source bar, hop-count bar or breakdown segment adds a model filter
+ * for that value (clicking the active one again removes it); a sticky filter bar under the range
+ * shows the filters as removable chips with "Clear filters" and the filtered / total count.
  */
 import { css, html, nothing, type TemplateResult } from 'lit';
-import { formatDistance, nodeId, type Breakdown, type HopCount, type LoraParams, type NodeRef, type SourceStats, type StatPacket, type Timeline } from '@meshcore-web/core/app';
+import {
+  formatDistance,
+  nodeId,
+  type Breakdown,
+  type HopCount,
+  type LoraParams,
+  type NodeRef,
+  type SourceStats,
+  type StatPacket,
+  type StatsFilter,
+  type StatsFilterField,
+  type Timeline,
+} from '@meshcore-web/core/app';
 import { packetTypeNameDescription } from '@meshcore-web/core/packet';
 import { AppElement } from '../../app-context.js';
 import { hrefFor } from '../../router.js';
@@ -21,7 +37,9 @@ import {
   MAX_SERIES,
   OTHER_KEY,
   type BarItem,
+  type BarSelectDetail,
   type BreakdownSegment,
+  type SegmentSelectDetail,
   type DotPoint,
   type DotSelectDetail,
   type LineSeries,
@@ -121,14 +139,22 @@ export function dotPoints(points: readonly StatPacket[], y: YField, by: ColorFie
   });
 }
 
-/** Source bar items: a contact link only for nodes resolved to a contact (not this radio). */
-export function sourceItems(s: SourceStats): BarItem[] {
-  return s.top.map(({ node, count, bytes }) => ({
-    label: node.label,
-    value: count,
-    ...(node.resolved && node.key && !node.self ? { href: hrefFor(`/contact/${node.key}`) } : {}),
-    title: `${formatNumber(bytes, 0)} B${node.resolved ? '' : ' (not uniquely resolved)'}`,
-  }));
+/**
+ * Source bar items: a contact link only for nodes resolved to a contact (not this radio); every
+ * bar is a source filter keyed by `nodeId`, `selected` when it is the active one.
+ */
+export function sourceItems(s: SourceStats, active?: string): BarItem[] {
+  return s.top.map(({ node, count, bytes }) => {
+    const key = nodeId(node);
+    return {
+      label: node.label,
+      value: count,
+      key,
+      selected: key === active,
+      ...(node.resolved && node.key && !node.self ? { href: hrefFor(`/contact/${node.key}`) } : {}),
+      title: `${formatNumber(bytes, 0)} B${node.resolved ? '' : ' (not uniquely resolved)'}`,
+    };
+  });
 }
 
 /** "n packets could not be attributed, m more nodes" (empty when both are 0). */
@@ -158,18 +184,43 @@ export function timelinePalette(series: readonly LineSeries[]): SeriesPalette {
   return assignSlots(series.map((s) => s.key));
 }
 
-/** Breakdown segments: airtime share, or bytes when airtime is unknown. */
-export function breakdownSegments(rows: readonly Breakdown[], airtime: boolean, label: (name: string) => string = (n) => n): BreakdownSegment[] {
+/**
+ * Breakdown segments: airtime share, or bytes when airtime is unknown. Keyed by the row name (the
+ * filter value) when `keyed`; `active` marks the selected one.
+ */
+export function breakdownSegments(
+  rows: readonly Breakdown[],
+  airtime: boolean,
+  label: (name: string) => string = (n) => n,
+  opts: { keyed?: boolean; active?: string | undefined } = {},
+): BreakdownSegment[] {
   return rows.map((r) => ({
     label: label(r.name),
     value: airtime ? r.airtimeMs : r.bytes,
     title: `${formatNumber(r.count, 0)} ${r.count === 1 ? 'packet' : 'packets'}, ${formatBytes(r.bytes)}`,
+    ...(opts.keyed ? { key: r.name, selected: r.name === opts.active } : {}),
   }));
 }
 
-export function hopItems(hops: readonly HopCount[]): BarItem[] {
-  return hops.map((h) => ({ label: h.hops === 0 ? '0 (direct)' : String(h.hops), value: h.count }));
+function hopLabel(hops: number): string {
+  return hops === 0 ? '0 (direct)' : String(hops);
 }
+
+/** Hop count bars, keyed by `String(hops)` (the hops filter value). */
+export function hopItems(hops: readonly HopCount[], active?: string): BarItem[] {
+  return hops.map((h) => ({ label: hopLabel(h.hops), value: h.count, key: String(h.hops), selected: String(h.hops) === active }));
+}
+
+/** Chip prefix per filter field. */
+export const FILTER_FIELD_LABEL: Readonly<Record<StatsFilterField, string>> = {
+  source: 'Source',
+  type: 'Packet type',
+  route: 'Route type',
+  direction: 'Direction',
+  category: 'Category',
+  channel: 'Channel',
+  hops: 'Hops',
+};
 
 export function formatBytes(b: number): string {
   return `${formatNumber(b)} B`;
@@ -244,6 +295,58 @@ export class McPacketStats extends AppElement {
       mc-bar-chart.sources {
         --mc-bar-label-width: 40%;
       }
+      .filterbar {
+        position: sticky;
+        top: 64px;
+        z-index: 1;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        border: 1px solid var(--mc-accent);
+        border-radius: var(--mc-radius);
+        background: var(--mc-accent-soft);
+        box-shadow: 0 2px 8px rgb(0 0 0 / 0.12);
+        font-size: 14px;
+      }
+      .filterbar .title {
+        font-weight: 600;
+      }
+      .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 4px 2px 10px;
+        border-radius: 999px;
+        background: var(--mc-surface);
+        border: 1px solid var(--mc-accent);
+      }
+      .chip button {
+        min-height: 0;
+        padding: 0 6px;
+        border: 0;
+        border-radius: 999px;
+        background: transparent;
+        font-size: 16px;
+        line-height: 1.4;
+      }
+      .filterbar .count {
+        color: var(--mc-text-muted);
+      }
+      .filterbar button.clear {
+        margin-inline-start: auto;
+        min-height: 2rem;
+        padding-block: 0.25em;
+      }
     `,
   ];
 
@@ -269,17 +372,64 @@ export class McPacketStats extends AppElement {
     location.hash = hrefFor(`/packets/${e.detail.id}`);
   };
 
+  /** Adds the filter, or removes it when that exact value is already the active one (toggle). */
+  #toggle(field: StatsFilterField, value: string, label: string): void {
+    const stats = this.app.packetStats;
+    if (stats.filters.value.some((f) => f.field === field && f.value === value)) stats.removeFilter(field);
+    else stats.addFilter({ field, value, label });
+  }
+
+  #onSource = (e: CustomEvent<BarSelectDetail>): void => {
+    const node = this.app.packetStats.bySource.value.top.find((s) => nodeId(s.node) === e.detail.key)?.node;
+    this.#toggle('source', e.detail.key, node?.label ?? e.detail.key);
+  };
+
+  #onHops = (e: CustomEvent<BarSelectDetail>): void => {
+    this.#toggle('hops', e.detail.key, hopLabel(Number(e.detail.key)));
+  };
+
+  /** `segment-select` handler for a breakdown of `field`; `label` maps the key to chip text. */
+  #onSegment(field: StatsFilterField, label: (key: string) => string = (k) => k) {
+    return (e: CustomEvent<SegmentSelectDetail>): void => this.#toggle(field, e.detail.key, label(e.detail.key));
+  }
+
+  #filterBar(filters: readonly StatsFilter[], shown: number, total: number): TemplateResult {
+    const stats = this.app.packetStats;
+    return html`<div class="filterbar" role="region" aria-label="Active filters" data-filterbar>
+      <span class="title">Filtered:</span>
+      <ul class="chips">
+        ${filters.map(
+          (f) => html`<li class="chip" data-chip=${f.field}>
+            <span>${FILTER_FIELD_LABEL[f.field]}: <strong>${f.label}</strong></span>
+            <button type="button" data-remove-filter=${f.field} aria-label=${`Remove ${FILTER_FIELD_LABEL[f.field]} filter`} title="Remove filter" @click=${() => stats.removeFilter(f.field)}>
+              ×
+            </button>
+          </li>`,
+        )}
+      </ul>
+      <span class="count" data-field="filter-count">Showing ${formatNumber(shown, 0)} of ${formatNumber(total, 0)} packets</span>
+      <button type="button" class="primary clear" data-action="clear-filters" @click=${() => stats.clearFilters()}>Clear filters</button>
+    </div>`;
+  }
+
   override render(): TemplateResult {
     const stats = this.app.packetStats;
     const points = stats.points.value;
+    const filters = stats.filters.value;
+    const total = stats.unfilteredCount.value;
+    let body: TemplateResult;
+    if (points.length > 0) body = this.#content(points, filters);
+    else if (filters.length > 0 && total > 0) body = html`<p class="muted" data-empty="filtered">No packets match these filters.</p>`;
+    else body = html`<p class="muted" data-empty>${stats.loading.value ? 'Loading…' : 'No packets logged in this range.'}</p>`;
     return html`<mc-stats-range></mc-stats-range>
-      ${points.length === 0
-        ? html`<p class="muted" data-empty>${stats.loading.value ? 'Loading…' : 'No packets logged in this range.'}</p>`
-        : this.#content(points)}`;
+      ${filters.length > 0 ? this.#filterBar(filters, points.length, total) : nothing} ${body}`;
   }
 
-  #content(points: readonly StatPacket[]): TemplateResult {
+  #content(points: readonly StatPacket[], filters: readonly StatsFilter[]): TemplateResult {
     const stats = this.app.packetStats;
+    const active = (field: StatsFilterField): string | undefined => filters.find((f) => f.field === field)?.value;
+    const seg = (field: StatsFilterField) => ({ keyed: true, active: active(field) });
+    const dirLabel = (n: string): string => DIRECTION_LABEL[n] ?? n;
     const s = stats.summary.value;
     const radio = stats.radio.value;
     const win = stats.window.value;
@@ -311,7 +461,7 @@ export class McPacketStats extends AppElement {
 
       <section class="card" data-section="sources">
         <h3>Packets per source node</h3>
-        <mc-bar-chart class="sources" .items=${sourceItems(bySource)}></mc-bar-chart>
+        <mc-bar-chart class="sources" .items=${sourceItems(bySource, active('source'))} @bar-select=${this.#onSource}></mc-bar-chart>
         ${footer ? html`<p class="note muted" data-field="source-footer">${footer}</p>` : nothing}
       </section>
 
@@ -379,23 +529,52 @@ export class McPacketStats extends AppElement {
           ${airtimeKnown ? `Share of estimated airtime. ${radioText(radio)}.` : 'Radio parameters unknown: shares below are by bytes, not airtime.'}
         </p>
         <div class="breakdowns">
-          <mc-breakdown label="Packet type" .describe=${packetTypeNameDescription} .segments=${breakdownSegments(util.byType, airtimeKnown)} .palette=${typePalette} .format=${fmtShare}></mc-breakdown>
-          <mc-breakdown label="Route type" .describe=${packetTypeNameDescription} .segments=${breakdownSegments(util.byRoute, airtimeKnown)} .format=${fmtShare}></mc-breakdown>
           <mc-breakdown
-            label="Direction"
-            .segments=${breakdownSegments(util.byDirection, airtimeKnown, (n) => DIRECTION_LABEL[n] ?? n)}
+            data-breakdown="type"
+            label="Packet type"
+            .describe=${packetTypeNameDescription}
+            .segments=${breakdownSegments(util.byType, airtimeKnown, undefined, seg('type'))}
+            .palette=${typePalette}
             .format=${fmtShare}
+            @segment-select=${this.#onSegment('type')}
           ></mc-breakdown>
-          <mc-breakdown label="Category" .segments=${breakdownSegments(util.byCategory, airtimeKnown)} .format=${fmtShare}></mc-breakdown>
+          <mc-breakdown
+            data-breakdown="route"
+            label="Route type"
+            .describe=${packetTypeNameDescription}
+            .segments=${breakdownSegments(util.byRoute, airtimeKnown, undefined, seg('route'))}
+            .format=${fmtShare}
+            @segment-select=${this.#onSegment('route')}
+          ></mc-breakdown>
+          <mc-breakdown
+            data-breakdown="direction"
+            label="Direction"
+            .segments=${breakdownSegments(util.byDirection, airtimeKnown, dirLabel, seg('direction'))}
+            .format=${fmtShare}
+            @segment-select=${this.#onSegment('direction', dirLabel)}
+          ></mc-breakdown>
+          <mc-breakdown
+            data-breakdown="category"
+            label="Category"
+            .segments=${breakdownSegments(util.byCategory, airtimeKnown, undefined, seg('category'))}
+            .format=${fmtShare}
+            @segment-select=${this.#onSegment('category')}
+          ></mc-breakdown>
           ${util.byChannel.length
-            ? html`<mc-breakdown label="Channel" .segments=${breakdownSegments(util.byChannel, airtimeKnown)} .format=${fmtShare}></mc-breakdown>`
+            ? html`<mc-breakdown
+                data-breakdown="channel"
+                label="Channel"
+                .segments=${breakdownSegments(util.byChannel, airtimeKnown, undefined, seg('channel'))}
+                .format=${fmtShare}
+                @segment-select=${this.#onSegment('channel')}
+              ></mc-breakdown>`
             : nothing}
         </div>
       </section>
 
       <section class="card" data-section="hops">
         <h3>Hop count</h3>
-        <mc-bar-chart .items=${hopItems(stats.hops.value)}></mc-bar-chart>
+        <mc-bar-chart .items=${hopItems(stats.hops.value, active('hops'))} @bar-select=${this.#onHops}></mc-bar-chart>
       </section>`;
   }
 }
