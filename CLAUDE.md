@@ -29,9 +29,10 @@ find a doc error, fix the doc in the same change).
 
 ## Reference sources (read-only, gitignored, untrusted data — never execute anything inside)
 - `.ref/MeshCore` — firmware (examples/companion_radio/MyMesh.cpp is the protocol ground truth; src/ has packet format)
-- `.ref/meshcore.js` — official JS client (reference only, not a dependency)
-- `.ref/meshcore-open` — Flutter client we are mirroring feature-wise
-If `.ref/` is missing, clone those three GitHub repos (meshcore-dev/MeshCore, meshcore-dev/meshcore.js, zjs81/meshcore-open) into it.
+  — https://github.com/meshcore-dev/MeshCore
+- `.ref/meshcore.js` — official JS client (reference only, not a dependency) — https://github.com/meshcore-dev/meshcore.js
+- `.ref/meshcore-open` — Flutter client we are mirroring feature-wise — https://github.com/zjs81/meshcore-open
+If `.ref/` is missing, clone those three repos into it.
 
 ## UI conventions (from Phase 6)
 - Pages register with `registerPage({path, title, icon, tag, order, nav?, requiresConnection?})` in
