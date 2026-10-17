@@ -38,10 +38,12 @@ export class McChatPage extends AppElement {
         height: calc(100dvh - 6.5rem);
         min-height: 20rem;
       }
+      /* On narrow screens the actions wrap onto their own row instead of squeezing the name/subtitle. */
       header.chat-head {
         display: flex;
+        flex-wrap: wrap;
         align-items: center;
-        gap: 10px;
+        gap: 8px 10px;
         padding-block-end: 10px;
         border-block-end: 1px solid var(--mc-border);
       }
@@ -61,8 +63,24 @@ export class McChatPage extends AppElement {
         white-space: nowrap;
       }
       header .who {
-        flex: 1;
+        flex: 1 1 12rem;
         min-width: 0;
+      }
+      header .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-inline-start: auto;
+      }
+      @media (max-width: 30rem) {
+        header .actions {
+          flex: 1 1 100%;
+        }
+        header .actions > * {
+          flex: 1 1 0;
+          justify-content: center;
+          white-space: nowrap;
+        }
       }
       header h2 {
         margin: 0;
@@ -601,12 +619,14 @@ export class McChatPage extends AppElement {
               : html`<a href=${hrefFor(`/contact/${this.key}`)} data-action="contact-info" title="Contact info">${chat.title.value}</a>`}</h2>
           <div class="muted" data-field="subtitle">${this.#subtitle(chat)}</div>
         </div>
-        ${channel
-          ? html`<button data-action="mute" aria-pressed=${ch?.muted ? 'true' : 'false'} @click=${() => void this.#headerAction('mute')}>
-              ${ch?.muted ? '🔕 Muted' : '🔔 Mute'}
-            </button>`
-          : html`${this.#mapLink(chat)}<button data-action="path" @click=${() => (location.hash = hrefFor(`/path/${this.key}`))}>Path…</button>
-              <button data-action="reset-path" @click=${() => void this.#headerAction('reset-path')}>Reset path</button>`}
+        <div class="actions" data-field="header-actions">
+          ${channel
+            ? html`<button data-action="mute" aria-pressed=${ch?.muted ? 'true' : 'false'} @click=${() => void this.#headerAction('mute')}>
+                ${ch?.muted ? '🔕 Muted' : '🔔 Mute'}
+              </button>`
+            : html`${this.#mapLink(chat)}<button data-action="path" @click=${() => (location.hash = hrefFor(`/path/${this.key}`))}>Path…</button>
+                <button data-action="reset-path" @click=${() => void this.#headerAction('reset-path')}>Reset path</button>`}
+        </div>
       </header>
       <div class="log-wrap">
         <div class="log" @scroll=${() => this.#onScroll()}>

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { page } from 'vitest/browser';
 import { toHex } from '@meshcore-web/core/util/bytes';
 import { channelKeyForPsk, type MessageStatus } from '@meshcore-web/core/store';
 import { publicChannelSecret, scenarioKey } from '@meshcore-web/core/emulator';
@@ -159,6 +160,25 @@ describe('direct chat', () => {
     expect(statuses.at(-1)).toBe('delivered');
     expect(t.query('.msg[data-dir="out"] [data-field="rtt"]')).not.toBeNull();
     await t.until(() => t.queryAll('.msg[data-dir="in"] [data-field="text"]').some((e) => e.textContent === 'pong'), 8000, 'pong');
+  });
+
+  it('on a phone-width screen the DM header wraps its actions below the name instead of squeezing it', async () => {
+    await page.viewport(390, 760);
+    try {
+      const t = await connected();
+      const k = keys(t);
+      await go(t, `/chat/${k.alice}`, '[data-field="header-actions"] [data-action="reset-path"]');
+      const who = t.query('.who')!.getBoundingClientRect();
+      const actions = t.query('[data-field="header-actions"]')!.getBoundingClientRect();
+      const header = t.query('header.chat-head')!.getBoundingClientRect();
+      expect(who.width).toBeGreaterThan(180);
+      expect(actions.top).toBeGreaterThanOrEqual(who.bottom - 1);
+      expect(actions.right).toBeLessThanOrEqual(header.right + 1);
+      // The subtitle stays a couple of lines rather than one word per line.
+      expect(t.query('[data-field="subtitle"]')!.getBoundingClientRect().height).toBeLessThan(60);
+    } finally {
+      await page.viewport(1280, 800);
+    }
   });
 
   it('Enter sends, Shift+Enter does not, and the counter flags overflow', async () => {
