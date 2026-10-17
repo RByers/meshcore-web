@@ -5,7 +5,7 @@ import { buildPacket, packetTypeNameDescription, PayloadType, RouteType } from '
 import '../src/mc-app.js';
 import '../src/pages/packets/index.js';
 import { createHarness, type Harness } from '../src/testing/harness.js';
-import type { McPacketStats } from '../src/pages/packets/packet-stats.js';
+import { timelinePalette, timelineSeries, type McPacketStats } from '../src/pages/packets/packet-stats.js';
 
 let h: Harness | undefined;
 
@@ -135,5 +135,22 @@ describe('/packets Stats tab', () => {
     const hour = Number(tileValue(t, 'packets'));
     expect(hour).toBeLessThan(all);
     expect(hour).toBe(t.app.packetStats.summary.value.packets);
+  });
+});
+
+describe('packet rate series', () => {
+  it('keeps the 8 biggest series and sums the rest with Other', () => {
+    const keys = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'Other'];
+    const bins = [0, 1].map((i) => ({ t: i * 60_000, series: Object.fromEntries(keys.map((k, j) => [k, 20 - j + i])) }));
+    const s = timelineSeries({ binMs: 60_000, bins, series: keys });
+    expect(s.map((x) => x.key)).toEqual(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'Other']);
+    // I (12) + J (11) + Other (10), +1 each in the second bin.
+    expect(s[8]!.points.map((p) => p.v)).toEqual([33, 36]);
+    expect(timelinePalette(s).legend.map((l) => l.label)).toEqual(['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'Other']);
+  });
+
+  it('adds no Other line when everything fits', () => {
+    const s = timelineSeries({ binMs: 60_000, bins: [{ t: 0, series: { DMs: 2, ACKs: 1 } }], series: ['DMs', 'ACKs'] });
+    expect(s.map((x) => x.key)).toEqual(['DMs', 'ACKs']);
   });
 });

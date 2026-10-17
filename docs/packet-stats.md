@@ -118,7 +118,7 @@ computed by hand for a couple of (SF, BW, CR, length) combinations, with the for
 summary: { packets, bytes, airtimeMs, airtimeFraction /* airtime / range span, null if unknown */, sources /* unique resolved + unresolved labels */, spanMs }
 bySource: { top: { node: NodeRef; count: number; bytes: number; airtimeMs: number }[] /* top 50, count desc */, unattributed: number, others: number /* beyond the top 50 */ }
 timeline: { binMs: number; bins: { t: number; series: Record<string, number> }[]; series: string[] }
-   // series: one per known channel name (GRP_TXT/GRP_DATA), 'DMs' (TXT_MSG), 'Adverts', 'Other'. Bin size picked from the span: aim for 60–150 bins on round steps (1 min … 1 day). Expose `setBin(ms | 'auto')` too.
+   // series (non-empty only, by count desc, 'Other' last): one per known channel name (GRP_TXT/GRP_DATA), 'Unknown channels', 'DMs' (TXT_MSG), 'Adverts', 'ACKs', 'Paths', 'Traces', 'Requests' (REQ/RESPONSE/ANON_REQ), 'Control', 'Other' (MULTIPART, RAW_CUSTOM, unknown). Bin size picked from the span: aim for 60–150 bins on round steps (1 min … 1 day). Expose `setBin(ms | 'auto')` too.
 utilization: {
   overTime: { t: number; airtimeMs: number; fraction: number }[]   // same bins as timeline
   byType: { name: string; count: number; bytes: number; airtimeMs: number }[]      // payload type
@@ -194,8 +194,8 @@ filters of the list tabs are not shown; the inspector split is hidden). Layout, 
    navigates to `/packets/:id`. Payload types get a fixed slot map (TXT_MSG 1, GRP_TXT 2, ADVERT 3,
    ACK 4, PATH 5, TRACE 6, REQ/RESPONSE 7, CONTROL 8, rest Other); for node / channel colourings
    the top 8 by count in the current points take slots in count order, rest "Other".
-4. **Packet rate** (`mc-line-chart`): a series per channel plus *DMs*, *Adverts*, *Other* from
-   `timeline`; toggle *stacked*.
+4. **Packet rate** (`mc-line-chart`): the `timeline` series (per channel, unknown channels, DMs,
+   adverts, ACKs, paths, traces, requests, control); the 8 biggest get a line, the rest are summed into *Other*; toggle *stacked*.
 5. **Network utilisation**: `mc-line-chart` of airtime fraction over time (single series, %), then
    `mc-breakdown` rows for payload type, route type, direction, channel / category — each showing
    airtime share (with packet count in the tooltip). When airtime is unknown, fall back to bytes
@@ -233,7 +233,7 @@ forContact(key: string): ReadonlySignal<ContactStats>   // cached per key, compu
 interface ContactStats {
   from: readonly StatPacket[];     // source.key === key
   via: readonly StatPacket[];      // path contains the contact (it forwarded the packet) and source is not the contact
-  timeline: { binMs; bins: { t; series: Record<string, number> }[]; series: string[] } // packets *from* the contact per bin, series: 'DMs', channel names, 'Adverts', 'Other'
+  timeline: { binMs; bins: { t; series: Record<string, number> }[]; series: string[] } // packets *from* the contact per bin, same series as the global timeline
   paths: { pathKey: string; hops: readonly NodeRef[]; count: number; lastTs: number; meanSnr: number | null; share: number }[] // count desc; pathKey '' = direct
   signal: { ts: number; snr: number | null; rssi: number | null; hops: number | null; pathKey: string; id: number }[] // from, ascending
   hops: { hops: number; count: number }[]

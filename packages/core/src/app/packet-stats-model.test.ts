@@ -27,7 +27,9 @@ import {
   PacketStatsModel,
   SERIES_ADVERTS,
   SERIES_DMS,
-  SERIES_OTHER,
+  SERIES_ACKS,
+  SERIES_REQUESTS,
+  SERIES_UNKNOWN_CHANNELS,
   autoBinMs,
   nodeId,
   type StatPacket,
@@ -374,14 +376,18 @@ describe('PacketStatsModel — range, live tail, aggregations', () => {
       rx(await grpTxt(PSK, 'Carol', 'hi'), T + 30 * MIN),
       rx(datagram(PayloadType.TXT_MSG, 0xa1, 0x01), T + 30 * MIN + 1),
       rx(ack(), T + 3 * HOUR),
+      rx(ack(), T + 3 * HOUR + 1),
+      rx(datagram(PayloadType.REQ, 0xa1, 0x01), T + 3 * HOUR + 2),
+      rx(datagram(PayloadType.RESPONSE, 0xa1, 0x01), T + 3 * HOUR + 3),
       rx(grpUnknown(0x00), T + 3 * HOUR),
     ]);
     const tl = model.timeline.value;
     expect(tl.binMs).toBe(2 * MIN);
-    expect(tl.series).toEqual(['Test', SERIES_DMS, SERIES_ADVERTS, SERIES_OTHER]);
+    // Non-empty series by count desc (ties by name); no Other since every type has its own series.
+    expect(tl.series).toEqual([SERIES_ACKS, SERIES_REQUESTS, SERIES_ADVERTS, SERIES_DMS, 'Test', SERIES_UNKNOWN_CHANNELS]);
     expect(tl.bins[0]!.t).toBe(Math.floor(T / (2 * MIN)) * 2 * MIN);
     const total = (k: string): number => tl.bins.reduce((n, b) => n + (b.series[k] ?? 0), 0);
-    expect([total('Test'), total(SERIES_DMS), total(SERIES_ADVERTS), total(SERIES_OTHER)]).toEqual([1, 1, 1, 2]);
+    expect(tl.series.map(total)).toEqual([2, 2, 1, 1, 1, 1]);
     expect(model.utilization.value.overTime).toHaveLength(tl.bins.length);
     const ot = model.utilization.value.overTime;
     expect(ot.reduce((n, o) => n + o.airtimeMs, 0)).toBeCloseTo(model.summary.value.airtimeMs!, 9);

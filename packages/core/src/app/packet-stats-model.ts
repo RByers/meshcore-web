@@ -139,7 +139,11 @@ export interface TimelineBin {
 export interface Timeline {
   binMs: number;
   bins: TimelineBin[];
-  /** Known channels (by count desc), then {@link SERIES_DMS}, {@link SERIES_ADVERTS}, {@link SERIES_OTHER}. */
+  /**
+   * The non-empty series by packet count desc, {@link SERIES_OTHER} last: one per known channel, then
+   * {@link SERIES_UNKNOWN_CHANNELS}, {@link SERIES_DMS}, {@link SERIES_ADVERTS}, {@link SERIES_ACKS},
+   * {@link SERIES_PATHS}, {@link SERIES_TRACES}, {@link SERIES_REQUESTS}, {@link SERIES_CONTROL}.
+   */
   series: string[];
 }
 
@@ -200,6 +204,15 @@ export interface ContactStats {
 
 export const SERIES_DMS = 'DMs';
 export const SERIES_ADVERTS = 'Adverts';
+export const SERIES_ACKS = 'ACKs';
+export const SERIES_PATHS = 'Paths';
+export const SERIES_TRACES = 'Traces';
+/** REQ / RESPONSE / ANON_REQ (logins, status, telemetry, …). */
+export const SERIES_REQUESTS = 'Requests';
+export const SERIES_CONTROL = 'Control';
+/** GRP_TXT / GRP_DATA whose channel hash matches no known channel. */
+export const SERIES_UNKNOWN_CHANNELS = 'Unknown channels';
+/** MULTIPART, RAW_CUSTOM and unknown payload types. */
 export const SERIES_OTHER = 'Other';
 /** Size of {@link SourceStats.top}. */
 export const TOP_SOURCES = 50;
@@ -510,10 +523,29 @@ function breakdown(points: readonly StatPacket[], key: (p: StatPacket) => string
 
 /** Timeline series of a point given the known channel names. */
 function seriesOf(p: StatPacket, known: ReadonlySet<string>): string {
-  if (p.category === 'channel' && p.channel !== null && known.has(p.channel)) return p.channel;
-  if (p.category === 'dm') return SERIES_DMS;
-  if (p.category === 'advert') return SERIES_ADVERTS;
-  return SERIES_OTHER;
+  switch (p.payloadType) {
+    case PayloadType.GRP_TXT:
+    case PayloadType.GRP_DATA:
+      return p.channel !== null && known.has(p.channel) ? p.channel : SERIES_UNKNOWN_CHANNELS;
+    case PayloadType.TXT_MSG:
+      return SERIES_DMS;
+    case PayloadType.ADVERT:
+      return SERIES_ADVERTS;
+    case PayloadType.ACK:
+      return SERIES_ACKS;
+    case PayloadType.PATH:
+      return SERIES_PATHS;
+    case PayloadType.TRACE:
+      return SERIES_TRACES;
+    case PayloadType.REQ:
+    case PayloadType.RESPONSE:
+    case PayloadType.ANON_REQ:
+      return SERIES_REQUESTS;
+    case PayloadType.CONTROL:
+      return SERIES_CONTROL;
+    default:
+      return SERIES_OTHER;
+  }
 }
 
 interface Binning {
@@ -523,13 +555,16 @@ interface Binning {
 }
 
 function buildTimeline(pts: readonly StatPacket[], b: Binning | null, known: ReadonlySet<string>): Timeline {
-  const perChannel = new Map<string, number>();
+  const counts = new Map<string, number>();
   for (const p of pts) {
     const s = seriesOf(p, known);
-    if (s !== SERIES_DMS && s !== SERIES_ADVERTS && s !== SERIES_OTHER) perChannel.set(s, (perChannel.get(s) ?? 0) + 1);
+    counts.set(s, (counts.get(s) ?? 0) + 1);
   }
-  const chSeries = [...perChannel.entries()].sort((a, c) => c[1] - a[1] || a[0].localeCompare(c[0])).map(([k]) => k);
-  const series = [...chSeries, SERIES_DMS, SERIES_ADVERTS, SERIES_OTHER];
+  const series = [...counts.entries()]
+    .filter(([k]) => k !== SERIES_OTHER)
+    .sort((a, c) => c[1] - a[1] || a[0].localeCompare(c[0]))
+    .map(([k]) => k);
+  if (counts.has(SERIES_OTHER)) series.push(SERIES_OTHER);
   if (!b) return { binMs: autoBinMs(0), bins: [], series };
   const bins: TimelineBin[] = [];
   for (let i = 0; i < b.n; i++) bins.push({ t: b.start + i * b.binMs, series: Object.fromEntries(series.map((s) => [s, 0])) });

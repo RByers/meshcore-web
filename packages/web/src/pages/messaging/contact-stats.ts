@@ -11,6 +11,7 @@ import { formatRelative, formatSnr } from '../../format.js';
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
 import { assignSlots, type BarItem, type DotPoint, type DotSelectDetail, type LineSeries, type SeriesPalette } from '../../charts/index.js';
+import { timelinePalette, timelineSeries } from '../packets/packet-stats.js';
 import '../../components/stats-range.js';
 
 /** Paths that get their own colour in the signal plot (the rest are "Other"). */
@@ -109,10 +110,8 @@ export class McContactStats extends AppElement {
     this.#memoKey = key;
     const now = this.app.clock.now();
 
-    const timelinePalette = assignSlots(timeline.series);
-    const timelineSeries: LineSeries[] = timeline.series
-      .filter((s) => timeline.bins.some((b) => (b.series[s] ?? 0) > 0))
-      .map((s) => ({ key: s, points: timeline.bins.map((b) => ({ t: b.t, v: b.series[s] ?? 0 })) }));
+    const timeline_ = timelineSeries(timeline);
+    const timelinePalette_ = timelinePalette(timeline_);
 
     const labels = new Map(paths.map((p) => [p.pathKey, pathLabel(p.pathKey, p.hops)]));
     const paths_: BarItem[] = paths.map((p) => ({
@@ -141,7 +140,7 @@ export class McContactStats extends AppElement {
       hops: from.map((p) => dot(p, p.hops)),
     };
     const hopItems: BarItem[] = hops.map((h) => ({ label: h.hops === 0 ? 'direct' : `${h.hops} hop${h.hops === 1 ? '' : 's'}`, value: h.count }));
-    this.#memo = { timeline: timelineSeries, timelinePalette, paths: paths_, pathPalette, dots, hops: hopItems };
+    this.#memo = { timeline: timeline_, timelinePalette: timelinePalette_, paths: paths_, pathPalette, dots, hops: hopItems };
     return this.#memo;
   }
 

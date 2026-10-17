@@ -18,6 +18,7 @@ import {
   formatNumber,
   formatPercent,
   keysByCount,
+  MAX_SERIES,
   OTHER_KEY,
   type BarItem,
   type BreakdownSegment,
@@ -138,9 +139,23 @@ export function sourceFooter(s: SourceStats): string {
   return parts.join(', ');
 }
 
-/** Line chart series from the model timeline (series order as given). */
+/**
+ * Line chart series from the model timeline (series order as given, biggest first): the first
+ * {@link MAX_SERIES} get their own line, the rest are summed into "Other".
+ */
 export function timelineSeries(t: Timeline): LineSeries[] {
-  return t.series.map((key) => ({ key, label: key, points: t.bins.map((b) => ({ t: b.t, v: b.series[key] ?? 0 })) }));
+  const own = t.series.filter((k) => k !== OTHER_KEY).slice(0, MAX_SERIES);
+  const folded = t.series.filter((k) => !own.includes(k));
+  const out: LineSeries[] = own.map((key) => ({ key, label: key, points: t.bins.map((b) => ({ t: b.t, v: b.series[key] ?? 0 })) }));
+  if (folded.length > 0) {
+    out.push({ key: OTHER_KEY, label: OTHER_KEY, points: t.bins.map((b) => ({ t: b.t, v: folded.reduce((n, k) => n + (b.series[k] ?? 0), 0) })) });
+  }
+  return out;
+}
+
+/** Palette for {@link timelineSeries}. */
+export function timelinePalette(series: readonly LineSeries[]): SeriesPalette {
+  return assignSlots(series.map((s) => s.key));
 }
 
 /** Breakdown segments: airtime share, or bytes when airtime is unknown. */
@@ -273,6 +288,7 @@ export class McPacketStats extends AppElement {
     const footer = sourceFooter(bySource);
     const yOpt = Y_OPTIONS.find((o) => o.id === this.yField) ?? Y_OPTIONS[0]!;
     const timeline = stats.timeline.value;
+    const rateSeries = timelineSeries(timeline);
     const util = stats.utilization.value;
     const airtimeKnown = s.airtimeMs !== null;
     const fmtShare = airtimeKnown ? formatDuration : formatBytes;
@@ -340,8 +356,8 @@ export class McPacketStats extends AppElement {
         </div>
         <mc-line-chart
           data-chart-id="rate"
-          .series=${timelineSeries(timeline)}
-          .palette=${assignSlots(timeline.series)}
+          .series=${rateSeries}
+          .palette=${timelinePalette(rateSeries)}
           .xDomain=${xDomain}
           ?stacked=${this.stacked}
           y-label="Packets"
