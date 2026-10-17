@@ -377,6 +377,7 @@ describe('AppSettingsModel', () => {
     s.setSmazAutoEnable(true);
     expect(prefs.getItem(PREF_SMAZ_AUTO_ENABLE)).toBe('true');
 
+    expect(s.packetRetentionDays.value).toBeNull(); // default: keep forever
     const store = app.connection.store.value!;
     const now = app.clock.now();
     const old = now - 40 * 86_400_000;
@@ -387,6 +388,10 @@ describe('AppSettingsModel', () => {
     expect((await store.packets.query({ limit: 1000 })).items.length).toBe(before - 1);
     expect(prefs.getItem(PREF_PACKET_RETENTION_DAYS)).toBe('30');
     await expect(s.setPacketRetentionDays(0)).rejects.toThrow(RangeError);
+    expect(await s.setPacketRetentionDays(null)).toBe(0);
+    expect(prefs.getItem(PREF_PACKET_RETENTION_DAYS)).toBe('unlimited');
+    expect(new AppSettingsModel(prefs, app.connection).packetRetentionDays.value).toBeNull();
+    await s.setPacketRetentionDays(30);
 
     // a fresh model reads the stored preferences
     const again = new AppSettingsModel(prefs, app.connection);

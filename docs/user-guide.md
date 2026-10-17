@@ -173,8 +173,8 @@ frame exchanged with it). **Packets** shows them live:
 - Direct messages show as `TXT_MSG sender → recipient (encrypted)` unless the radio key is
   stored (below), in which case the row shows the text.
 - **Frames** tab: the raw host↔radio companion-protocol frames.
-- **Export** / **Import** the log as JSON; **Clear** deletes it. Retention is set in
-  Settings (packets older than that are removed).
+- **Export** / **Import** the log as JSON; **Clear** deletes it. Packets are kept forever by
+  default; set a retention in Settings to remove older ones.
 - Channel messages are decrypted automatically when you have that channel's key.
 
 ### Decrypting direct messages (optional)

@@ -992,8 +992,9 @@ export class McSettingsPage extends AppElement {
           </select>
         </label>
         <label class="field"
-          >Keep packet log for (days)
-          <input name="retention" type="number" min="1" max=${MAX_PACKET_RETENTION_DAYS} step="1" .value=${String(s.packetRetentionDays.value)}
+          >Keep packet log for (days, blank = forever)
+          <input name="retention" type="number" min="1" max=${MAX_PACKET_RETENTION_DAYS} step="1" placeholder="Forever"
+            .value=${s.packetRetentionDays.value === null ? '' : String(s.packetRetentionDays.value)}
             aria-invalid=${this.#invalid('retention')} @change=${this.#saveRetention} />
         </label>
         ${this.#err('retention')}
@@ -1066,10 +1067,15 @@ export class McSettingsPage extends AppElement {
   }
 
   #saveRetention = (e: Event): void => {
-    const days = Number((e.target as HTMLInputElement).value);
+    const raw = (e.target as HTMLInputElement).value.trim();
+    const days = raw === '' ? null : Number(raw);
     this.#errors = {};
     this.app.appSettings.setPacketRetentionDays(days).then(
-      (removed) => this.app.notifications.success(`Packet log keeps ${days} days`, removed ? `${removed} older packets removed` : undefined),
+      (removed) =>
+        this.app.notifications.success(
+          days === null ? 'Packet log keeps packets forever' : `Packet log keeps ${days} days`,
+          removed ? `${removed} older packets removed` : undefined,
+        ),
       (err: unknown) => {
         this.#errors = { retention: err instanceof Error ? err.message : String(err) };
         this.requestUpdate();

@@ -164,6 +164,13 @@ describe('PacketLog', () => {
     b.close();
   });
 
+  it('keeps packets forever by default', async () => {
+    const s = await openStore(1);
+    await s.packets.append({ direction: 'rx', bytes: grpTxtPacket(0, 1), ts: 1 });
+    expect(await s.packets.prune(undefined, Date.now())).toBe(0);
+    s.close();
+  });
+
   it('prunes by age and count', async () => {
     const s = await openStore(1, { retention: { packets: { maxCount: 3, maxAgeMs: 10_000 } } });
     await s.packets.appendMany(Array.from({ length: 6 }, (_, i) => ({ direction: 'rx' as const, bytes: grpTxtPacket(0, i), ts: i * 5000 })));

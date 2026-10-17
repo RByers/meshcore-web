@@ -17,10 +17,13 @@ export interface RetentionPolicy {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Defaults used by `prune()` without arguments. */
+/**
+ * Defaults used by `prune()` without arguments. Packets are kept forever unless the user sets a
+ * retention (AppSettingsModel); frames are a debugging aid and are capped.
+ */
 export const DEFAULT_RETENTION: Readonly<Record<LogStoreName, Readonly<RetentionPolicy>>> = {
   frames: { maxCount: 200_000, maxAgeMs: 30 * DAY_MS },
-  packets: { maxCount: 200_000, maxAgeMs: 90 * DAY_MS },
+  packets: {},
 };
 
 export interface LogQueryBase {
