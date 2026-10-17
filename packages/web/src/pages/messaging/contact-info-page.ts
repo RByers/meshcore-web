@@ -145,7 +145,7 @@ export class McContactInfoPage extends AppElement {
           ? html`<p class="muted" data-field="activity-empty">No packets from this node in the last ${ACTIVITY_RANGES[a.range].label}.</p>`
           : html`<mc-activity-chart aria-labelledby="activity-h" .activity=${a}></mc-activity-chart>
               <p data-field="activity-summary">
-                ${a.total} packet${a.total === 1 ? '' : 's'} in the last ${ACTIVITY_RANGES[a.range].label}${a.last ? html` · last ${formatRelative(a.last)}` : nothing}
+                ${a.total} packet${a.total === 1 ? '' : 's'} in the last ${ACTIVITY_RANGES[a.range].label}${a.last ? html` · last ${formatRelative(a.last, this.app.clock.now())}` : nothing}
                 ${a.hashOnly
                   ? html`<br /><span class="muted" data-field="activity-hash-note"
                         >${a.hashOnly} matched only by the node's 1-byte hash <span class="mono">${key.slice(0, 2)}</span>; packets

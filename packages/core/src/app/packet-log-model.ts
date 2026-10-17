@@ -519,7 +519,7 @@ export class PacketLogModel extends StoreBoundModel {
   // ---- per-node activity ----
 
   /** Packets originated by node `key` over `range`, bucketed for a chart (indexed scan). */
-  async nodeActivity(key: string, range: ActivityRange, now = Date.now()): Promise<NodeActivity> {
+  async nodeActivity(key: string, range: ActivityRange, now = this.connection.clock.now()): Promise<NodeActivity> {
     const store = this.store;
     const { spanMs, bucketMs } = ACTIVITY_RANGES[range];
     const from = Math.floor(now / bucketMs) * bucketMs + bucketMs - spanMs;
