@@ -1,5 +1,6 @@
 /** Toasts and error surface for the UI (framework-agnostic). */
 
+import { systemClock, type Clock } from '../util/clock.js';
 import { signal, type ReadonlySignal } from './signal.js';
 
 export type ToastKind = 'info' | 'success' | 'warning' | 'error';
@@ -24,18 +25,6 @@ export interface NotifyInput {
   timeoutMs?: number;
 }
 
-export interface NotificationsTimers {
-  now(): number;
-  setTimeout(fn: () => void, ms: number): unknown;
-  clearTimeout(handle: unknown): void;
-}
-
-const systemTimers: NotificationsTimers = {
-  now: () => Date.now(),
-  setTimeout: (fn, ms) => globalThis.setTimeout(fn, ms),
-  clearTimeout: (h) => globalThis.clearTimeout(h as ReturnType<typeof setTimeout>),
-};
-
 const DEFAULT_TIMEOUT: Record<ToastKind, number> = { info: 5000, success: 5000, warning: 8000, error: 0 };
 
 export function errorMessage(err: unknown): string {
@@ -51,7 +40,7 @@ export class NotificationsModel {
 
   /** At most this many toasts are kept; the oldest are dropped. */
   constructor(
-    private readonly clock: NotificationsTimers = systemTimers,
+    private readonly clock: Clock = systemClock,
     readonly maxToasts = 5,
   ) {}
 

@@ -30,7 +30,7 @@ export interface MessageInput {
   text: string;
   /** Sender clock, epoch secs. */
   timestamp: number;
-  /** Default `Date.now()`. */
+  /** Default: the store's clock. */
   receivedAt?: number;
   /** Default TxtType.PLAIN. */
   txtType?: number;
@@ -140,6 +140,8 @@ export class MessagesRepo {
   constructor(
     private readonly db: IdbDatabase,
     private readonly emitter: TypedEmitter<RadioStoreEvents>,
+    /** Host time (epoch ms) for default timestamps. */
+    private readonly now: () => number,
   ) {}
 
   get(id: number): Promise<MessageRecord | undefined> {
@@ -154,7 +156,7 @@ export class MessagesRepo {
       direction: input.direction,
       text: input.text,
       timestamp: input.timestamp,
-      receivedAt: input.receivedAt ?? Date.now(),
+      receivedAt: input.receivedAt ?? this.now(),
       txtType: input.txtType ?? TxtType.PLAIN,
       status: input.status ?? (input.direction === 'in' ? 'delivered' : 'pending'),
       pathLen: input.pathLen ?? 0xff,
@@ -256,7 +258,7 @@ export class MessagesRepo {
       if (patch.compressed === true) next.compressed = true;
       else if (patch.compressed === false) delete next.compressed;
       if (patch.deliveredAt !== undefined) next.deliveredAt = patch.deliveredAt;
-      else if (status === 'delivered' && prev.status !== 'delivered') next.deliveredAt = Date.now();
+      else if (status === 'delivered' && prev.status !== 'delivered') next.deliveredAt = this.now();
       await s.put(next);
       return next;
     });
@@ -328,7 +330,7 @@ export class MessagesRepo {
    * within the grace window) as delivered. Returns the updated messages.
    */
   async markDeliveredByAck(ackCode: number, o: { roundTripMs?: number; now?: number } = {}): Promise<MessageRecord[]> {
-    const now = o.now ?? Date.now();
+    const now = o.now ?? this.now();
     const code = ackCode >>> 0;
     const updated = await this.db.transaction(STORE.messages, 'readwrite', async (t) => {
       const s = t.store<MessageRecord>(STORE.messages);

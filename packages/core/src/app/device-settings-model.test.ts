@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { regionKey } from '../packet/packet.js';
 import { toHex } from '../util/bytes.js';
+import { systemClock, type Clock } from '../util/clock.js';
 import type { AppModelOptions } from './app-model.js';
 import { settle } from '../client/testing.js';
 import { connectedApp } from './testing.js';
@@ -16,7 +17,6 @@ import {
   validateLocation,
   validateName,
   validatePin,
-  type DeviceSettingsTimers,
 } from './device-settings-model.js';
 import { RADIO_PRESETS, findRadioPreset } from './radio-presets.js';
 import { PREF_APPROXIMATE_POSITIONS, PREF_PACKET_RETENTION_DAYS, PREF_PATH_NAMES, PREF_THEME, AppSettingsModel } from './app-settings-model.js';
@@ -226,7 +226,7 @@ describe('DeviceSettingsModel against the emulator', () => {
   it('sendAdvert transmits flood / zero-hop adverts with a cooldown', async () => {
     let now = 1_000_000;
     const { app, emu, out } = await connected();
-    const model = new DeviceSettingsModel(app.connection, { now: () => now, advertCooldownMs: 5000 });
+    const model = new DeviceSettingsModel(app.connection, { clock: { ...systemClock, now: () => now }, advertCooldownMs: 5000 });
     try {
       await model.sendAdvert('flood');
       expect(out).toContain('0701');
@@ -246,11 +246,12 @@ describe('DeviceSettingsModel against the emulator', () => {
   it('refreshStats reads core / radio / packets; pollStats refreshes periodically until stopped', async () => {
     const { app, out } = await connected();
     const timers: Array<{ fn: () => void; ms: number }> = [];
-    const fake: DeviceSettingsTimers = {
+    const fake: Clock = {
+      now: () => Date.now(),
       setTimeout: (fn, ms) => timers.push({ fn, ms }) - 1,
       clearTimeout: () => undefined,
     };
-    const model = new DeviceSettingsModel(app.connection, { timers: fake });
+    const model = new DeviceSettingsModel(app.connection, { clock: fake });
     try {
       const s = await model.refreshStats();
       expect(s?.core?.uptimeSecs).toBeGreaterThanOrEqual(0);

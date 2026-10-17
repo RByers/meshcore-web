@@ -120,7 +120,7 @@ export class McChannelsPage extends AppElement {
             <span class="name">${c.name}</span>
             ${c.muted ? html`<span title="Muted" aria-label="Muted">🔕</span>` : nothing}
             ${c.smaz ? html`<span class="muted" title="Outgoing messages are SMAZ-compressed" data-field="smaz">SMAZ</span>` : nothing}
-            <span class="when">${lm ? formatRelative(lm.receivedAt) : ''}</span>
+            <span class="when">${lm ? formatRelative(lm.receivedAt, this.app.clock.now()) : ''}</span>
           </span>
           <span class="row-sub">${TYPE_LABEL[c.kind]} · ${c.slot !== null ? `slot ${c.slot}` : 'not on radio'}</span>
           ${lm ? html`<span class="preview">${messagePreview(lm)}</span>` : nothing}

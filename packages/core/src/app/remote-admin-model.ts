@@ -25,6 +25,7 @@ import { AclRole, ReqType, TELEM_CHANNEL_SELF } from '../protocol/constants.js';
 import type { NodeStats } from '../protocol/types.js';
 import type { ContactRecord } from '../store/schema.js';
 import { concatBytes, fromHex, toHex, u16le, u32le } from '../util/bytes.js';
+import type { Clock } from '../util/clock.js';
 import type { ConnectionModel } from './connection.js';
 import type { ContactsModel, ContactView } from './contacts-model.js';
 import { contactTypeName, type ContactKind } from './messaging.js';
@@ -174,8 +175,8 @@ export interface CliEntry {
 export interface RemoteAdminOptions {
   /** Overrides the device's estimated timeout (+ grace) for every remote request. */
   timeoutMs?: number;
-  /** Clock for timestamps (tests). */
-  now?: () => number;
+  /** Time source for timestamps / round trips. Default: the connection's clock. */
+  clock?: Clock;
   /** Max CLI transcript entries kept per node. Default 500. */
   transcriptLimit?: number;
 }
@@ -423,7 +424,7 @@ export class RemoteNodeModel {
   }
 
   get #now(): number {
-    return (this.#deps.opts.now ?? Date.now)();
+    return (this.#deps.opts.clock ?? this.#deps.connection.clock).now();
   }
 
   get #reqOpts(): { timeoutMs?: number } {

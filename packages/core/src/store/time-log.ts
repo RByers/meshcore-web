@@ -86,6 +86,8 @@ export abstract class TimeLog<R extends LogRecordBase, Q extends LogQueryBase> {
     protected readonly db: IdbDatabase,
     protected readonly emitter: TypedEmitter<RadioStoreEvents>,
     retention: RetentionPolicy,
+    /** Host time (epoch ms) for default timestamps and pruning. */
+    protected readonly now: () => number,
   ) {
     this.retention = { ...retention };
   }
@@ -182,7 +184,7 @@ export abstract class TimeLog<R extends LogRecordBase, Q extends LogQueryBase> {
    * Applies a retention policy (default: `this.retention`). Age first, then count (oldest by `ts`
    * first). Returns the number of records removed.
    */
-  async prune(policy: RetentionPolicy = this.retention, now: number = Date.now()): Promise<number> {
+  async prune(policy: RetentionPolicy = this.retention, now: number = this.now()): Promise<number> {
     const { maxAgeMs, maxCount } = policy;
     const removed = await this.db.transaction(this.storeName, 'readwrite', async (t) => {
       const s = t.store<R>(this.storeName);
@@ -210,7 +212,7 @@ export abstract class TimeLog<R extends LogRecordBase, Q extends LogQueryBase> {
       ...(plan.filter ? { filter: plan.filter } : {}),
     });
     const items = records.map((r) => ({ ...r, bytes: toHex(r.bytes) }) as Exported<R>);
-    return { format: this.exportFormat, version: 1, exportedAt: Date.now(), count: items.length, items };
+    return { format: this.exportFormat, version: 1, exportedAt: this.now(), count: items.length, items };
   }
 
   /** Imports an export (object or JSON string). Validates everything before writing. */

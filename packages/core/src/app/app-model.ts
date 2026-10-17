@@ -9,6 +9,7 @@ import { DevicesRepo } from '../store/devices.js';
 import { RadioStore, type RadioStoreOptions } from '../store/radio-store.js';
 import type { ConversationType, DeviceRecord } from '../store/schema.js';
 import { basicScenario, type BasicScenario, type BasicScenarioOptions } from '../emulator/scenarios.js';
+import { systemClock, type Clock } from '../util/clock.js';
 import { ChannelsModel } from './channels-model.js';
 import { ChatModel, type ChatModelOptions } from './chat-model.js';
 import {
@@ -22,7 +23,7 @@ import { ContactsModel } from './contacts-model.js';
 import { ConversationsModel } from './conversations-model.js';
 import { DeviceSettingsModel, type GeolocationProvider } from './device-settings-model.js';
 import { AppSettingsModel } from './app-settings-model.js';
-import { NotificationsModel, type NotificationsTimers } from './notifications.js';
+import { NotificationsModel } from './notifications.js';
 import { MapModel } from './map-model.js';
 import { PositionEstimatorModel } from './position-estimator.js';
 import { PathModel } from './path-model.js';
@@ -44,9 +45,14 @@ export interface AppModelOptions {
   keyRange?: typeof IDBKeyRange;
   /** Global preferences (last used transport kind…); localStorage in the browser. */
   preferences?: PreferencesStore;
+  /** Client options; `clock` defaults to {@link AppModelOptions.clock}. */
   clientOptions?: CompanionClientOptions;
-  storeOptions?: Omit<RadioStoreOptions, 'factory' | 'keyRange'>;
-  notificationTimers?: NotificationsTimers;
+  storeOptions?: Omit<RadioStoreOptions, 'factory' | 'keyRange' | 'clock'>;
+  /**
+   * The one host time source (wall clock + timers) for every model, store and the client:
+   * toasts, cooldowns, timestamps, request timeouts. Default {@link systemClock}.
+   */
+  clock?: Clock;
   /** Current position for "use my location" in device settings (navigator.geolocation in the browser). */
   geolocation?: GeolocationProvider;
   /** Chat paging and DM retry tuning (tests use short timeouts). */
@@ -70,6 +76,8 @@ export function createEmulatorTransportFactory(
 }
 
 export class AppModel {
+  /** Host time + timers shared by every model (UI code reads `app.clock.now()`). */
+  readonly clock: Clock;
   readonly notifications: NotificationsModel;
   readonly connection: ConnectionModel;
 
@@ -97,8 +105,9 @@ export class AppModel {
 
   constructor(opts: AppModelOptions = {}) {
     this.#opts = opts;
+    this.clock = opts.clock ?? systemClock;
     this.#prefs = opts.preferences ?? memoryPreferences();
-    this.notifications = new NotificationsModel(opts.notificationTimers);
+    this.notifications = new NotificationsModel(this.clock);
     const factories: Partial<Record<ConnectionKind, TransportFactory>> = {
       emulator: opts.createEmulatorTransport ?? createEmulatorTransportFactory(),
     };
@@ -111,6 +120,7 @@ export class AppModel {
       devices: () => this.devicesRepo(),
       notifications: this.notifications,
       preferences: this.#prefs,
+      clock: this.clock,
       ...(opts.clientOptions ? { clientOptions: opts.clientOptions } : {}),
     });
     this.#offs.push(
@@ -121,8 +131,9 @@ export class AppModel {
     );
   }
 
-  #idbOpts(): { factory?: IDBFactory; keyRange?: typeof IDBKeyRange } {
+  #idbOpts(): { factory?: IDBFactory; keyRange?: typeof IDBKeyRange; clock: Clock } {
     return {
+      clock: this.clock,
       ...(this.#opts.indexedDB ? { factory: this.#opts.indexedDB } : {}),
       ...(this.#opts.keyRange ? { keyRange: this.#opts.keyRange } : {}),
     };
@@ -182,6 +193,7 @@ export class AppModel {
     return (this.#deviceSettings ??= new DeviceSettingsModel(this.connection, {
       ...(this.#opts.geolocation ? { geolocation: this.#opts.geolocation } : {}),
       storePrivateKey: () => this.appSettings.storePrivateKey.peek(),
+      clock: this.clock,
     }));
   }
 
@@ -191,17 +203,17 @@ export class AppModel {
   }
 
   get remoteAdmin(): RemoteAdminModel {
-    return (this.#remoteAdmin ??= new RemoteAdminModel(this.connection, { ...this.#opts.remoteAdmin, contacts: this.contacts }));
+    return (this.#remoteAdmin ??= new RemoteAdminModel(this.connection, { clock: this.clock, ...this.#opts.remoteAdmin, contacts: this.contacts }));
   }
 
   /** Node map: contacts with a location, own location, filters (Phase 12). */
   get map(): MapModel {
-    return (this.#map ??= new MapModel(this.contacts.views, this.connection.selfInfo, { preferences: this.#prefs, estimates: this.positions.estimates }));
+    return (this.#map ??= new MapModel(this.contacts.views, this.connection.selfInfo, { preferences: this.#prefs, now: () => this.clock.now(), estimates: this.positions.estimates }));
   }
 
   /** Approximate positions of contacts without a location, while the app setting is on (issue #7). */
   get positions(): PositionEstimatorModel {
-    return (this.#positions ??= new PositionEstimatorModel(this.connection, this.contacts, this.appSettings.approximatePositions).start());
+    return (this.#positions ??= new PositionEstimatorModel(this.connection, this.contacts, this.appSettings.approximatePositions, { clock: this.clock }).start());
   }
 
   /** Path views for the "N hops" links: contact / message / packet routes and their map layout (issue #2). */

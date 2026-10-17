@@ -302,7 +302,7 @@ export class McNodeAdminPage extends AppElement {
             <span data-field="path" title=${outPath.title || nothing}>${pathLabelView(outPath, v.path.kind === 'hops' ? { kind: 'contact', key } : null)}</span>
             ${v.directSnr !== undefined ? html` · <span data-field="direct-signal">direct SNR ${formatSnr(v.directSnr)}</span>` : nothing}
             · <a href=${hrefFor(`/contact/${v.key}`)} data-action="contact-info">info</a>
-            · last seen ${v.lastSeen ? formatRelative(v.lastSeen) : 'never'}
+            · last seen ${v.lastSeen ? formatRelative(v.lastSeen, this.app.clock.now()) : 'never'}
           </div>
           <div class="muted mono" title=${v.key}>${shortKey(v.key, 16)}</div>
         </div>
@@ -389,7 +389,7 @@ export class McNodeAdminPage extends AppElement {
         </form>
         <p data-field="login-state" class=${ls.state === 'failed' ? 'error' : node.loggedIn.value ? 'ok' : 'muted'} role=${ls.state === 'failed' ? 'alert' : nothing}>
           ${ls.state === 'failed' ? ls.reason : loginLabel(ls)}
-          ${ls.state === 'admin' || ls.state === 'guest' ? html` <span class="muted">since ${formatTime(ls.since)}</span>` : nothing}
+          ${ls.state === 'admin' || ls.state === 'guest' ? html` <span class="muted">since ${formatTime(ls.since, this.app.clock.now())}</span>` : nothing}
         </p>
         <p class="muted">The password is up to 15 characters. Wrong passwords get no reply, so a failed login takes a few seconds.</p>
       </section>
@@ -398,7 +398,7 @@ export class McNodeAdminPage extends AppElement {
         : html`<section class="card" data-card="status">
             <div class="row">
               <h3 style="flex: 1; margin: 0">Status</h3>
-              ${status ? html`<span class="muted">updated ${formatTime(status.at)}</span>` : nothing}
+              ${status ? html`<span class="muted">updated ${formatTime(status.at, this.app.clock.now())}</span>` : nothing}
               <button data-action="refresh-status" ?disabled=${this.#busy(node, 'status')} @click=${() => quiet(node.refreshStatus())}>
                 ${this.#busy(node, 'status') ? 'Refreshing…' : 'Refresh'}
               </button>
@@ -444,7 +444,7 @@ export class McNodeAdminPage extends AppElement {
       <section class="card" data-card="telemetry">
         <div class="row">
           <h3 style="flex: 1; margin: 0">Telemetry</h3>
-          ${t ? html`<span class="muted">updated ${formatTime(t.at)}</span>` : nothing}
+          ${t ? html`<span class="muted">updated ${formatTime(t.at, this.app.clock.now())}</span>` : nothing}
           <button data-action="refresh-telemetry" ?disabled=${this.#busy(node, 'telemetry')} @click=${() => quiet(node.refreshTelemetry())}>
             ${this.#busy(node, 'telemetry') ? 'Requesting…' : t ? 'Refresh' : 'Request'}
           </button>

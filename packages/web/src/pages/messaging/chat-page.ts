@@ -503,7 +503,7 @@ export class McChatPage extends AppElement {
           : html`<span data-field="text">${m.text}</span>`}
       </div>
       <div class="meta">
-        <time datetime=${new Date(m.receivedAt).toISOString()}>${formatTime(m.receivedAt)}</time>
+        <time datetime=${new Date(m.receivedAt).toISOString()}>${formatTime(m.receivedAt, this.app.clock.now())}</time>
         ${m.direction === 'in' ? this.#signal(m) : nothing}
         ${m.compressed ? html`<span data-field="smaz" title="Sent over the air SMAZ-compressed">SMAZ</span>` : nothing} ${this.#status(m)}
         ${chat.canReact(m)
@@ -576,7 +576,7 @@ export class McChatPage extends AppElement {
     const path = v ? this.app.contacts.outPathLabel(v, this.app.appSettings.pathNames.value) : undefined;
     const parts: (string | TemplateResult)[] = [path ? pathLabelView(path, v?.path.kind === 'hops' ? { kind: 'contact', key: this.key } : null) : ''];
     if (v?.directSnr !== undefined) parts.push(`direct SNR ${formatSnr(v.directSnr)}`);
-    if (c.lastSeen) parts.push(`seen ${formatRelative(c.lastSeen)}`);
+    if (c.lastSeen) parts.push(`seen ${formatRelative(c.lastSeen, this.app.clock.now())}`);
     return dotJoin(parts);
   }
 

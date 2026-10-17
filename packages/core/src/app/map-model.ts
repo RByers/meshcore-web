@@ -8,6 +8,7 @@
  */
 
 import type { SelfInfo } from '../protocol/types.js';
+import { systemClock } from '../util/clock.js';
 import type { ContactView } from './contacts-model.js';
 import type { PreferencesStore } from './connection.js';
 import type { ContactKind } from './messaging.js';
@@ -55,7 +56,7 @@ export interface MapMarker extends LatLon {
 
 export interface MapModelOptions {
   preferences?: PreferencesStore;
-  /** Clock for the max-age filter (default Date.now). */
+  /** Clock for the max-age filter (default {@link systemClock}; AppModel passes its clock). */
   now?: () => number;
   /** Approximate positions of contacts without a location (empty / absent = none shown). */
   estimates?: ReadonlySignal<readonly PositionEstimate[]>;
@@ -107,7 +108,7 @@ export class MapModel {
     opts: MapModelOptions = {},
   ) {
     this.#prefs = opts.preferences;
-    this.#clock = opts.now ?? Date.now;
+    this.#clock = opts.now ?? (() => systemClock.now());
     this.#now.value = this.#clock();
     const storedKinds = this.#readKinds();
     this.#kinds = signal<ReadonlySet<ContactKind>>(storedKinds);

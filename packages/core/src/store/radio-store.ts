@@ -3,6 +3,7 @@
 import type { Command, DeviceFrame } from '../protocol/types.js';
 import { decodeFrame } from '../protocol/decode.js';
 import { tryDecodeCommand } from '../protocol/decode-command.js';
+import { systemClock, type Clock } from '../util/clock.js';
 import { TypedEmitter } from '../util/events.js';
 import { deleteDatabase, openDatabase, type IdbDatabase } from './idb.js';
 import { RADIO_DB_MIGRATIONS, RADIO_DB_VERSION, pubKeyHex, radioDbName, type FrameDirection, type FrameRecord, type PacketRecord } from './schema.js';
@@ -45,12 +46,15 @@ export class RadioStore {
     readonly pubKey: string,
     readonly db: IdbDatabase,
     retention: Partial<Record<LogStoreName, RetentionPolicy>>,
+    /** Host time for default timestamps and pruning (from {@link StoreOpenOptions.clock}). */
+    readonly clock: Clock,
   ) {
-    this.frames = new FrameLog(db, this.events, { ...DEFAULT_RETENTION.frames, ...retention.frames });
-    this.packets = new PacketLog(db, this.events, { ...DEFAULT_RETENTION.packets, ...retention.packets });
-    this.contacts = new ContactsRepo(db, this.events);
-    this.messages = new MessagesRepo(db, this.events);
-    this.channels = new ChannelsRepo(db, this.events);
+    const now = (): number => clock.now();
+    this.frames = new FrameLog(db, this.events, { ...DEFAULT_RETENTION.frames, ...retention.frames }, now);
+    this.packets = new PacketLog(db, this.events, { ...DEFAULT_RETENTION.packets, ...retention.packets }, now);
+    this.contacts = new ContactsRepo(db, this.events, now);
+    this.messages = new MessagesRepo(db, this.events, now);
+    this.channels = new ChannelsRepo(db, this.events, now);
     this.settings = new SettingsRepo(db, this.events);
   }
 
@@ -64,7 +68,7 @@ export class RadioStore {
       ...(opts.factory ? { factory: opts.factory } : {}),
       ...(opts.keyRange ? { keyRange: opts.keyRange } : {}),
     });
-    return new RadioStore(hex, db, opts.retention ?? {});
+    return new RadioStore(hex, db, opts.retention ?? {}, opts.clock ?? systemClock);
   }
 
   /** Deletes a radio's database entirely. */
@@ -91,7 +95,7 @@ export class RadioStore {
         decoded = null;
       }
     }
-    const ts = opts.ts ?? Date.now();
+    const ts = opts.ts ?? this.clock.now();
     const frame = await this.frames.append({ direction, bytes, ts, ...(decoded ? { kind: decoded.kind } : {}) });
     let packet: PacketRecord | null = null;
     if (decoded) packet = await this.packets.appendFromFrame(decoded, { ts, sourceFrameId: frame.id });
@@ -122,7 +126,7 @@ export class RadioStore {
   }
 
   /** Applies both logs' retention policies. */
-  async prune(now = Date.now()): Promise<{ frames: number; packets: number }> {
+  async prune(now = this.clock.now()): Promise<{ frames: number; packets: number }> {
     const frames = await this.frames.prune(undefined, now);
     const packets = await this.packets.prune(undefined, now);
     return { frames, packets };

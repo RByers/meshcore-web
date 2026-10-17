@@ -9,7 +9,7 @@ import { TimeLog, reqNumber, reqOneOf, reqString, type LogQueryBase, type QueryP
 export interface FrameInput {
   direction: FrameDirection;
   bytes: Uint8Array;
-  /** Default `Date.now()`. */
+  /** Default: the store's clock. */
   ts?: number;
   /** Decoded frame / command kind; derived from the bytes when omitted. */
   kind?: string;
@@ -35,7 +35,7 @@ export function frameKind(direction: FrameDirection, bytes: Uint8Array): string 
   }
 }
 
-export function frameRecordFromInput(input: FrameInput, now = Date.now()): Omit<FrameRecord, 'id'> {
+export function frameRecordFromInput(input: FrameInput, now: number): Omit<FrameRecord, 'id'> {
   return {
     ts: input.ts ?? now,
     direction: input.direction,
@@ -56,13 +56,13 @@ export class FrameLog extends TimeLog<FrameRecord, FrameQuery> {
   }
 
   async append(input: FrameInput): Promise<FrameRecord> {
-    const [rec] = await this.insert([frameRecordFromInput(input)]);
+    const [rec] = await this.insert([frameRecordFromInput(input, this.now())]);
     return rec!;
   }
 
   /** Appends several frames in one transaction. */
   appendMany(inputs: readonly FrameInput[]): Promise<FrameRecord[]> {
-    const now = Date.now();
+    const now = this.now();
     return this.insert(inputs.map((i) => frameRecordFromInput(i, now)));
   }
 

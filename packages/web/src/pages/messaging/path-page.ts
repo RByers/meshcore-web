@@ -268,7 +268,7 @@ export class McPathPage extends AppElement {
           `${e.successes}/${e.attempts} delivered`,
           e.failures ? `${e.failures} failed` : '',
           e.roundTripMs !== undefined && e.lastResult === 'success' ? `${formatDuration(e.roundTripMs)} round trip` : '',
-          e.lastUsed ? `used ${formatRelative(e.lastUsed)}` : '',
+          e.lastUsed ? `used ${formatRelative(e.lastUsed, this.app.clock.now())}` : '',
           e.observed && e.attempts === 0 ? 'learnt from the radio' : '',
         ].filter(Boolean);
         return html`<li data-history=${h.id} ?data-current=${h.current}>

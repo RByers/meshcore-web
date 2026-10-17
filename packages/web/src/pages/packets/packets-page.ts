@@ -412,7 +412,7 @@ export class McPacketsPage extends AppElement {
       const filtered = this.tab === 'packets' ? Object.keys(this.#log.packets.filter.peek()).length > 0 : Object.keys(this.#log.frames.filter.peek()).length > 0;
       const data = this.tab === 'packets' ? await this.#log.exportPackets({ filtered }) : await this.#log.exportFrames({ filtered });
       const text = JSON.stringify(data, jsonReplacer, 1);
-      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const stamp = new Date(this.app.clock.now()).toISOString().replace(/[:.]/g, '-').slice(0, 19);
       const filename = `meshcore-${this.tab}-${stamp}.json`;
       this.dispatchEvent(new CustomEvent<ExportEventDetail>('mc-export', { detail: { filename, text }, bubbles: true, composed: true }));
       const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
@@ -674,7 +674,7 @@ export class McPacketsPage extends AppElement {
               @click=${() => void this.#open('packets', r.id)}
               @keydown=${(e: KeyboardEvent) => this.#rowKey(e, 'packets', r.id)}
             >
-              <td class="mono">${formatLogTime(rec.ts)}</td>
+              <td class="mono">${formatLogTime(rec.ts, this.app.clock.now())}</td>
               <td class="dir-${rec.direction}" data-dir=${rec.direction} title=${rec.direction === 'rx' ? 'received: heard by the radio' : 'sent: transmitted at this app\'s request'}>
                 ${rec.direction === 'rx' ? '↓ rx' : '↑ tx'}
               </td>
@@ -718,7 +718,7 @@ export class McPacketsPage extends AppElement {
               @click=${() => void this.#open('frames', r.id)}
               @keydown=${(e: KeyboardEvent) => this.#rowKey(e, 'frames', r.id)}
             >
-              <td class="mono">${formatLogTime(rec.ts)}</td>
+              <td class="mono">${formatLogTime(rec.ts, this.app.clock.now())}</td>
               <td class="dir-${rec.direction}" title=${rec.direction === 'out' ? 'host → device' : 'device → host'}>${rec.direction === 'out' ? '→ dev' : '← dev'}</td>
               <td><span class="mono">${rec.code >= 0 ? rec.code.toString(16).padStart(2, '0') : '--'}</span> ${r.name}</td>
               <td class="num">${rec.size}</td>

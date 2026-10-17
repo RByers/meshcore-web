@@ -161,7 +161,7 @@ export class CapturePipeline {
       input.convType === 'channel'
         ? (input.senderName ?? 'unknown')
         : ((await store.contacts.get(input.convKey))?.name || input.senderPrefix || input.convKey.slice(0, 12));
-    await store.messages.addReaction(target.id, { emoji: r.emoji, sender, at: input.receivedAt ?? Date.now() });
+    await store.messages.addReaction(target.id, { emoji: r.emoji, sender, at: input.receivedAt ?? this.client.clock.now() });
     return true;
   }
 

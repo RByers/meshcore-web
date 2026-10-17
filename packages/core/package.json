@@ -40,6 +40,11 @@
       "types": "./dist/util/deferred.d.ts",
       "import": "./dist/util/deferred.js"
     },
+    "./util/clock": {
+      "source": "./src/util/clock.ts",
+      "types": "./dist/util/clock.d.ts",
+      "import": "./dist/util/clock.js"
+    },
     "./protocol": {
       "source": "./src/protocol/index.ts",
       "types": "./dist/protocol/index.d.ts",

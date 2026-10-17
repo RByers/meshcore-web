@@ -249,7 +249,7 @@ export class McApp extends AppElement {
     );
     void this.app.refreshDevices();
     this.#offs.push(bindTheme(this.app));
-    this.#offs.push(installErrorBoundary(window, this.app.notifications));
+    this.#offs.push(installErrorBoundary(window, this.app.notifications, { now: () => this.app.clock.now() }));
     // "N hops" links anywhere below open the shared path view
     const onShowPath = (e: CustomEvent): void => {
       e.stopPropagation();

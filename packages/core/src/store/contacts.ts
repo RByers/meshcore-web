@@ -16,6 +16,8 @@ export class ContactsRepo {
   constructor(
     private readonly db: IdbDatabase,
     private readonly emitter: TypedEmitter<RadioStoreEvents>,
+    /** Host time (epoch ms) for default timestamps. */
+    private readonly now: () => number,
   ) {}
 
   get(pubKey: Uint8Array | string): Promise<ContactRecord | undefined> {
@@ -41,7 +43,7 @@ export class ContactsRepo {
    * Inserts or updates a contact from the device, preserving local fields. `lastSeen` advances
    * to the advert time if that is newer.
    */
-  async upsertFromDevice(contact: Contact, now = Date.now()): Promise<ContactRecord> {
+  async upsertFromDevice(contact: Contact, now = this.now()): Promise<ContactRecord> {
     const key = pubKeyHex(contact.pubKey);
     const rec = await this.db.transaction(STORE.contacts, 'readwrite', async (t) => {
       const s = t.store<ContactRecord>(STORE.contacts);
@@ -59,7 +61,7 @@ export class ContactsRepo {
    * GET_CONTACTS sync), contacts not in the list are kept but marked `onDevice: false`.
    */
   async syncFromDevice(contacts: readonly Contact[], opts: { full?: boolean; now?: number } = {}): Promise<ContactRecord[]> {
-    const now = opts.now ?? Date.now();
+    const now = opts.now ?? this.now();
     const changed = await this.db.transaction(STORE.contacts, 'readwrite', async (t) => {
       const s = t.store<ContactRecord>(STORE.contacts);
       const out: ContactRecord[] = [];
@@ -93,7 +95,7 @@ export class ContactsRepo {
       const s = t.store<ContactRecord>(STORE.contacts);
       const prev = await s.get(key);
       if (!prev) return undefined;
-      const next: ContactRecord = { ...prev, ...definedOnly(patch), updatedAt: Date.now() };
+      const next: ContactRecord = { ...prev, ...definedOnly(patch), updatedAt: this.now() };
       await s.put(next);
       return next;
     });
@@ -105,7 +107,7 @@ export class ContactsRepo {
   }
 
   /** Records that we heard from this contact at `ts` (only moves forward). */
-  async touch(pubKey: Uint8Array | string, ts = Date.now()): Promise<ContactRecord | undefined> {
+  async touch(pubKey: Uint8Array | string, ts = this.now()): Promise<ContactRecord | undefined> {
     const prev = await this.get(pubKey);
     if (!prev || prev.lastSeen >= ts) return prev;
     return this.updateLocal(pubKey, { lastSeen: ts });
@@ -118,7 +120,7 @@ export class ContactsRepo {
       const s = t.store<ContactRecord>(STORE.contacts);
       const prev = await s.get(key);
       if (!prev) return undefined;
-      const next = { ...prev, onDevice: false, updatedAt: Date.now() };
+      const next = { ...prev, onDevice: false, updatedAt: this.now() };
       await s.put(next);
       return next;
     });

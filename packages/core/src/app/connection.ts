@@ -13,6 +13,7 @@ import { CompanionClient } from '../client/companion-client.js';
 import type { CompanionClientOptions } from '../client/types.js';
 import type { BattAndStorage, DeviceInfo, SelfInfo } from '../protocol/types.js';
 import type { FrameTransport, TransportInfo } from '../transport/transport.js';
+import { systemClock, type Clock } from '../util/clock.js';
 import { TypedEmitter } from '../util/events.js';
 import type { DevicesRepo } from '../store/devices.js';
 import type { RadioStore } from '../store/radio-store.js';
@@ -72,7 +73,10 @@ export interface ConnectionModelDeps {
   devices: () => Promise<DevicesRepo | null>;
   notifications: NotificationsModel;
   preferences?: PreferencesStore;
+  /** Default client options; `clock` defaults to {@link ConnectionModelDeps.clock}. */
   clientOptions?: CompanionClientOptions;
+  /** Host time + timers for the session (client, capture, device list). Default {@link systemClock}. */
+  clock?: Clock;
 }
 
 export interface ConnectionEvents {
@@ -141,6 +145,9 @@ export class ConnectionModel {
   /** Public key hex of the connected radio. */
   readonly pubKey: ReadonlySignal<string | null> = computed(() => this.#store.value?.pubKey ?? null);
 
+  /** Host time + timers shared by the client and the feature models of this connection. */
+  readonly clock: Clock;
+
   #session: Session | null = null;
   #seq = 0;
   /** Set by {@link expectDisconnect}: the session whose link loss is intentional (reboot…). */
@@ -148,6 +155,7 @@ export class ConnectionModel {
   #teardown: Promise<void> = Promise.resolve();
 
   constructor(private readonly deps: ConnectionModelDeps) {
+    this.clock = deps.clock ?? systemClock;
     const stored = deps.preferences?.getItem(PREF_LAST_KIND);
     this.#lastKind = signal<ConnectionKind | null>(isConnectionKind(stored) ? stored : null);
     this.lastKind = this.#lastKind.readonly;
@@ -199,7 +207,7 @@ export class ConnectionModel {
       this.#transportInfo.value = transport.info;
 
       this.#phase.value = 'handshaking';
-      const client = new CompanionClient(this.deps.clientOptions);
+      const client = new CompanionClient({ clock: this.clock, ...this.deps.clientOptions });
       s.client = client;
       const devices = await this.deps.devices().catch(() => null);
       s.pipeline = new CapturePipeline(client, {

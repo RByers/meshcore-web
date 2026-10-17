@@ -16,7 +16,7 @@ export function shortKey(hex: string, n = 8): string {
   return hex.length > n ? `${hex.slice(0, n)}…` : hex;
 }
 
-export function formatRelative(ts: number, now = Date.now()): string {
+export function formatRelative(ts: number, now: number): string {
   const s = Math.round((now - ts) / 1000);
   if (s < 60) return 'just now';
   if (s < 3600) return `${Math.floor(s / 60)} min ago`;
@@ -30,7 +30,7 @@ export function batteryPercent(mv: number): number {
 }
 
 /** Clock time of an epoch-ms timestamp ("14:05"), with the date when not today. */
-export function formatTime(ts: number, now = Date.now()): string {
+export function formatTime(ts: number, now: number): string {
   const d = new Date(ts);
   const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
   return new Date(now).toDateString() === d.toDateString() ? time : `${d.toLocaleDateString()} ${time}`;

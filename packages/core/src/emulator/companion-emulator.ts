@@ -419,7 +419,7 @@ export class CompanionEmulator {
 
   /** Creates a loopback pair, attaches the device end and returns the (unconnected) host end. */
   createLoopbackTransport(options: LoopbackOptions = {}): FrameTransport {
-    const [host, device] = createLoopbackPair({ names: ['Emulator', 'Emulator (device)'], ...options });
+    const [host, device] = createLoopbackPair({ names: ['Emulator', 'Emulator (device)'], clock: this.clock, ...options });
     this.attach(device);
     return host;
   }

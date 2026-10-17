@@ -34,7 +34,7 @@ export class McMessagesPage extends AppElement {
                     <span class="row-title">
                       <span class="name">${c.name}</span>
                       ${c.muted ? html`<span title="Muted" aria-label="Muted">🔕</span>` : nothing}
-                      <span class="when">${c.lastActivity ? formatRelative(c.lastActivity) : ''}</span>
+                      <span class="when">${c.lastActivity ? formatRelative(c.lastActivity, this.app.clock.now()) : ''}</span>
                     </span>
                     <span class="preview">${c.lastMessage ? messagePreview(c.lastMessage) : 'No messages yet'}</span>
                   </span>

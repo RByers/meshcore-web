@@ -4,6 +4,7 @@
  * the same message within `dedupeMs` are logged but not toasted again.
  */
 import { errorMessage, type NotificationsModel } from '@meshcore-web/core/app';
+import { systemClock } from '@meshcore-web/core/util/clock';
 
 /** Browser noise that is not an app failure. */
 const IGNORED = [/ResizeObserver loop/i];
@@ -16,7 +17,7 @@ export interface ErrorBoundaryOptions {
 export function installErrorBoundary(
   target: EventTarget,
   notifications: NotificationsModel,
-  { dedupeMs = 10_000, now = () => Date.now() }: ErrorBoundaryOptions = {},
+  { dedupeMs = 10_000, now = systemClock.now }: ErrorBoundaryOptions = {},
 ): () => void {
   const lastShown = new Map<string, number>();
 

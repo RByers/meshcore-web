@@ -1,6 +1,7 @@
 /** Global list of known radios (`meshcore-web:devices`). */
 
 import type { DeviceInfo, SelfInfo } from '../protocol/types.js';
+import { systemClock, type Clock } from '../util/clock.js';
 import { TypedEmitter } from '../util/events.js';
 import { deleteDatabase, openDatabase, type IdbDatabase } from './idb.js';
 import {
@@ -21,6 +22,8 @@ export interface StoreOpenOptions {
   factory?: IDBFactory;
   /** Defaults to `globalThis.IDBKeyRange`. */
   keyRange?: typeof IDBKeyRange;
+  /** Host time for record timestamps. Default {@link systemClock}. */
+  clock?: Clock;
 }
 
 export interface DeviceConnectInput {
@@ -34,7 +37,10 @@ export interface DeviceConnectInput {
 export class DevicesRepo {
   readonly events = new TypedEmitter<DevicesEvents>();
 
-  private constructor(readonly db: IdbDatabase) {}
+  private constructor(
+    readonly db: IdbDatabase,
+    readonly clock: Clock,
+  ) {}
 
   static async open(opts: StoreOpenOptions = {}): Promise<DevicesRepo> {
     const db = await openDatabase({
@@ -44,7 +50,7 @@ export class DevicesRepo {
       ...(opts.factory ? { factory: opts.factory } : {}),
       ...(opts.keyRange ? { keyRange: opts.keyRange } : {}),
     });
-    return new DevicesRepo(db);
+    return new DevicesRepo(db, opts.clock ?? systemClock);
   }
 
   get(pubKey: Uint8Array | string): Promise<DeviceRecord | undefined> {
@@ -57,7 +63,7 @@ export class DevicesRepo {
   }
 
   /** Records a connection (creates the radio on first connect; merges given fields). */
-  async recordConnection(input: DeviceConnectInput, now = Date.now()): Promise<DeviceRecord> {
+  async recordConnection(input: DeviceConnectInput, now = this.clock.now()): Promise<DeviceRecord> {
     const key = pubKeyHex(input.pubKey);
     const rec = await this.db.transaction(DEVICES_STORE, 'readwrite', async (t) => {
       const s = t.store<DeviceRecord>(DEVICES_STORE);

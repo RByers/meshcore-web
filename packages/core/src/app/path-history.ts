@@ -202,7 +202,7 @@ export class ContactPathsModel extends StoreBoundModel implements DmPathRecorder
       if ((r.outPathLen & 0xff) === PATH_LEN_UNKNOWN || !decodePathLen(r.outPathLen).valid) return;
       const id = pathId(r.outPathLen, r.outPath);
       if (r.pathHistory?.some((x) => pathId(x.pathLen, x.path) === id)) return;
-      void this.#mutate(r.key, r.outPathLen, r.outPath, (x) => ({ ...x, observed: x.attempts === 0 ? true : x.observed, lastUsed: Date.now() }), { touch: true });
+      void this.#mutate(r.key, r.outPathLen, r.outPath, (x) => ({ ...x, observed: x.attempts === 0 ? true : x.observed, lastUsed: this.connection.clock.now() }), { touch: true });
     });
   }
 
@@ -282,7 +282,7 @@ export class ContactPathsModel extends StoreBoundModel implements DmPathRecorder
         lon: c.lon,
       });
     }
-    await this.#mutate(contactKey, pathLen, bytes, (x) => ({ ...x, lastUsed: Date.now(), observed: false }), { touch: true });
+    await this.#mutate(contactKey, pathLen, bytes, (x) => ({ ...x, lastUsed: this.connection.clock.now(), observed: false }), { touch: true });
     await this.connection.capture?.idle();
     await this.contacts.reload();
   }
@@ -305,7 +305,7 @@ export class ContactPathsModel extends StoreBoundModel implements DmPathRecorder
     const used = new Map<string, Used>();
     let lastId: string | undefined;
     let outcome: 'pending' | 'delivered' | 'failed' = 'pending';
-    const now = (): number => this.connection.client.peek()?.clock.now() ?? Date.now();
+    const now = (): number => this.connection.clock.now();
     const record = (id: string, result: PathResult | 'attempt' | 'late', rtt?: number): void => {
       const u = used.get(id);
       if (!u) return;

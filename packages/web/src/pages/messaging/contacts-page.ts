@@ -167,7 +167,7 @@ export class McContactsPage extends AppElement {
   }
 
   #row(v: ContactView) {
-    const now = Date.now();
+    const now = this.app.clock.now();
     const path = this.app.contacts.outPathLabel(v, this.app.appSettings.pathNames.value);
     const meta = [
       path.label,

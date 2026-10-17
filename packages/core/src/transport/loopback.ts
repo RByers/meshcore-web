@@ -1,4 +1,5 @@
 import { MAX_FRAME_SIZE } from '../framing/serial-framer.js';
+import { systemClock, type Clock } from '../util/clock.js';
 import { BaseTransport, checkFrameSize } from './base.js';
 import type { FrameTransport, TransportInfo } from './transport.js';
 
@@ -9,6 +10,8 @@ export interface LoopbackOptions {
   maxFrameLength?: number;
   /** Display names for the two ends. */
   names?: [string, string];
+  /** Timers for `latencyMs` delivery. Default {@link systemClock}. */
+  clock?: Clock;
 }
 
 /**
@@ -22,6 +25,7 @@ export class LoopbackEndpoint extends BaseTransport implements FrameTransport {
   readonly #name: string;
   readonly #latencyMs: number;
   readonly #max: number;
+  readonly #clock: Clock;
   /** Bumped on disconnect so in-flight deliveries from a previous session are dropped. */
   #epoch = 0;
 
@@ -30,6 +34,7 @@ export class LoopbackEndpoint extends BaseTransport implements FrameTransport {
     this.#name = name;
     this.#latencyMs = options.latencyMs ?? 0;
     this.#max = options.maxFrameLength ?? MAX_FRAME_SIZE;
+    this.#clock = options.clock ?? systemClock;
   }
 
   get info(): TransportInfo {
@@ -61,7 +66,7 @@ export class LoopbackEndpoint extends BaseTransport implements FrameTransport {
     const deliver = (): void => {
       if (epoch === this.#epoch && this.state === 'connected') this.emitSafe('frame', frame);
     };
-    if (latencyMs > 0) setTimeout(deliver, latencyMs);
+    if (latencyMs > 0) this.#clock.setTimeout(deliver, latencyMs);
     else queueMicrotask(deliver);
   }
 }

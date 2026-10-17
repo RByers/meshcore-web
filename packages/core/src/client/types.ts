@@ -29,20 +29,13 @@ import type {
   TraceDataPush,
 } from '../protocol/types.js';
 import type { TelemetryModes } from '../protocol/constants.js';
+import { systemClock, type Clock } from '../util/clock.js';
 
-/** Time source + timers. Structurally compatible with the emulator's `EmulatorClock`. */
-export interface ClientClock {
-  /** Milliseconds since the Unix epoch. */
-  now(): number;
-  setTimeout(fn: () => void, ms: number): unknown;
-  clearTimeout(handle: unknown): void;
-}
+/** @deprecated alias kept for existing imports; use {@link Clock}. */
+export type ClientClock = Clock;
 
-export const systemClientClock: ClientClock = {
-  now: () => Date.now(),
-  setTimeout: (fn, ms) => globalThis.setTimeout(fn, ms),
-  clearTimeout: (h) => globalThis.clearTimeout(h as ReturnType<typeof setTimeout>),
-};
+/** @deprecated alias; use {@link systemClock}. */
+export const systemClientClock: Clock = systemClock;
 
 export type ClientState = 'disconnected' | 'connecting' | 'connected';
 
@@ -56,7 +49,8 @@ export interface CompanionClientOptions {
   appVersion?: number;
   /** app_target_ver sent in DEVICE_QUERY (default 3 → V3 message frames with SNR). */
   protocolVersion?: number;
-  clock?: ClientClock;
+  /** Time source + timers (default {@link systemClock}). */
+  clock?: Clock;
   /** Per-command reply timeout (default 5000 ms). For GET_CONTACTS it is an inactivity timeout. */
   requestTimeoutMs?: number;
   /**

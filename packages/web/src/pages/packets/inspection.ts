@@ -8,7 +8,7 @@ import { hopsLink } from '../../components/path-dialog.js';
 import { pathHops } from '../../components/node-link.js';
 
 /** "14:05:09.123" (local), with the date when not today. */
-export function formatLogTime(ts: number, now = Date.now()): string {
+export function formatLogTime(ts: number, now: number): string {
   const d = new Date(ts);
   const pad = (n: number, w = 2): string => String(n).padStart(w, '0');
   const t = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;

@@ -70,7 +70,7 @@ export interface PacketQuery extends LogQueryBase {
 const PACKET_SOURCES = ['logRxData', 'rawData', 'traceData', 'sent', 'import', 'other'] as const;
 
 /** Derives the stored record (minus id) from an input: parses the envelope and hashes it. */
-export async function packetRecordFromInput(input: PacketInput, now = Date.now()): Promise<Omit<PacketRecord, 'id'>> {
+export async function packetRecordFromInput(input: PacketInput, now: number): Promise<Omit<PacketRecord, 'id'>> {
   const format = input.format ?? 'packet';
   let routeType = input.routeType ?? -1;
   let payloadType = input.payloadType ?? -1;
@@ -315,14 +315,14 @@ export class PacketLog extends TimeLog<PacketRecord, PacketQuery> {
   }
 
   async append(input: PacketInput): Promise<PacketRecord> {
-    const rec = await packetRecordFromInput(input);
+    const rec = await packetRecordFromInput(input, this.now());
     const [out] = await this.insert([rec]);
     return out!;
   }
 
   /** Appends several packets in one transaction (hashes are computed first). */
   async appendMany(inputs: readonly PacketInput[]): Promise<PacketRecord[]> {
-    const now = Date.now();
+    const now = this.now();
     const recs = await Promise.all(inputs.map((i) => packetRecordFromInput(i, now)));
     return this.insert(recs);
   }

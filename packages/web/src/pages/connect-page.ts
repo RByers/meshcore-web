@@ -226,7 +226,7 @@ export class McConnectPage extends AppElement {
         <div class="name">${d.name || 'Unnamed radio'}</div>
         <div class="muted">
           <span class="mono" title=${d.pubKey}>${shortKey(d.pubKey)}</span>
-          · ${kind ? CONNECTION_KIND_LABEL[kind] : d.transport} · ${formatRelative(d.lastConnected)}
+          · ${kind ? CONNECTION_KIND_LABEL[kind] : d.transport} · ${formatRelative(d.lastConnected, this.app.clock.now())}
         </div>
       </div>
       <button

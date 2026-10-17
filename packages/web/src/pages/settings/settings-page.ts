@@ -601,7 +601,7 @@ export class McSettingsPage extends AppElement {
 
   #advert(): TemplateResult {
     const ds = this.#ds;
-    const wait = ds.advertCooldownRemaining(Date.now());
+    const wait = ds.advertCooldownRemaining(this.app.clock.now());
     void ds.advertCooldownUntil.value; // re-render when the cooldown ends
     const last = ds.lastAdvert.value;
     const busy = this.#busy('advert');
@@ -635,7 +635,7 @@ export class McSettingsPage extends AppElement {
     const t = ds.deviceTime.value;
     const stats = ds.stats.value;
     const fmt = this.app.appSettings;
-    const nowDevice = t ? t.deviceSecs * 1000 + (Date.now() - t.at) : null;
+    const nowDevice = t ? t.deviceSecs * 1000 + (this.app.clock.now() - t.at) : null;
     const pin = ds.pin.value;
     return html`<section class="card" data-section="device" aria-labelledby="s-device">
       <h2 id="s-device">Device</h2>

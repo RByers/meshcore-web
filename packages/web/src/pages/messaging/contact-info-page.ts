@@ -187,11 +187,11 @@ export class McContactInfoPage extends AppElement {
           <dt>Direct signal</dt>
           <dd data-field="direct-signal">
             ${v.directSnr !== undefined
-              ? html`${formatSnr(v.directSnr)}${v.directSnrAt ? html` <span class="muted">(${formatRelative(v.directSnrAt)})</span>` : nothing}`
+              ? html`${formatSnr(v.directSnr)}${v.directSnrAt ? html` <span class="muted">(${formatRelative(v.directSnrAt, this.app.clock.now())})</span>` : nothing}`
               : html`<span class="muted">not heard directly</span>`}
           </dd>
           <dt>Last seen</dt>
-          <dd data-field="last-seen">${v.lastSeen ? formatRelative(v.lastSeen) : 'never'}</dd>
+          <dd data-field="last-seen">${v.lastSeen ? formatRelative(v.lastSeen, this.app.clock.now()) : 'never'}</dd>
           ${located ? html`<dt>Location</dt><dd data-field="location">${c.lat.toFixed(5)}, ${c.lon.toFixed(5)}</dd>` : nothing}
           ${c.notes ? html`<dt>Notes</dt><dd data-field="notes">${c.notes}</dd>` : nothing}
         </dl>

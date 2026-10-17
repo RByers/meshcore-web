@@ -22,6 +22,7 @@ import type { SelfInfo } from '../protocol/types.js';
 import type { RadioStore } from '../store/radio-store.js';
 import type { ContactRecord, MessageRecord, PacketRecord } from '../store/schema.js';
 import { bytesEqual, toHex } from '../util/bytes.js';
+import type { Clock } from '../util/clock.js';
 import type { ConnectionModel } from './connection.js';
 import type { ContactsModel } from './contacts-model.js';
 import { destinationPoint, haversineMeters, hasLocation, type LatLon } from './geo.js';
@@ -68,8 +69,8 @@ export interface EstimateOptions {
   evidence: readonly AdjacencyEvidence[];
   /** This radio: anchors zero-hop sightings when it has a location. */
   self?: (Pick<SelfInfo, 'pubKey' | 'name'> & LatLon) | null;
-  /** Clock for `maxAgeMs` (default Date.now). */
-  now?: number;
+  /** Current time (epoch ms) for `maxAgeMs`. */
+  now: number;
   /** Packet / message sightings older than this are ignored (default 7 days; out_paths never expire). */
   maxAgeMs?: number;
   /** Distance of an estimate from its repeater (default {@link ESTIMATE_DISTANCE_M}). */
@@ -209,7 +210,7 @@ function forwards(c: EstimatorContact): boolean {
  */
 export function estimatePositions(o: EstimateOptions): PositionEstimate[] {
   const { contacts, evidence } = o;
-  const now = o.now ?? Date.now();
+  const now = o.now;
   const maxAge = o.maxAgeMs ?? ESTIMATE_MAX_AGE_MS;
   const dist = o.distanceM ?? ESTIMATE_DISTANCE_M;
   const byKey = new Map(contacts.map((c) => [c.key.toLowerCase(), c]));
@@ -284,8 +285,8 @@ export function estimatePositions(o: EstimateOptions): PositionEstimate[] {
 }
 
 export interface PositionEstimatorOptions {
-  /** Clock (default Date.now). */
-  now?: () => number;
+  /** Time source for the lookback (default: the connection's clock). */
+  clock?: Clock;
   /** Lookback for packets / messages (default 7 days). */
   maxAgeMs?: number;
   /** Most recent packets loaded from the log (default 500, plus up to as many adverts). */
@@ -307,7 +308,7 @@ const MAX_EVIDENCE = 3000;
 export class PositionEstimatorModel extends StoreBoundModel {
   readonly #evidence = signal<ReadonlyMap<string, AdjacencyEvidence>>(new Map());
   readonly #enabled: ReadonlySignal<boolean>;
-  readonly #clock: () => number;
+  readonly #clock: Clock;
   readonly #maxAgeMs: number;
   readonly #packetLimit: number;
   readonly #messageLimit: number;
@@ -324,7 +325,7 @@ export class PositionEstimatorModel extends StoreBoundModel {
   ) {
     super(connection);
     this.#enabled = enabled;
-    this.#clock = opts.now ?? Date.now;
+    this.#clock = opts.clock ?? connection.clock;
     this.#maxAgeMs = opts.maxAgeMs ?? ESTIMATE_MAX_AGE_MS;
     this.#packetLimit = opts.packetLimit ?? 500;
     this.#messageLimit = opts.messageLimit ?? 50;
@@ -338,7 +339,7 @@ export class PositionEstimatorModel extends StoreBoundModel {
         if (e) evidence.push(e);
       }
       const si = connection.selfInfo.value;
-      return estimatePositions({ contacts: list, evidence, self: si, now: this.#clock(), maxAgeMs: this.#maxAgeMs });
+      return estimatePositions({ contacts: list, evidence, self: si, now: this.#clock.now(), maxAgeMs: this.#maxAgeMs });
     });
     let first = true;
     this.#offEnabled = effect(() => {
@@ -386,7 +387,7 @@ export class PositionEstimatorModel extends StoreBoundModel {
       this.#evidence.value = new Map();
       return;
     }
-    const from = this.#clock() - this.#maxAgeMs;
+    const from = this.#clock.now() - this.#maxAgeMs;
     const limit = this.#packetLimit;
     const [recent, adverts, contactList, channels] = await Promise.all([
       store.packets.query({ direction: 'rx', from, limit }),

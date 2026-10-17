@@ -18,6 +18,7 @@ import { AutoAddFlag, MANUAL_ADD_CONTACTS_BIT, type TelemetryModes } from '../pr
 import type { BattAndStorage, CustomVar, DeviceInfo, RepeatFreqRange, SelfInfo, Stats } from '../protocol/types.js';
 import { regionKey } from '../packet/packet.js';
 import { fromHex, toHex, utf8Encode } from '../util/bytes.js';
+import type { Clock } from '../util/clock.js';
 import type { ConnectionModel } from './connection.js';
 import { batch, computed, effect, signal, type ReadonlySignal } from './signal.js';
 
@@ -244,20 +245,14 @@ export interface FloodScopeView {
 /** Current geographic position in degrees (the browser passes navigator.geolocation). */
 export type GeolocationProvider = () => Promise<{ lat: number; lon: number }>;
 
-export interface DeviceSettingsTimers {
-  setTimeout(fn: () => void, ms: number): unknown;
-  clearTimeout(handle: unknown): void;
-}
-
 export interface DeviceSettingsDeps {
   geolocation?: GeolocationProvider;
   /** Whether an exported private key is also saved to the radio's store (app setting). */
   storePrivateKey?: () => boolean;
   /** Minimum time between self adverts sent from the UI. Default 10 s. */
   advertCooldownMs?: number;
-  timers?: DeviceSettingsTimers;
-  /** Host clock (epoch ms) for cooldowns / stats timestamps. Default: the client's clock. */
-  now?: () => number;
+  /** Host time + timers for cooldowns, stats polling and timestamps. Default: the connection's clock. */
+  clock?: Clock;
 }
 
 export type SettingsAction =
@@ -280,11 +275,6 @@ export type SettingsAction =
   | 'factoryReset'
   | 'load';
 
-const systemTimers: DeviceSettingsTimers = {
-  setTimeout: (fn, ms) => globalThis.setTimeout(fn, ms),
-  clearTimeout: (h) => globalThis.clearTimeout(h as ReturnType<typeof setTimeout>),
-};
-
 /** Settings key under which an exported private key is kept (only with the app setting on). */
 export const PRIVATE_KEY_SETTING = 'device.privateKeyHex';
 
@@ -292,7 +282,7 @@ export const DEFAULT_TIME_SYNC_THRESHOLD_SECS = 2;
 
 export class DeviceSettingsModel {
   readonly #deps: DeviceSettingsDeps;
-  readonly #timers: DeviceSettingsTimers;
+  readonly #clock: Clock;
 
   readonly #busy = signal<ReadonlySet<SettingsAction>>(new Set());
   readonly #stats = signal<StatsView | null>(null);
@@ -349,7 +339,7 @@ export class DeviceSettingsModel {
     deps: DeviceSettingsDeps = {},
   ) {
     this.#deps = deps;
-    this.#timers = deps.timers ?? systemTimers;
+    this.#clock = deps.clock ?? connection.clock;
     this.canGeolocate = deps.geolocation !== undefined;
     this.selfInfo = computed(() => this.connection.selfInfo.value);
     this.deviceInfo = computed(() => this.connection.deviceInfo.value);
@@ -405,7 +395,7 @@ export class DeviceSettingsModel {
   }
 
   #now(): number {
-    return this.#deps.now?.() ?? this.connection.client.peek()?.clock.now() ?? Date.now();
+    return this.#clock.now();
   }
 
   #client(): CompanionClient {
@@ -663,9 +653,9 @@ export class DeviceSettingsModel {
       const ms = this.#deps.advertCooldownMs ?? 10_000;
       this.#lastAdvert.value = { mode, at: now };
       this.#advertCooldownUntil.value = now + ms;
-      if (this.#cooldownTimer !== undefined) this.#timers.clearTimeout(this.#cooldownTimer);
+      if (this.#cooldownTimer !== undefined) this.#clock.clearTimeout(this.#cooldownTimer);
       // re-notify when the cooldown ends so the UI re-enables its buttons
-      this.#cooldownTimer = ms > 0 ? this.#timers.setTimeout(() => (this.#advertCooldownUntil.value = 0), ms) : undefined;
+      this.#cooldownTimer = ms > 0 ? this.#clock.setTimeout(() => (this.#advertCooldownUntil.value = 0), ms) : undefined;
     });
   }
 
@@ -702,7 +692,7 @@ export class DeviceSettingsModel {
   pollStats(intervalMs = 5000): () => void {
     this.#pollers++;
     const tick = (): void => {
-      this.#pollTimer = this.#timers.setTimeout(() => {
+      this.#pollTimer = this.#clock.setTimeout(() => {
         void Promise.all([this.refreshStats(), this.refreshBattery()])
           .catch(() => undefined)
           .finally(() => {
@@ -717,7 +707,7 @@ export class DeviceSettingsModel {
       stopped = true;
       this.#pollers--;
       if (this.#pollers === 0 && this.#pollTimer !== undefined) {
-        this.#timers.clearTimeout(this.#pollTimer);
+        this.#clock.clearTimeout(this.#pollTimer);
         this.#pollTimer = undefined;
       }
     };
@@ -824,8 +814,8 @@ export class DeviceSettingsModel {
 
   dispose(): void {
     for (const off of this.#offs.splice(0)) off();
-    if (this.#pollTimer !== undefined) this.#timers.clearTimeout(this.#pollTimer);
-    if (this.#cooldownTimer !== undefined) this.#timers.clearTimeout(this.#cooldownTimer);
+    if (this.#pollTimer !== undefined) this.#clock.clearTimeout(this.#pollTimer);
+    if (this.#cooldownTimer !== undefined) this.#clock.clearTimeout(this.#cooldownTimer);
     this.#pollTimer = undefined;
     this.#cooldownTimer = undefined;
     this.#pollers = 0;

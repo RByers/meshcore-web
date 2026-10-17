@@ -16,6 +16,7 @@
 
 import { decodeLpp } from '../packet/lpp.js';
 import { bytesEqual, toHex } from '../util/bytes.js';
+import { systemClock, type Clock } from '../util/clock.js';
 import { Deferred } from '../util/deferred.js';
 import { TypedEmitter } from '../util/events.js';
 import {
@@ -59,8 +60,6 @@ import type {
 import type { FrameTransport, TransportState } from '../transport/transport.js';
 import { DeviceError, DisconnectedError, LoginFailedError, RemoteTimeoutError, RequestTimeoutError } from './errors.js';
 import {
-  systemClientClock,
-  type ClientClock,
   type ClientState,
   type CompanionClientEvents,
   type CompanionClientOptions,
@@ -136,7 +135,7 @@ function utf8Length(s: string): number {
 
 export class CompanionClient {
   readonly events = new TypedEmitter<CompanionClientEvents>();
-  readonly clock: ClientClock;
+  readonly clock: Clock;
 
   readonly #opts: Required<Omit<CompanionClientOptions, 'clock'>>;
   #transport: FrameTransport | undefined;
@@ -177,7 +176,7 @@ export class CompanionClient {
   #timers = new Set<unknown>();
 
   constructor(options: CompanionClientOptions = {}) {
-    this.clock = options.clock ?? systemClientClock;
+    this.clock = options.clock ?? systemClock;
     this.#opts = {
       appName: options.appName ?? 'meshcore-web',
       appVersion: options.appVersion ?? 1,

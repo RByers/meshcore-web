@@ -374,7 +374,7 @@ export class McMapPage extends AppElement {
         <dt>Type</dt>
         <dd data-field="type">${TYPE_LABEL[x.kind]}</dd>
         <dt>Last heard</dt>
-        <dd data-field="seen">${x.lastSeen ? formatRelative(x.lastSeen) : 'Never'}</dd>
+        <dd data-field="seen">${x.lastSeen ? formatRelative(x.lastSeen, this.app.clock.now()) : 'Never'}</dd>
         ${x.distanceM !== undefined
           ? html`<dt>Distance</dt>
               <dd data-field="distance">${formatDistance(x.distanceM)} ${x.compass} (${Math.round(x.bearing ?? 0)}°)</dd>`
@@ -384,7 +384,7 @@ export class McMapPage extends AppElement {
         <dt>Position</dt>
         ${x.estimate
           ? html`<dd data-field="approximate">
-              Approximate: near ${x.estimate.viaName}, last heard ${formatRelative(x.estimate.observedAt)}
+              Approximate: near ${x.estimate.viaName}, last heard ${formatRelative(x.estimate.observedAt, this.app.clock.now())}
             </dd>`
           : html`<dd class="mono">${x.lat.toFixed(5)}, ${x.lon.toFixed(5)}</dd>`}
       </dl>

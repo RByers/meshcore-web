@@ -33,6 +33,8 @@ export class ChannelsRepo {
   constructor(
     private readonly db: IdbDatabase,
     private readonly emitter: TypedEmitter<RadioStoreEvents>,
+    /** Host time (epoch ms) for default timestamps. */
+    private readonly now: () => number,
   ) {}
 
   get(key: string): Promise<ChannelRecord | undefined> {
@@ -64,7 +66,7 @@ export class ChannelsRepo {
    * Stores one GET_CHANNEL result. Any other channel recorded at the same slot is unassigned;
    * an empty slot just unassigns and resolves null. Local fields (muted, unread) are preserved.
    */
-  async upsertFromDevice(info: ChannelInfo, now = Date.now()): Promise<ChannelRecord | null> {
+  async upsertFromDevice(info: ChannelInfo, now = this.now()): Promise<ChannelRecord | null> {
     const key = isEmptyChannelSlot(info) ? null : await channelKeyForPsk(info.secret);
     const changed = await this.db.transaction(STORE.channels, 'readwrite', async (t) => {
       const s = t.store<ChannelRecord>(STORE.channels);
@@ -95,7 +97,7 @@ export class ChannelsRepo {
    * Stores a complete channel list (all slots read from the device): upserts each, and marks
    * channels whose slot is not in the list (or is empty) as not loaded.
    */
-  async syncFromDevice(infos: readonly ChannelInfo[], now = Date.now()): Promise<ChannelRecord[]> {
+  async syncFromDevice(infos: readonly ChannelInfo[], now = this.now()): Promise<ChannelRecord[]> {
     const keyed = await Promise.all(
       infos.map(async (info) => ({ info, key: isEmptyChannelSlot(info) ? null : await channelKeyForPsk(info.secret) })),
     );
@@ -135,7 +137,7 @@ export class ChannelsRepo {
   /** Adds (or updates) a channel known locally, e.g. before writing it to the device. */
   async put(o: { name: string; psk: Uint8Array; deviceIndex?: number | null; muted?: boolean }): Promise<ChannelRecord> {
     const key = await channelKeyForPsk(o.psk);
-    const now = Date.now();
+    const now = this.now();
     const changed = await this.db.transaction(STORE.channels, 'readwrite', async (t) => {
       const s = t.store<ChannelRecord>(STORE.channels);
       const prev = await s.get(key);
@@ -165,7 +167,7 @@ export class ChannelsRepo {
       const s = t.store<ChannelRecord>(STORE.channels);
       const prev = await s.get(k);
       if (!prev) return undefined;
-      const next: ChannelRecord = { ...prev, updatedAt: Date.now() };
+      const next: ChannelRecord = { ...prev, updatedAt: this.now() };
       if (patch.name !== undefined) next.name = patch.name;
       if (patch.muted !== undefined) next.muted = patch.muted;
       if (patch.unread !== undefined) next.unread = patch.unread;
