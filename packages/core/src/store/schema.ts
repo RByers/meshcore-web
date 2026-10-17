@@ -137,7 +137,10 @@ export interface PacketRecord {
 
 /** App-only contact fields (not on the device). */
 export interface ContactLocalFields {
-  /** Epoch ms we last heard from / about this contact (0 = never). */
+  /**
+   * Epoch ms we last heard from / about this contact (0 = never): the device's `lastmod` (our
+   * radio's clock), or a local hearing via `touch`. Never the sender's advert timestamp.
+   */
   lastSeen: number;
   unreadCount: number;
   notes: string;

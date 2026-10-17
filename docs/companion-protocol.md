@@ -438,10 +438,10 @@ PATH_DISCOVERY is matched separately in `onContactPathRecv` (tag == pending_disc
 | 35 | 1 | u8 | out_path_len: **0xFF = unknown (flood)**, else encoded (bits 6-7 hash size-1, bits 0-5 hop count). meshcore.js reads it as int8 (-1), which breaks 3-byte-hash paths (0x80-0xBF become negative). |
 | 36 | 64 | bytes | out_path (first hops×hash_size bytes valid, rest undefined) |
 | 100 | 32 | char[32] | name, NUL-padded (`strzcpy` guarantees a NUL in the last byte) |
-| 132 | 4 | u32 | last_advert_timestamp (sender's clock) |
+| 132 | 4 | u32 | last_advert_timestamp (sender's clock; a node whose RTC was never set adverts from 1715770351 = 15 May 2024, the `VolatileRTCClock` default — don't use it as "last heard") |
 | 136 | 4 | i32 | gps_lat × 1e6 |
 | 140 | 4 | i32 | gps_lon × 1e6 |
-| 144 | 4 | u32 | lastmod (device RTC, last change) |
+| 144 | 4 | u32 | lastmod (device RTC, last change): set when an advert, a plain/signed text message or a path update is received from the contact (`BaseChatMesh.cpp`), and by ADD_UPDATE_CONTACT. meshcore-web uses it as the contact's "last heard" time. |
 
 Total 148 bytes. In CMD_ADD_UPDATE_CONTACT, offsets 136-147 are optional (lat/lon need len ≥ 144, lastmod needs len ≥ 148).
 

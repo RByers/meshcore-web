@@ -70,7 +70,7 @@ export class ContactsRepo {
 
   /**
    * Inserts or updates a contact from the device, preserving local fields. `lastSeen` advances
-   * to the advert time if that is newer.
+   * to the contact's `lastmod` if that is newer (see {@link mergeContact}).
    */
   async upsertFromDevice(contact: Contact, now = this.now()): Promise<ContactRecord> {
     const key = pubKeyHex(contact.pubKey);
@@ -184,6 +184,9 @@ export class ContactsRepo {
   }
 }
 
+/** Clock skew tolerated before a "heard" time counts as in the future. */
+const FUTURE_SLACK_MS = 10 * 60_000;
+
 function mergeContact(prev: ContactRecord | undefined, c: Contact, key: string, now: number): ContactRecord {
   const local: ContactLocalFields = prev
     ? { lastSeen: prev.lastSeen, unreadCount: prev.unreadCount, notes: prev.notes, favourite: prev.favourite, muted: prev.muted }
@@ -194,8 +197,15 @@ function mergeContact(prev: ContactRecord | undefined, c: Contact, key: string, 
     local.directSnr = prev.directSnr;
     if (prev.directSnrAt !== undefined) local.directSnrAt = prev.directSnrAt;
   }
-  const advertMs = c.lastAdvert * 1000;
-  if (advertMs > local.lastSeen) local.lastSeen = advertMs;
+  // "Heard" comes from lastmod, our radio's RTC when it last heard the contact (advert, message or
+  // path update), not last_advert_timestamp, which is the sender's clock: a node whose clock was
+  // never set adverts from 15 May 2024 (firmware VolatileRTCClock default). Values in the future
+  // came from a wrong clock (or from older versions that used the advert time) and are dropped,
+  // or they would pin lastSeen ahead of every real hearing.
+  const limit = now + FUTURE_SLACK_MS;
+  if (local.lastSeen > limit) local.lastSeen = 0;
+  const modMs = c.lastMod * 1000;
+  if (modMs > local.lastSeen && modMs <= limit) local.lastSeen = modMs;
   return { ...c, ...local, key, onDevice: true, updatedAt: now };
 }
 

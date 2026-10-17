@@ -8,7 +8,7 @@ import { freshFactory, hexKey, key32, makeContact, openStore } from './test-help
 describe('ContactsRepo', () => {
   it('upserts device contacts and preserves local fields', async () => {
     const s = await openStore();
-    const r1 = await s.contacts.upsertFromDevice(makeContact(2), 111);
+    const r1 = await s.contacts.upsertFromDevice(makeContact(2), 1_800_000_000_000);
     expect(r1).toMatchObject({
       key: hexKey(2),
       name: 'node-2',
@@ -17,14 +17,36 @@ describe('ContactsRepo', () => {
       favourite: false,
       muted: false,
       onDevice: true,
-      updatedAt: 111,
+      updatedAt: 1_800_000_000_000,
       lastSeen: 1_700_000_000_000,
     });
     expect(r1.pubKey).toEqual(key32(2));
     await s.contacts.updateLocal(key32(2), { notes: 'roof', favourite: true, unreadCount: 3 });
-    const r2 = await s.contacts.upsertFromDevice(makeContact(2, { name: 'renamed', lastAdvert: 1_600_000_000 }));
+    const r2 = await s.contacts.upsertFromDevice(makeContact(2, { name: 'renamed', lastMod: 1_600_000_000 }), 1_800_000_000_000);
     expect(r2).toMatchObject({ name: 'renamed', notes: 'roof', favourite: true, unreadCount: 3, lastSeen: 1_700_000_000_000 });
     expect(await s.contacts.updateLocal(hexKey(9), { notes: 'x' })).toBeUndefined();
+    s.close();
+  });
+
+  it("takes lastSeen from lastmod (our radio's clock), not the sender's advert timestamp", async () => {
+    const s = await openStore();
+    const now = 1_792_000_000_000; // Oct 2026
+    // a node whose clock was never set adverts from 15 May 2024 (firmware VolatileRTCClock default)
+    const r1 = await s.contacts.upsertFromDevice(makeContact(1, { lastAdvert: 1_715_770_400, lastMod: 1_791_990_000 }), now);
+    expect(r1.lastSeen).toBe(1_791_990_000_000);
+    // a sender clock in the future is ignored too
+    const r2 = await s.contacts.upsertFromDevice(makeContact(2, { lastAdvert: 1_900_000_000, lastMod: 1_791_990_000 }), now);
+    expect(r2.lastSeen).toBe(1_791_990_000_000);
+    // a future lastSeen stored by an older version (from the advert time) is dropped
+    await s.contacts.upsertFromDevice(makeContact(3, { lastMod: 0 }), now);
+    await s.contacts.updateLocal(key32(3), { lastSeen: 1_900_000_000_000 });
+    const r3 = await s.contacts.upsertFromDevice(makeContact(3, { lastMod: 1_791_000_000 }), now);
+    expect(r3.lastSeen).toBe(1_791_000_000_000);
+    // a lastmod in the future (our radio's clock is wrong) doesn't count; small skew does
+    const r4 = await s.contacts.upsertFromDevice(makeContact(4, { lastMod: 1_793_000_000 }), now);
+    expect(r4.lastSeen).toBe(0);
+    const r5 = await s.contacts.upsertFromDevice(makeContact(5, { lastMod: 1_792_000_060 }), now);
+    expect(r5.lastSeen).toBe(1_792_000_060_000);
     s.close();
   });
 
