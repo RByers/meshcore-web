@@ -1,6 +1,8 @@
 /**
  * Node map: contacts that advertised a location plus this radio's own location, coloured by type,
- * with type / last-heard filters, a details card for the selected node and "Centre on me".
+ * with type / last-heard filters, a details card for the selected node and "Centre on me". With the
+ * "approximate positions" setting, nodes without a location are drawn dashed with "?" near the
+ * repeater they were last heard through (issue #7).
  * State lives in `app.map` (core MapModel); `<mc-tile-map>` renders tiles and positions markers.
  */
 import { css, html, nothing, type PropertyValues } from 'lit';
@@ -42,6 +44,7 @@ const lastView = new WeakMap<AppModel, TileMapView>();
 
 function describe(m: MapMarker): string {
   const parts: string[] = [TYPE_LABEL[m.kind]];
+  if (m.estimate) parts.push(`approximate position near ${m.estimate.viaName}`);
   if (m.distanceM !== undefined) parts.push(`${formatDistance(m.distanceM)} ${m.compass ?? ''}`.trim());
   return parts.join(', ');
 }
@@ -87,6 +90,11 @@ export class McMapPage extends AppElement {
       }
       .stage {
         position: relative;
+      }
+      .toolbar label.check {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
       }
       mc-tile-map {
         height: clamp(320px, calc(100dvh - 260px), 900px);
@@ -241,8 +249,9 @@ export class McMapPage extends AppElement {
   override updated(): void {
     const key = this.#focusKey;
     if (key) {
-      // contacts load asynchronously: retry on each update until the marker exists
-      if (this.focusNode(key) || (!this.app.contacts.loading.peek() && this.app.contacts.views.peek().length > 0)) this.#focusKey = undefined;
+      // contacts (and approximate positions) load asynchronously: retry on each update until the marker exists
+      const loaded = !this.app.contacts.loading.peek() && this.app.contacts.views.peek().length > 0 && !this.app.positions.loading.peek();
+      if (this.focusNode(key) || loaded) this.#focusKey = undefined;
     }
     const b = this.app.map.bounds.peek();
     if (b && !this.#userMoved && JSON.stringify(b) !== this.#fittedFor) this.fitAll();
@@ -295,6 +304,11 @@ export class McMapPage extends AppElement {
             ${MAP_MAX_AGES.map((a) => html`<option value=${a} ?selected=${m.maxAge.value === a}>${AGE_LABEL[a]}</option>`)}
           </select>
         </label>
+        <label class="check" title="Show nodes without a location near the repeater they were last heard through (dashed, with “?”)"
+          ><input type="checkbox" data-approximate .checked=${this.app.appSettings.approximatePositions.value}
+            @change=${(e: Event) => this.app.appSettings.setApproximatePositions((e.target as HTMLInputElement).checked)} />
+          Approximate unknown positions</label
+        >
       </div>
       <div class="stage">
         <mc-tile-map
@@ -319,6 +333,7 @@ export class McMapPage extends AppElement {
               lon=${x.lon}
               label=${x.name}
               description=${describe(x)}
+              ?approximate=${!!x.approximate}
               ?selected=${sel?.key === x.key}
               @click=${() => this.#select(x.key)}
             ></mc-map-marker>`,
@@ -367,7 +382,11 @@ export class McMapPage extends AppElement {
         <dt>Path</dt>
         <dd data-field="path">${hopsLink(x.view.path.label, x.view.path.kind === 'hops' ? { kind: 'contact', key: x.key } : null)}</dd>
         <dt>Position</dt>
-        <dd class="mono">${x.lat.toFixed(5)}, ${x.lon.toFixed(5)}</dd>
+        ${x.estimate
+          ? html`<dd data-field="approximate">
+              Approximate: near ${x.estimate.viaName}, last heard ${formatRelative(x.estimate.observedAt)}
+            </dd>`
+          : html`<dd class="mono">${x.lat.toFixed(5)}, ${x.lon.toFixed(5)}</dd>`}
       </dl>
       <div class="actions">
         ${x.kind === 'chat'

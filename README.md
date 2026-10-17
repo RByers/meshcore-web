@@ -20,7 +20,8 @@ your radio transmits (and map tiles, if you open the map).
   `meshcore://` links or public keys; share, reset path, remove.
 - **Channels**: Public, private (PSK) and `#hashtag` channels; add, edit, mute, delete.
 - **Map** of nodes that advertise a location, with distance and bearing from your radio;
-  OpenStreetMap tiles by default, configurable tile server.
+  optionally nodes without one at an approximate position near the repeater they were last
+  heard through; OpenStreetMap tiles by default, configurable tile server.
 - **Packet log and inspector**: every over-the-air packet and every host↔radio frame is
   recorded; an annotated hex dump explains each byte; channel messages are decrypted, and
   direct messages too if you opt in to storing the radio's key. Export / import as JSON.

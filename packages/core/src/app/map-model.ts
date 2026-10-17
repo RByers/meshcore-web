@@ -2,13 +2,16 @@
  * Node map state: markers for contacts that advertised a location, this radio's own location
  * (SELF_INFO lat/lon; never browser GPS), type / max-age filters, the selected marker and
  * distance / bearing from the own position. Pure derived state over ContactsModel views and the
- * connection's selfInfo; the only persisted value is the tile URL template (preferences).
+ * connection's selfInfo; the only persisted values are the tile URL template and the filters
+ * (preferences). With `estimates` (issue #7, `position-estimator.ts`) contacts without a location
+ * get an `approximate` marker near the repeater they were last heard through.
  */
 
 import type { SelfInfo } from '../protocol/types.js';
 import type { ContactView } from './contacts-model.js';
 import type { PreferencesStore } from './connection.js';
 import type { ContactKind } from './messaging.js';
+import type { PositionEstimate } from './position-estimator.js';
 import { computed, signal, type ReadonlySignal, type Signal } from './signal.js';
 import { bearingDegrees, boundsOf, compassPoint, haversineMeters, hasLocation, type Bounds, type CompassPoint, type LatLon } from './geo.js';
 
@@ -44,12 +47,18 @@ export interface MapMarker extends LatLon {
   bearing: number | undefined;
   compass: CompassPoint | undefined;
   view: ContactView;
+  /** An estimated position (issue #7): drawn dashed with "?". */
+  approximate?: boolean;
+  /** For an approximate marker: the repeater it was last heard through and when. */
+  estimate?: PositionEstimate;
 }
 
 export interface MapModelOptions {
   preferences?: PreferencesStore;
   /** Clock for the max-age filter (default Date.now). */
   now?: () => number;
+  /** Approximate positions of contacts without a location (empty / absent = none shown). */
+  estimates?: ReadonlySignal<readonly PositionEstimate[]>;
 }
 
 /** Validates a tile URL template: http(s) with {z}/{x}/{y}, or a data: URL (tests, offline). */
@@ -79,11 +88,11 @@ export class MapModel {
 
   /** This radio's advertised location, or null when unset / disconnected. */
   readonly self: ReadonlySignal<(LatLon & { name: string }) | null>;
-  /** Every contact with a location (unfiltered). */
+  /** Every contact with a location, plus approximate markers (unfiltered). */
   readonly allMarkers: ReadonlySignal<readonly MapMarker[]>;
   /** Markers passing the kind and age filters. */
   readonly markers: ReadonlySignal<readonly MapMarker[]>;
-  /** Contacts without a location (not on the map). */
+  /** Contacts without a location and without an approximate marker (not on the map). */
   readonly withoutLocation: ReadonlySignal<number>;
   /** Marker counts per kind (before filtering). */
   readonly counts: ReadonlySignal<Readonly<Record<ContactKind, number>>>;
@@ -120,12 +129,18 @@ export class MapModel {
       const si = selfInfo.value;
       return si && hasLocation(si) ? { lat: si.lat, lon: si.lon, name: si.name } : null;
     });
+    const estimates = opts.estimates;
     this.allMarkers = computed(() => {
       const me = this.self.value;
       const out: MapMarker[] = [];
+      const est = new Map((estimates?.value ?? []).map((e) => [e.key, e]));
       for (const v of views.value) {
-        const { lat, lon } = v.record;
-        if (!hasLocation({ lat, lon })) continue;
+        const { lat: rl, lon: rlon } = v.record;
+        const has = hasLocation({ lat: rl, lon: rlon });
+        const e = has ? undefined : est.get(v.key);
+        if (!has && !e) continue;
+        const lat = e ? e.lat : rl;
+        const lon = e ? e.lon : rlon;
         const p = { lat, lon };
         const bearing = me ? bearingDegrees(me, p) : undefined;
         out.push({
@@ -134,15 +149,17 @@ export class MapModel {
           kind: v.typeName,
           lat,
           lon,
-          lastSeen: v.lastSeen,
+          lastSeen: e ? Math.max(v.lastSeen, e.observedAt) : v.lastSeen,
           distanceM: me ? haversineMeters(me, p) : undefined,
           bearing,
           compass: bearing === undefined ? undefined : compassPoint(bearing),
           view: v,
+          ...(e ? { approximate: true, estimate: e } : {}),
         });
       }
       return out;
     });
+    // approximate markers are on the map, so they do not count as "not shown"
     this.withoutLocation = computed(() => views.value.length - this.allMarkers.value.length);
     this.counts = computed(() => {
       const c: Record<ContactKind, number> = { chat: 0, repeater: 0, room: 0, sensor: 0 };
@@ -207,7 +224,7 @@ export class MapModel {
   /**
    * Selects a contact's marker so the map can centre on it (issue #13: "Show on map"). Turns its
    * kind back on and clears the age filter if they would hide it. Returns the marker, or null
-   * when the contact has no location.
+   * when the contact has no location (nor an approximate one).
    */
   focus(key: string): MapMarker | null {
     const k = key.toLowerCase();
@@ -217,6 +234,15 @@ export class MapModel {
     if (!this.markers.peek().some((m) => m.key === k)) this.setMaxAge('any');
     this.#selected.value = k;
     return marker;
+  }
+
+  /**
+   * Whether a contact has a marker (a location, or an approximate one while that setting is on),
+   * i.e. "Show on map" can focus it. Reads the markers signal, so it re-renders callers.
+   */
+  hasMarker(key: string): boolean {
+    const k = key.toLowerCase();
+    return this.allMarkers.value.some((m) => m.key === k);
   }
 
   /** Sets the tile URL template; empty restores OpenStreetMap. Throws on an invalid template. */

@@ -5,6 +5,7 @@ import {
   boundsCenter,
   boundsOf,
   compassPoint,
+  destinationPoint,
   fitBoundsZoom,
   formatDistance,
   hasLocation,
@@ -62,6 +63,15 @@ describe('Web Mercator', () => {
 });
 
 describe('great-circle helpers', () => {
+  it('destination point inverts distance and bearing', () => {
+    for (const bearing of [0, 45, 135, 270]) {
+      const p = destinationPoint(london, bearing, 400);
+      expect(haversineMeters(london, p)).toBeCloseTo(400, 3);
+      expect(bearingDegrees(london, p)).toBeCloseTo(bearing, 3);
+    }
+    expect(destinationPoint({ lat: 0, lon: 179.999 }, 90, 1000).lon).toBeLessThan(-179);
+  });
+
   it('haversine distance', () => {
     expect(haversineMeters(london, paris) / 1000).toBeCloseTo(343.56, 1);
     // one degree of longitude on the equator = 2πR / 360

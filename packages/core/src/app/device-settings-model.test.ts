@@ -19,7 +19,7 @@ import {
   type DeviceSettingsTimers,
 } from './device-settings-model.js';
 import { RADIO_PRESETS, findRadioPreset } from './radio-presets.js';
-import { PREF_PACKET_RETENTION_DAYS, PREF_PATH_NAMES, PREF_THEME, AppSettingsModel } from './app-settings-model.js';
+import { PREF_APPROXIMATE_POSITIONS, PREF_PACKET_RETENTION_DAYS, PREF_PATH_NAMES, PREF_THEME, AppSettingsModel } from './app-settings-model.js';
 
 const apps: AppModel[] = [];
 afterEach(async () => {
@@ -376,6 +376,9 @@ describe('AppSettingsModel', () => {
     expect(s.pathNames.value).toBe(false);
     s.setPathNames(true);
     expect(prefs.getItem(PREF_PATH_NAMES)).toBe('true');
+    expect(s.approximatePositions.value).toBe(false);
+    s.setApproximatePositions(true);
+    expect(prefs.getItem(PREF_APPROXIMATE_POSITIONS)).toBe('true');
 
     const store = app.connection.store.value!;
     const old = Date.now() - 40 * 86_400_000;
@@ -393,6 +396,7 @@ describe('AppSettingsModel', () => {
     expect(again.timeFormat.value).toBe('24h');
     expect(again.packetRetentionDays.value).toBe(30);
     expect(again.pathNames.value).toBe(true);
+    expect(again.approximatePositions.value).toBe(true);
     again.dispose();
   });
 });

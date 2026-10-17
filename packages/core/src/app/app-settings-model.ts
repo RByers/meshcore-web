@@ -1,7 +1,7 @@
 /**
  * App-level (local, not sent to the radio) settings: theme, time format, packet log retention
  * whether an exported private key may be kept for decrypting DMs in the packet inspector and
- * whether paths are shown as node names.
+ * whether paths are shown as node names and whether the map approximates unknown positions.
  * Stored in the global PreferencesStore (localStorage in the browser).
  */
 
@@ -21,6 +21,7 @@ export const PREF_TIME_FORMAT = 'meshcore-web.timeFormat';
 export const PREF_PACKET_RETENTION_DAYS = 'meshcore-web.packetRetentionDays';
 export const PREF_STORE_PRIVATE_KEY = 'meshcore-web.storePrivateKey';
 export const PREF_PATH_NAMES = 'meshcore-web.pathNames';
+export const PREF_APPROXIMATE_POSITIONS = 'meshcore-web.approximatePositions';
 
 /** Store default (DEFAULT_RETENTION.packets, store/time-log.ts). */
 export const DEFAULT_PACKET_RETENTION_DAYS = 90;
@@ -42,6 +43,7 @@ export class AppSettingsModel {
   #retentionSet: boolean;
   readonly #storeKey: Signal<boolean>;
   readonly #pathNames: Signal<boolean>;
+  readonly #approximatePositions: Signal<boolean>;
 
   readonly theme: ReadonlySignal<ThemePreference>;
   readonly timeFormat: ReadonlySignal<TimeFormatPreference>;
@@ -54,6 +56,11 @@ export class AppSettingsModel {
    * (issue #3). Default off.
    */
   readonly pathNames: ReadonlySignal<boolean>;
+  /**
+   * Show nodes without a location on the map at an approximate position near the repeater they
+   * were last heard through (issue #7, `position-estimator.ts`). Default off.
+   */
+  readonly approximatePositions: ReadonlySignal<boolean>;
 
   #offs: Array<() => void> = [];
 
@@ -75,6 +82,8 @@ export class AppSettingsModel {
     this.storePrivateKey = this.#storeKey.readonly;
     this.#pathNames = signal(prefs.getItem(PREF_PATH_NAMES) === 'true');
     this.pathNames = this.#pathNames.readonly;
+    this.#approximatePositions = signal(prefs.getItem(PREF_APPROXIMATE_POSITIONS) === 'true');
+    this.approximatePositions = this.#approximatePositions.readonly;
 
     // apply a user-chosen retention whenever a radio's store opens (the default needs no prune)
     this.#offs.push(
@@ -127,6 +136,11 @@ export class AppSettingsModel {
   setPathNames(on: boolean): void {
     this.#pathNames.value = on;
     this.prefs.setItem(PREF_PATH_NAMES, on ? 'true' : 'false');
+  }
+
+  setApproximatePositions(on: boolean): void {
+    this.#approximatePositions.value = on;
+    this.prefs.setItem(PREF_APPROXIMATE_POSITIONS, on ? 'true' : 'false');
   }
 
   /** Formats epoch ms as a clock time following the time-format preference. */

@@ -1004,6 +1004,12 @@ export class McSettingsPage extends AppElement {
         >
         <p class="hint">Shows paths as “Alice &gt; Bob &gt; a3” instead of “3 hops”. Unknown repeaters show their hash; “a3?” means several contacts share it.</p>
         <label class="check"
+          ><input type="checkbox" name="approximatePositions" .checked=${s.approximatePositions.value}
+            @change=${(e: Event) => s.setApproximatePositions((e.target as HTMLInputElement).checked)} />
+          Approximate positions of nodes without a location (from the repeaters they were last heard through)</label
+        >
+        <p class="hint">Shown on the map with a dashed outline and “?”, a few hundred metres from the most recent repeater that relayed their packets.</p>
+        <label class="check"
           ><input type="checkbox" name="storePrivateKey" .checked=${s.storePrivateKey.value}
             @change=${(e: Event) => void s.setStorePrivateKey((e.target as HTMLInputElement).checked)} />
           Store an exported private key in this browser to decrypt direct messages in the packet inspector</label

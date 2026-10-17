@@ -24,6 +24,7 @@ import { DeviceSettingsModel, type GeolocationProvider } from './device-settings
 import { AppSettingsModel } from './app-settings-model.js';
 import { NotificationsModel, type NotificationsTimers } from './notifications.js';
 import { MapModel } from './map-model.js';
+import { PositionEstimatorModel } from './position-estimator.js';
 import { PathModel } from './path-model.js';
 import { PacketLogModel } from './packet-log-model.js';
 import { ContactPathsModel } from './path-history.js';
@@ -88,6 +89,7 @@ export class AppModel {
   readonly #prefs: PreferencesStore;
   #remoteAdmin: RemoteAdminModel | undefined;
   #map: MapModel | undefined;
+  #positions: PositionEstimatorModel | undefined;
   #paths: PathModel | undefined;
   #contactPaths: ContactPathsModel | undefined;
   readonly #chats = new Map<string, ChatModel>();
@@ -194,7 +196,12 @@ export class AppModel {
 
   /** Node map: contacts with a location, own location, filters (Phase 12). */
   get map(): MapModel {
-    return (this.#map ??= new MapModel(this.contacts.views, this.connection.selfInfo, { preferences: this.#prefs }));
+    return (this.#map ??= new MapModel(this.contacts.views, this.connection.selfInfo, { preferences: this.#prefs, estimates: this.positions.estimates }));
+  }
+
+  /** Approximate positions of contacts without a location, while the app setting is on (issue #7). */
+  get positions(): PositionEstimatorModel {
+    return (this.#positions ??= new PositionEstimatorModel(this.connection, this.contacts, this.appSettings.approximatePositions).start());
   }
 
   /** Path views for the "N hops" links: contact / message / packet routes and their map layout (issue #2). */
@@ -222,7 +229,7 @@ export class AppModel {
   async dispose(): Promise<void> {
     await this.connection.disconnect();
     for (const off of this.#offs.splice(0)) off();
-    for (const m of [this.#contacts, this.#channels, this.#unread, this.#conversations, this.#packetLog, this.#contactPaths, ...this.#chats.values()]) m?.dispose();
+    for (const m of [this.#contacts, this.#channels, this.#unread, this.#conversations, this.#packetLog, this.#contactPaths, this.#positions, ...this.#chats.values()]) m?.dispose();
     this.#remoteAdmin?.dispose();
     this.#deviceSettings?.dispose();
     this.#appSettings?.dispose();

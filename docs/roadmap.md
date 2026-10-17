@@ -191,6 +191,24 @@ page and packet log; still wrapped in the hops link. The capture pipeline matche
 flood message to its LOG_RX_DATA packet (`rx-path-correlator.ts`) and stores the path bytes in
 `MessageRecord.path` (optional, best effort).
 
+**Approximate positions (issue #7).** App setting `AppSettingsModel.approximatePositions`
+(default off; Settings page and the map filter bar): contacts without a location get a dashed "?"
+marker near the located repeater / room server they were most recently heard through (the issue
+author's follow-up: recency over averaging, since nodes move). Core `position-estimator.ts`:
+sightings come from received flood packets whose source is identifiable (ADVERT / ANON_REQ
+public key, REQ / RESPONSE / TXT_MSG / PATH src_hash; path[0] heard the source), incoming
+messages with a stored `MessageRecord.path` (DM conversation key, channel "sender:" name) and the
+LAST hop of the contact's out_path; a zero-hop sighting anchors at this radio when it has a
+location. Hashes go through `resolveHop`; ambiguous ones are ignored. The estimate is 400 m from
+the anchor on a bearing hashed from the key, stepped around rings so it stays ≥ 240 m from
+located nodes and other estimates. `app.positions` loads the last 500 rx packets + 500 adverts
+and 50 messages per DM (unlocated contacts) / channel within 7 days, then follows store events
+incrementally; out_paths never expire. `MapModel` adds them as `approximate` markers (kind /
+age filters and `focus` apply; not counted in `withoutLocation`); the card reads
+"Approximate: near <repeater>, last heard <time>"; "Show on map" links appear for them while
+the setting is on (`MapModel.hasMarker`). Not done: multi-repeater triangulation (the issue's
+first idea) and estimates in the path dialog.
+
 **Not done in Phase 12:** settings export/import (app preferences + per-radio local data as a
 file); a dedicated keyboard/accessibility audit beyond what earlier phases added; `REPO_URL`
 is a placeholder until the repository is published.

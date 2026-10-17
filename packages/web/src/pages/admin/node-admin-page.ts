@@ -307,7 +307,7 @@ export class McNodeAdminPage extends AppElement {
           <div class="muted mono" title=${v.key}>${shortKey(v.key, 16)}</div>
         </div>
         <span data-field="session" class=${node.loggedIn.value ? 'ok' : 'muted'}>${loginLabel(node.loginState.value)}</span>
-        ${hasLocation(v.record)
+        ${hasLocation(v.record) || this.app.map.hasMarker(key)
           ? html`<a class="map-link" data-action="show-on-map" href=${hrefFor(`/map/node/${key}`)} title="Show on map" aria-label="Show on map"
               ><span aria-hidden="true">🗺 Map</span></a
             >`

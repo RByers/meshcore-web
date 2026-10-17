@@ -7,6 +7,7 @@ import type { ContactView } from './contacts-model.js';
 import { contactTypeName, pathDisplay } from './messaging.js';
 import { MapModel, OSM_TILE_URL, PREF_MAP_KINDS, PREF_MAP_TILE_URL, validateTileUrl } from './map-model.js';
 import { signal } from './signal.js';
+import type { PositionEstimate } from './position-estimator.js';
 
 const NOW = 1_800_000_000_000;
 
@@ -141,5 +142,53 @@ describe('MapModel', () => {
     // no location → nothing to focus
     expect(m.focus('room'.padEnd(64, '0'))).toBeNull();
     expect(m.selected.value?.name).toBe('Alice');
+  });
+
+  it('adds approximate markers for estimated contacts; filters and focus apply to them (issue #7)', () => {
+    const views = signal<readonly ContactView[]>([
+      view('Hilltop', ContactType.REPEATER, 47.62, -122.35),
+      view('Room', ContactType.ROOM, 0, 0, NOW - 2 * 86_400_000),
+      view('Carol', ContactType.CHAT, 0, 0, 0),
+    ]);
+    const roomKey = 'room'.padEnd(64, '0');
+    const carolKey = 'carol'.padEnd(64, '0');
+    const hill = 'hilltop'.padEnd(64, '0');
+    const est = (key: string, observedAt: number): PositionEstimate => ({
+      key, lat: 47.623, lon: -122.352, viaKey: hill, viaName: 'Hilltop', observedAt, source: 'packet', approximate: true,
+    });
+    const estimates = signal<readonly PositionEstimate[]>([]);
+    const m = new MapModel(views.readonly, signal<SelfInfo | null>(self(47.6062, -122.3321)).readonly, { now: () => NOW, estimates: estimates.readonly });
+    expect(m.allMarkers.value.map((x) => x.name)).toEqual(['Hilltop']);
+    expect(m.withoutLocation.value).toBe(2);
+    expect(m.focus(carolKey)).toBeNull();
+    expect(m.hasMarker(carolKey)).toBe(false);
+
+    estimates.value = [est(roomKey, NOW - 3 * 86_400_000), est(carolKey, NOW - 60_000)];
+    expect(m.allMarkers.value.map((x) => [x.name, !!x.approximate])).toEqual([
+      ['Hilltop', false],
+      ['Room', true],
+      ['Carol', true],
+    ]);
+    expect(m.withoutLocation.value).toBe(0);
+    expect(m.hasMarker(carolKey.toUpperCase())).toBe(true);
+    expect(m.counts.value).toEqual({ chat: 1, repeater: 1, room: 1, sensor: 0 });
+    const carol = m.allMarkers.value[2]!;
+    expect(carol).toMatchObject({ lat: 47.623, lon: -122.352, lastSeen: NOW - 60_000, estimate: { viaName: 'Hilltop' } });
+    expect(carol.distanceM).toBeGreaterThan(0);
+    // last heard = the newer of the contact's lastSeen and the sighting
+    expect(m.allMarkers.value[1]!.lastSeen).toBe(NOW - 2 * 86_400_000);
+
+    m.setMaxAge('24h');
+    expect(m.markers.value.map((x) => x.name)).toEqual(['Hilltop', 'Carol']);
+    m.setKindVisible('chat', false);
+    expect(m.markers.value.map((x) => x.name)).toEqual(['Hilltop']);
+    expect(m.focus(carolKey)?.approximate).toBe(true);
+    expect(m.isKindVisible('chat')).toBe(true);
+    expect(m.selected.value?.name).toBe('Carol');
+    // a node that later advertises a real location drops its estimate
+    views.value = [views.value[0]!, views.value[1]!, view('Carol', ContactType.CHAT, 47.7, -122.4)];
+    const located = m.allMarkers.value.find((x) => x.name === 'Carol')!;
+    expect(located.lat).toBe(47.7);
+    expect(located.approximate).toBeUndefined();
   });
 });

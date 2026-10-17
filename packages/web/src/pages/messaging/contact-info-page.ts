@@ -99,7 +99,7 @@ export class McContactInfoPage extends AppElement {
           ? html`<a data-action="message" href=${hrefFor(`/chat/${v.key}`)}>Message</a>`
           : nothing}
         ${v.typeName !== 'chat' ? html`<a data-action="node" href=${hrefFor(`/node/${v.key}`)}>Manage node</a>` : nothing}
-        ${located ? html`<a data-action="show-on-map" href=${hrefFor(`/map/node/${v.key}`)}>Show on map</a>` : nothing}
+        ${located || this.app.map.hasMarker(v.key) ? html`<a data-action="show-on-map" href=${hrefFor(`/map/node/${v.key}`)}>Show on map</a>` : nothing}
       </div>
     `;
   }

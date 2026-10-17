@@ -101,6 +101,20 @@ export function bearingDegrees(a: LatLon, b: LatLon): number {
   return (deg + 360) % 360;
 }
 
+/**
+ * The point `distanceM` metres from `from` along the initial great-circle `bearing` (degrees
+ * clockwise from north); longitude wrapped into [-180, 180).
+ */
+export function destinationPoint(from: LatLon, bearing: number, distanceM: number): LatLon {
+  const δ = distanceM / EARTH_RADIUS_M;
+  const θ = bearing * RAD;
+  const φ1 = from.lat * RAD;
+  const λ1 = from.lon * RAD;
+  const φ2 = Math.asin(Math.sin(φ1) * Math.cos(δ) + Math.cos(φ1) * Math.sin(δ) * Math.cos(θ));
+  const λ2 = λ1 + Math.atan2(Math.sin(θ) * Math.sin(δ) * Math.cos(φ1), Math.cos(δ) - Math.sin(φ1) * Math.sin(φ2));
+  return { lat: φ2 / RAD, lon: wrapLongitude(λ2 / RAD) };
+}
+
 const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'] as const;
 export type CompassPoint = (typeof COMPASS)[number];
 

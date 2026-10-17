@@ -4,7 +4,7 @@
  * composer with byte counter (Enter sends, Shift+Enter newline) and replies.
  */
 import { css, html, nothing, type PropertyValues, type TemplateResult } from 'lit';
-import { hasLocation, parseReply, receivedSignal, type ChatModel } from '@meshcore-web/core/app';
+import { parseReply, receivedSignal, type ChatModel } from '@meshcore-web/core/app';
 import type { ConversationType, MessageRecord } from '@meshcore-web/core/store';
 import { AppElement } from '../../app-context.js';
 import { formatDuration, formatRelative, formatSnr, formatTime } from '../../format.js';
@@ -515,10 +515,10 @@ export class McChatPage extends AppElement {
     </li>`;
   }
 
-  /** "Show on map" for a contact with a location (issue #13). */
+  /** "Show on map" for a contact with a location or an approximate one (issues #13, #7). */
   #mapLink(chat: ChatModel) {
     const c = chat.contact.value;
-    if (!c || !hasLocation(c)) return nothing;
+    if (!c || !this.app.map.hasMarker(c.key)) return nothing; // a location, or an approximate one (issue #7)
     return html`<a class="map-link" data-action="show-on-map" href=${hrefFor(`/map/node/${c.key}`)} title="Show on map" aria-label="Show on map"><span aria-hidden="true">🗺 Map</span></a>`;
   }
 
