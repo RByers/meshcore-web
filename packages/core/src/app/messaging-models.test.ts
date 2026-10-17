@@ -382,13 +382,13 @@ describe('ChannelsModel', () => {
 });
 
 describe('ConversationsModel', () => {
-  it('lists DMs and channels by last message with unread counts', async () => {
+  it('lists DMs and channels with messages by last message with unread counts', async () => {
     const { app, hex, s } = await connected();
     const c = app.conversations;
-    await vi.waitFor(() => expect(c.items.value.length).toBe(4));
+    await vi.waitFor(() => expect(c.items.value.length).toBe(3));
     await c.settled();
-    expect(c.items.value.map((x) => x.name).sort()).toEqual(['#test', 'Alice', 'Public', 'Town Square']);
-    expect(c.items.value.at(-1)!.name).toBe('#test'); // no messages
+    // #test has no messages, so it is left out
+    expect(c.items.value.map((x) => x.name).sort()).toEqual(['Alice', 'Public', 'Town Square']);
     s.emulator.injectContactMessage(s.keys.carol, 'news from the valley');
     await vi.waitFor(() => expect(c.items.value[0]).toMatchObject({ key: hex.carol, convType: 'contact', unread: 1, icon: 'chat' }));
     expect(c.items.value[0]!.lastMessage?.text).toBe('news from the valley');

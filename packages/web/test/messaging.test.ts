@@ -38,11 +38,13 @@ function keys(t: Harness) {
 }
 
 describe('messages overview', () => {
-  it('is the landing page after connect, listing DMs and channels with unread badges', async () => {
+  it('is the landing page after connect, listing DMs and channels with messages and unread badges', async () => {
     const t = await connected();
     await t.until(() => location.hash === '#/messages', 3000, 'landing on /messages');
-    await t.until(() => t.queryAll('[data-conv]').length === 4, 5000, 'conversations');
+    await t.until(() => t.queryAll('[data-conv]').length === 3, 5000, 'conversations');
     const k = keys(t);
+    // #test has no messages yet, so the inbox leaves it out
+    expect(t.queryAll('[data-conv] .name').map((n) => n.textContent)).not.toContain('#test');
     const alice = t.query(`[data-conv="contact:${k.alice}"]`)!;
     expect(alice.textContent).toContain('Hi! Are you on the mesh today?');
     expect(alice.querySelector('.badge')?.getAttribute('data-unread')).toBe('1');
