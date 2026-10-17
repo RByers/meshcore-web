@@ -1,7 +1,8 @@
 /**
  * App-level (local, not sent to the radio) settings: theme, time format, packet log retention
  * whether an exported private key may be kept for decrypting DMs in the packet inspector and
- * whether paths are shown as node names and whether the map approximates unknown positions.
+ * whether paths are shown as node names, whether the map approximates unknown positions and
+ * whether SMAZ compression is turned on for a contact that sends a compressed DM.
  * Stored in the global PreferencesStore (localStorage in the browser).
  */
 
@@ -22,6 +23,7 @@ export const PREF_PACKET_RETENTION_DAYS = 'meshcore-web.packetRetentionDays';
 export const PREF_STORE_PRIVATE_KEY = 'meshcore-web.storePrivateKey';
 export const PREF_PATH_NAMES = 'meshcore-web.pathNames';
 export const PREF_APPROXIMATE_POSITIONS = 'meshcore-web.approximatePositions';
+export const PREF_SMAZ_AUTO_ENABLE = 'meshcore-web.smazAutoEnable';
 
 /** Store default (DEFAULT_RETENTION.packets, store/time-log.ts). */
 export const DEFAULT_PACKET_RETENTION_DAYS = 90;
@@ -44,6 +46,7 @@ export class AppSettingsModel {
   readonly #storeKey: Signal<boolean>;
   readonly #pathNames: Signal<boolean>;
   readonly #approximatePositions: Signal<boolean>;
+  readonly #smazAutoEnable: Signal<boolean>;
 
   readonly theme: ReadonlySignal<ThemePreference>;
   readonly timeFormat: ReadonlySignal<TimeFormatPreference>;
@@ -61,6 +64,11 @@ export class AppSettingsModel {
    * were last heard through (issue #7, `position-estimator.ts`). Default off.
    */
   readonly approximatePositions: ReadonlySignal<boolean>;
+  /**
+   * Turn on SMAZ compression for a contact when they send a compressed DM, unless the user has
+   * set that contact's compression explicitly (feature-inventory.md §2.4a). Default off.
+   */
+  readonly smazAutoEnable: ReadonlySignal<boolean>;
 
   #offs: Array<() => void> = [];
 
@@ -84,6 +92,8 @@ export class AppSettingsModel {
     this.pathNames = this.#pathNames.readonly;
     this.#approximatePositions = signal(prefs.getItem(PREF_APPROXIMATE_POSITIONS) === 'true');
     this.approximatePositions = this.#approximatePositions.readonly;
+    this.#smazAutoEnable = signal(prefs.getItem(PREF_SMAZ_AUTO_ENABLE) === 'true');
+    this.smazAutoEnable = this.#smazAutoEnable.readonly;
 
     // apply a user-chosen retention whenever a radio's store opens (the default needs no prune)
     this.#offs.push(
@@ -141,6 +151,11 @@ export class AppSettingsModel {
   setApproximatePositions(on: boolean): void {
     this.#approximatePositions.value = on;
     this.prefs.setItem(PREF_APPROXIMATE_POSITIONS, on ? 'true' : 'false');
+  }
+
+  setSmazAutoEnable(on: boolean): void {
+    this.#smazAutoEnable.value = on;
+    this.prefs.setItem(PREF_SMAZ_AUTO_ENABLE, on ? 'true' : 'false');
   }
 
   /** Formats epoch ms as a clock time following the time-format preference. */

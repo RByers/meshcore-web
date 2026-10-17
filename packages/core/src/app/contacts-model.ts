@@ -486,7 +486,10 @@ export class ContactsModel extends StoreBoundModel {
     }
   }
 
-  /** Local SMAZ compression setting for outgoing DMs (MeshCore Open compatible). */
+  /**
+   * Local SMAZ compression setting for outgoing DMs (MeshCore Open compatible). `false` is stored
+   * explicitly (not cleared), so a later compressed DM never turns it back on (smazAutoEnable).
+   */
   async setSmaz(key: string, smaz: boolean): Promise<void> {
     await this.store?.contacts.updateLocal(key, { smaz });
   }

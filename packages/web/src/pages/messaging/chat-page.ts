@@ -6,6 +6,7 @@
 import { css, html, nothing, type PropertyValues, type TemplateResult } from 'lit';
 import { parseReply, receivedSignal, type ChatModel } from '@meshcore-web/core/app';
 import type { ConversationType, MessageRecord } from '@meshcore-web/core/store';
+import { smazSizes } from '@meshcore-web/core/util/smaz';
 import { AppElement } from '../../app-context.js';
 import { formatDuration, formatRelative, formatSnr, formatTime } from '../../format.js';
 import { hrefFor } from '../../router.js';
@@ -188,6 +189,10 @@ export class McChatPage extends AppElement {
         color: var(--mc-text-muted);
         margin-inline: 8px;
       }
+      .meta .smaz {
+        display: inline-flex;
+        cursor: help;
+      }
       .meta button {
         min-height: 0;
         padding: 0 6px;
@@ -280,13 +285,6 @@ export class McChatPage extends AppElement {
         align-items: center;
         justify-content: space-between;
         gap: 4px 12px;
-      }
-      .smaz-toggle {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        font-size: 0.75rem;
-        color: var(--mc-text-muted);
       }
       .bytes {
         font-size: 0.75rem;
@@ -464,14 +462,6 @@ export class McChatPage extends AppElement {
     }
   }
 
-  async #setCompression(on: boolean): Promise<void> {
-    try {
-      await this.#chat?.setCompression(on);
-    } catch (err) {
-      this.app.notifications.error('Could not change compression', err);
-    }
-  }
-
   #status(m: MessageRecord) {
     if (m.direction !== 'out') return nothing;
     const attempts = (m.attempt ?? 0) + 1;
@@ -523,7 +513,7 @@ export class McChatPage extends AppElement {
       <div class="meta">
         <time datetime=${new Date(m.receivedAt).toISOString()}>${formatTime(m.receivedAt, this.app.clock.now())}</time>
         ${m.direction === 'in' ? this.#signal(m) : nothing}
-        ${m.compressed ? html`<span data-field="smaz" title="Sent over the air SMAZ-compressed">SMAZ</span>` : nothing} ${this.#status(m)}
+        ${m.compressed ? smazIcon(m) : nothing} ${this.#status(m)}
         ${chat.canReact(m)
           ? html`<button data-action="react" aria-label="React" title="React (or right-click / long-press the message)" @click=${() => this.#openReactions(m)}>☺+</button>`
           : nothing}
@@ -671,16 +661,6 @@ export class McChatPage extends AppElement {
           <button class="primary" type="submit" data-action="send" ?disabled=${!canSend || !this.#draft.trim() || budget.over}>Send</button>
         </div>
         <div class="compose-foot">
-          <label class="smaz-toggle" title="Only turn this on if the recipient(s) use MeshCore Open or another client that decodes SMAZ; others see “s:…” text">
-            <input
-              type="checkbox"
-              data-action="smaz"
-              .checked=${chat.compression.value}
-              ?disabled=${!(channel ? ch : chat.contact.value)}
-              @change=${(e: Event) => void this.#setCompression((e.target as HTMLInputElement).checked)}
-            />
-            Compress messages (SMAZ, MeshCore Open compatible)
-          </label>
           <div class="bytes" data-field="bytes" ?data-over=${budget.over} ?data-compressed=${budget.compressed} aria-live="polite">
             ${budget.remaining} / ${limit} bytes left${budget.compressed ? ' (compressed)' : ''}
           </div>
@@ -689,6 +669,16 @@ export class McChatPage extends AppElement {
       <mc-reaction-picker @reaction-pick=${(e: CustomEvent<{ emoji: string }>) => void this.#react(e.detail.emoji)}></mc-reaction-picker>
     `;
   }
+}
+
+/** Marks a message that went over the air as an "s:" SMAZ envelope, with the size saving as its tooltip. */
+function smazIcon(m: MessageRecord) {
+  const { plain, compressed } = smazSizes(m.text);
+  const label = `${m.direction === 'out' ? 'Sent' : 'Received'} SMAZ-compressed: ${plain} → ${compressed} bytes`;
+  return html`<span class="smaz" data-field="smaz" role="img" title=${label} aria-label=${label}
+    ><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M8 1.5v4.5M5.5 3.5 8 6l2.5-2.5M8 14.5V10M5.5 12.5 8 10l2.5 2.5M2.5 8h11" /></svg
+  ></span>`;
 }
 
 customElements.define('mc-chat-page', McChatPage);

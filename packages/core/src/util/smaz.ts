@@ -12,10 +12,10 @@
  * Envelope (feature-inventory.md §2.4a): a compressed message is the ordinary text payload
  * `"s:" + base64(smaz(utf8(text)))` (standard alphabet, padded), used only when it is strictly
  * shorter in bytes than the original. There is no txt_type or flag byte; receivers recognise the
- * prefix and validate it ({@link smazTryDecode}).
+ * prefix and accept only canonical envelopes ({@link smazTryDecode}).
  */
 
-import { base64Decode, base64Encode, bytesEqual, utf8Encode } from './bytes.js';
+import { base64Decode, base64Encode, utf8Encode } from './bytes.js';
 
 const VERBATIM_SINGLE = 254;
 const VERBATIM_RUN = 255;
@@ -151,25 +151,32 @@ export function smazEncodeIfSmaller(text: string): string {
 }
 
 /**
- * MeshCore Open `Smaz.tryDecodePrefixed`: the decoded text if `text` is a compressed payload,
- * else null. Leading whitespace is ignored. Plain text can start with "s:" too ("s:test"), so a
- * payload only counts when it satisfies the encoder's invariants: the base64 (standard or
- * URL-safe, padding optional) decodes to a non-empty, well-formed SMAZ stream of valid UTF-8,
- * re-compressing the result gives the same bytes, and the envelope is shorter than the decoded
- * bytes. Very short ambiguous inputs can still match (as in MeshCore Open).
+ * The decoded text if `text` is a compressed payload, else null. Plain text can start with "s:"
+ * too ("s:test", "s:note"), so this is stricter than MeshCore Open's `Smaz.tryDecodePrefixed`
+ * (which ignores leading whitespace and accepts URL-safe / unpadded base64): a payload only counts
+ * when it is canonical, i.e. exactly what {@link smazEncodeIfSmaller} produces for the decoded
+ * text — standard alphabet, `=` padding, no whitespace, a well-formed SMAZ stream of valid UTF-8
+ * that the greedy compressor reproduces, and an envelope strictly shorter than the text. Real
+ * MeshCore Open envelopes always pass. Residual risk: "s:" + a 4/8/12-character word that happens
+ * to be valid base64 can still decode (feature-inventory.md §2.4a).
  */
 export function smazTryDecode(text: string): string | null {
-  const t = text.trimStart();
-  if (!t.startsWith(SMAZ_PREFIX) || t.length <= SMAZ_PREFIX.length) return null;
-  const compressed = base64Decode(t.slice(SMAZ_PREFIX.length));
+  if (!text.startsWith(SMAZ_PREFIX) || text.length <= SMAZ_PREFIX.length) return null;
+  const compressed = base64Decode(text.slice(SMAZ_PREFIX.length));
   if (!compressed || compressed.length === 0) return null;
+  let decoded: string;
   try {
-    const raw = smazDecompressBytes(compressed);
-    const decoded = strictUtf8.decode(raw);
-    if (!bytesEqual(smazCompressBytes(raw), compressed)) return null;
-    if (SMAZ_PREFIX.length + base64Encode(compressed).length >= raw.length) return null;
-    return decoded;
+    decoded = smazDecompress(compressed);
   } catch {
     return null;
   }
+  return smazEncodeIfSmaller(decoded) === text ? decoded : null;
+}
+
+/**
+ * UTF-8 size of `text` and of what goes on the air for it with compression on
+ * ({@link smazEncodeIfSmaller}); `compressed` < `plain` iff the envelope is used.
+ */
+export function smazSizes(text: string): { plain: number; compressed: number } {
+  return { plain: utf8Encode(text).length, compressed: utf8Encode(smazEncodeIfSmaller(text)).length };
 }

@@ -128,6 +128,7 @@ export class AppModel {
       notifications: this.notifications,
       preferences: this.#prefs,
       clock: this.clock,
+      smazAutoEnable: () => this.appSettings.smazAutoEnable.peek(),
       ...(opts.clientOptions ? { clientOptions: opts.clientOptions } : {}),
     });
     this.#offs.push(

@@ -12,6 +12,7 @@ import {
   smazDecompress,
   smazDecompressBytes,
   smazEncodeIfSmaller,
+  smazSizes,
   smazTryDecode,
 } from './smaz.js';
 
@@ -82,11 +83,31 @@ describe('"s:" envelope', () => {
     expect(smazEncodeIfSmaller(s)).toBe(s);
   });
 
-  it('decodes envelopes, tolerating leading whitespace and base64url without padding', () => {
+  it('decodes canonical envelopes (what MeshCore Open and we send)', () => {
     expect(smazTryDecode('s:/lRMOKw+rZg+w0Y=')).toBe('This is a small string');
-    expect(smazTryDecode('  s:/lRMOKw+rZg+w0Y=')).toBe('This is a small string');
-    expect(smazTryDecode('s:_lRMOKw-rZg-w0Y')).toBe('This is a small string');
     expect(smazTryDecode('s:AQD+cSaD/mtec0Ep3PoA/momLTyV5w0LidtHGAY7')).toBe('the quick brown fox jumps over the lazy dog');
+  });
+
+  it('rejects non-canonical envelopes (stricter than MeshCore Open)', () => {
+    // leading whitespace, base64url, missing padding, embedded / trailing whitespace
+    expect(smazTryDecode('  s:/lRMOKw+rZg+w0Y=')).toBeNull();
+    expect(smazTryDecode('s:_lRMOKw-rZg-w0Y=')).toBeNull();
+    expect(smazTryDecode('s:/lRMOKw+rZg+w0Y')).toBeNull();
+    expect(smazTryDecode('s:/lRMOKw+rZg+w0Y= ')).toBeNull();
+    expect(smazTryDecode('s:/lRMOKw+ rZg+w0Y=')).toBeNull();
+    // words whose length is not a multiple of 4 are never canonical base64
+    for (const w of ['abc', 'xpv', 'hello', 'shower', 'message', 'yesterday', 'everything']) {
+      expect(smazTryDecode(`s:${w}`)).toBeNull();
+    }
+  });
+
+  it('residual false positives: "s:" + a 4/8/12-letter word can still look canonical', () => {
+    // valid base64 (no padding needed) of a stream the compressor reproduces, shorter than its text;
+    // indistinguishable from a real envelope (~64% of random 4-letter, ~80% of 8-letter words)
+    expect(smazTryDecode('s:note')).toBe('e\r\nne b');
+    expect(smazTryDecode('s:home')).toBe('d tlae\r\n');
+    expect(smazTryDecode('s:nice')).toBe('e\r\natd ');
+    expect(smazTryDecode('s:yeah')).toBe(' ha>< co');
   });
 
   it('leaves plain text that merely starts with "s:" alone', () => {
@@ -108,5 +129,13 @@ describe('"s:" envelope', () => {
       expect(utf8Encode(e).length).toBeLessThan(utf8Encode(t).length);
       expect(smazTryDecode(e)).toBe(t);
     }
+  });
+
+  it('smazSizes reports plain and on-air UTF-8 sizes', () => {
+    const t = 'the weather is fine here, over';
+    expect(smazSizes(t)).toEqual({ plain: t.length, compressed: smazEncodeIfSmaller(t).length });
+    expect(smazSizes(t).compressed).toBeLessThan(t.length);
+    // not worth compressing: both sizes are the plain UTF-8 size
+    expect(smazSizes('é')).toEqual({ plain: 2, compressed: 2 });
   });
 });

@@ -78,6 +78,16 @@ export class McContactInfoPage extends AppElement {
         border-bottom-color: var(--mc-accent);
         font-weight: 600;
       }
+      label.check {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .hint {
+        color: var(--mc-text-muted);
+        font-size: 0.85rem;
+        margin: 4px 0 0;
+      }
       .actions {
         display: flex;
         flex-wrap: wrap;
@@ -217,6 +227,30 @@ export class McContactInfoPage extends AppElement {
     `;
   }
 
+  /** Per-contact SMAZ setting for outgoing DMs (feature-inventory.md §2.4a); explicit off blocks auto-enable. */
+  #smazSetting(v: ContactView) {
+    return html`<section class="card" data-section="smaz">
+      <label class="check"
+        ><input
+          type="checkbox"
+          data-action="smaz"
+          .checked=${v.record.smaz === true}
+          @change=${(e: Event) => void this.#setSmaz(v.key, (e.target as HTMLInputElement).checked)}
+        />
+        Compress outgoing messages (SMAZ)</label
+      >
+      <p class="hint">Only MeshCore Open and compatible clients decode compressed messages; other clients show them as “s:…” text.</p>
+    </section>`;
+  }
+
+  async #setSmaz(key: string, on: boolean): Promise<void> {
+    try {
+      await this.app.contacts.setSmaz(key, on);
+    } catch (err) {
+      this.app.notifications.error('Could not change compression', err);
+    }
+  }
+
   #renderInfo(v: ContactView) {
     const c = v.record;
     const path = this.app.contacts.outPathLabel(v, this.app.appSettings.pathNames.value);
@@ -240,6 +274,7 @@ export class McContactInfoPage extends AppElement {
           ${c.notes ? html`<dt>Notes</dt><dd data-field="notes">${c.notes}</dd>` : nothing}
         </dl>
       </section>
+      ${v.typeName === 'chat' || v.typeName === 'room' ? this.#smazSetting(v) : nothing}
       <div class="actions">
         ${v.typeName === 'chat' || v.typeName === 'room'
           ? html`<a data-action="message" href=${hrefFor(`/chat/${v.key}`)}>Message</a>`

@@ -171,6 +171,8 @@ export interface ConnectionModelDeps {
   clientOptions?: CompanionClientOptions;
   /** Host time + timers for the session (client, capture, device list). Default {@link systemClock}. */
   clock?: Clock;
+  /** Read on each compressed DM: auto-enable the sender's SMAZ setting (CapturePipelineOptions). */
+  smazAutoEnable?: () => boolean;
 }
 
 export interface ConnectionEvents {
@@ -329,6 +331,7 @@ export class ConnectionModel {
       const devices = await this.deps.devices().catch(() => null);
       s.pipeline = new CapturePipeline(client, {
         devices,
+        ...(this.deps.smazAutoEnable ? { smazAutoEnable: this.deps.smazAutoEnable } : {}),
         onError: (err, step) => {
           if (live()) this.deps.notifications.error(`Could not save ${step}`, err);
         },

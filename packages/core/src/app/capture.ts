@@ -4,7 +4,8 @@
  * - every `frame` event → `RadioStore.captureFrame` (packets carried by LOG_RX/RAW/TRACE pushes
  *   are extracted there);
  * - contact / channel message pushes → `MessagesRepo.append` (which bumps unread counts); emoji
- *   reactions (`r:…`) attach to their target message instead (`MessagesRepo.addReaction`);
+ *   reactions (`r:…`) attach to their target message instead (`MessagesRepo.addReaction`); a
+ *   SMAZ-compressed DM can turn on the sender's compression (`smazAutoEnable`, §2.4a);
  * - `contactsChanged` → `ContactsRepo.syncFromDevice` / `markRemovedFromDevice`;
  * - `selfInfo` updates → `DevicesRepo.update`;
  * - SEND_CONFIRMED pushes → `MessagesRepo.markDeliveredByAck` (outgoing DMs expecting that ACK).
@@ -32,6 +33,11 @@ type Task = (store: RadioStore) => Promise<void>;
 
 export interface CapturePipelineOptions {
   devices?: DevicesRepo | null | undefined;
+  /**
+   * Whether a compressed DM turns on SMAZ compression for its sender when the contact's setting
+   * was never set (`ContactRecord.smaz` absent; feature-inventory.md §2.4a). Default off.
+   */
+  smazAutoEnable?: () => boolean;
   /** Called for each failed step (the pipeline keeps going). */
   onError?: (err: unknown, step: string) => void;
 }
@@ -182,6 +188,11 @@ export class CapturePipeline {
     if (!(await this.#append(store, input))) return;
     if (key.length === 64) {
       await store.contacts.touch(key, meta.receivedAt);
+      if (input.compressed && this.opts.smazAutoEnable?.()) {
+        // an explicit false (the user turned it off) sticks
+        const c = await store.contacts.get(key);
+        if (c && c.smaz === undefined) await store.contacts.updateLocal(key, { smaz: true });
+      }
       if (f.snr !== undefined && isZeroHop(f.route.pathLen)) await recordDirect(store, { key, snr: f.snr, ts: meta.receivedAt });
     }
   }

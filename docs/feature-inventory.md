@@ -305,19 +305,46 @@ paths, `models/channel_message.dart`, `storage/{contact,channel}_settings_store.
   optional padding, and only accepts a payload that decompresses to valid UTF-8, re-compresses to
   the identical bytes, and whose envelope (`2 + base64 length`) is shorter than the decoded bytes.
   Anything else (`"s:test"`, `"s: hello"`) is shown as typed. Very short ambiguous texts could
-  still match; this is accepted upstream.
+  still match; this is accepted upstream. (MeshCore Web decodes more strictly; see below.)
 - **Settings.** Local only, default off: `contact_smaz_<pubkeyhex>` and `channel_smaz_<channel id>`.
   DM toggle: chat screen → contact settings dialog, "SMAZ compression — Compress outgoing
   messages", committed immediately. Channel toggle: edit-channel sheet, saved with the form.
   SMAZ and Cyr2Lat are mutually exclusive in MeshCore Open (Cyr2Lat is not implemented here).
 - **Byte budget.** With the setting on, the composer counts the bytes of the transformed (on-air)
   text against the limit.
-- **MeshCore Web.** `ContactRecord.smaz` / `ChannelRecord.smaz` (optional, absent = off, so no DB
-  migration; preserved across device syncs). `MessageRecord.text` is always the plain text;
-  `MessageRecord.compressed` marks messages sent or received as an envelope. Toggles: chat page
-  composer ("Compress messages (SMAZ, MeshCore Open compatible)", DMs and channels) and the
-  channel add/edit dialog. `ChatModel.byteLimit` no longer subtracts the reply prefix while
-  compression is on (the prefix is compressed with the text and counted in `budget().used`).
+- **MeshCore Web.**
+  - *Per-conversation setting.* `ContactRecord.smaz` / `ChannelRecord.smaz`, persistent and local
+    (optional, so no DB migration; preserved across device syncs). For contacts the three states
+    matter: absent = off and never set by the user; `true` = on; `false` = explicitly turned off
+    (`ContactsModel.setSmaz(key, false)` / `ChatModel.setCompression(false)` store `false`, they
+    do not clear the field). `ChatModel.compression` / `setCompression` work for both contacts and
+    channels; the channel add/edit dialog also sets it.
+  - *Auto-enable (app setting, default off).* `AppSettingsModel.smazAutoEnable` /
+    `setSmazAutoEnable` (preference `meshcore-web.smazAutoEnable`): "Turn on compression for a
+    contact when they send a compressed message". When on, a received DM (not a CLI reply, not a
+    channel message) that decodes as compressed sets the sender's `smaz = true` if it is absent;
+    an explicit `false` is never overridden. Done in the capture pipeline (`capture.ts`). Not in
+    MeshCore Open.
+  - *Strict decoding.* `smazTryDecode` accepts only a canonical envelope: the received text must
+    equal exactly `smazEncodeIfSmaller(decoded)` — `s:` at the very start (no leading whitespace),
+    standard alphabet with `=` padding, no whitespace, a stream the greedy compressor reproduces,
+    and an envelope strictly shorter than the text. This is stricter than upstream (which also
+    accepts leading whitespace and URL-safe / unpadded base64); real MeshCore Open envelopes always
+    pass, since its encoder emits exactly this form. It rejects every `"s:" + word` whose length is
+    not a multiple of 4 (`"s:abc"`, `"s:hello"`; upstream decodes many of these). Residual risk:
+    `"s:" + ` a 4/8/12-letter word that is valid base64 is indistinguishable from a real envelope;
+    measured on random lowercase words, ~64% of 4-letter, ~81% of 8-letter and ~73% of 12-letter
+    ones still decode (`"s:note"` → `"e\r\nne b"`, also `s:home`, `s:nice`, `s:yeah`).
+  - `MessageRecord.text` is always the plain text; `MessageRecord.compressed` marks messages sent
+    or received as an envelope. `ChatModel.byteLimit` no longer subtracts the reply prefix while
+    compression is on (the prefix is compressed with the text and counted in `budget().used`).
+  - *UI.* Contacts: a "Compress outgoing messages (SMAZ)" checkbox on the contact info page
+    (`/contact/:key`, chat and room contacts), checked iff `smaz === true`; unchecking stores
+    `false`. Channels: the add/edit channel dialog. There is no composer toggle; the composer's
+    byte counter says "(compressed)" when the envelope is used. The global auto-enable toggle is
+    on the Settings page (App section). A compressed message (sent or received, DM or channel)
+    shows a small icon in its meta line whose tooltip / `aria-label` reads "Sent|Received
+    SMAZ-compressed: N → M bytes" (UTF-8 size of the plain text → of the envelope, `smazSizes`).
 
 ### 2.4b Emoji reactions (implemented in MeshCore Web, issue #5)
 

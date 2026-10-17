@@ -56,6 +56,61 @@ describe('SMAZ compression (MeshCore Open compatible)', () => {
     expect((await store.contacts.get(hex.alice))?.smaz).toBe(true);
   });
 
+  describe('auto-enable on a received compressed DM (app setting smazAutoEnable)', () => {
+    const env = smazEncodeIfSmaller(LONG);
+
+    it('setting off (default): a compressed DM leaves the contact setting absent', async () => {
+      const { app, hex, s, store } = await connected();
+      expect(app.appSettings.smazAutoEnable.value).toBe(false);
+      const chat = app.chat('contact', hex.alice);
+      await chat.settled();
+      s.nodes.alice.sendText(s.keys.self, env);
+      await vi.waitFor(() => expect(chat.messages.value.at(-1)).toMatchObject({ text: LONG, compressed: true }), { timeout: 5000 });
+      await app.connection.capture?.idle();
+      expect((await store.contacts.get(hex.alice))?.smaz).toBeUndefined();
+      expect(chat.compression.value).toBe(false);
+    });
+
+    it('setting on: turns on an absent setting, never overrides an explicit false or reacts to channels', async () => {
+      const { app, hex, s, store } = await connected();
+      app.appSettings.setSmazAutoEnable(true);
+      const alice = app.chat('contact', hex.alice);
+      const bob = app.chat('contact', hex.bob);
+      const pub = app.chat('channel', await channelKeyForPsk(publicChannelSecret()));
+      await Promise.all([alice.settled(), bob.settled(), pub.settled()]);
+
+      // a compressed channel message from Bob does not touch his contact setting
+      s.nodes.bob.sendChannelMessage('Public', env);
+      await vi.waitFor(() => expect(pub.messages.value.at(-1)).toMatchObject({ senderName: 'Bob', compressed: true }), { timeout: 5000 });
+      await app.connection.capture?.idle();
+      expect((await store.contacts.get(hex.bob))?.smaz).toBeUndefined();
+
+      // a non-canonical "s:" text is not a compressed message
+      s.nodes.alice.sendText(s.keys.self, 's:abc');
+      await vi.waitFor(() => expect(alice.messages.value.at(-1)?.text).toBe('s:abc'), { timeout: 5000 });
+      await app.connection.capture?.idle();
+      expect((await store.contacts.get(hex.alice))?.smaz).toBeUndefined();
+
+      // absent + compressed DM → on
+      s.nodes.alice.sendText(s.keys.self, env);
+      await vi.waitFor(() => expect(alice.compression.value).toBe(true), { timeout: 5000 });
+      expect((await store.contacts.get(hex.alice))?.smaz).toBe(true);
+
+      // explicit false sticks
+      await app.contacts.setSmaz(hex.bob, false);
+      expect((await store.contacts.get(hex.bob))?.smaz).toBe(false);
+      s.nodes.bob.sendText(s.keys.self, env);
+      await vi.waitFor(() => expect(bob.messages.value.at(-1)).toMatchObject({ text: LONG, compressed: true }), { timeout: 5000 });
+      await app.connection.capture?.idle();
+      expect((await store.contacts.get(hex.bob))?.smaz).toBe(false);
+      expect(bob.compression.value).toBe(false);
+
+      // the explicit false survives a device contact sync
+      await app.contacts.refresh();
+      expect((await store.contacts.get(hex.bob))?.smaz).toBe(false);
+    });
+  });
+
   it('DM reply: the "@[name] " prefix is compressed with the text and not subtracted from the limit', async () => {
     const { app, hex, s } = await connected();
     const chat = app.chat('contact', hex.alice);

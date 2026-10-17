@@ -1015,6 +1015,15 @@ export class McSettingsPage extends AppElement {
           Store an exported private key in this browser to decrypt direct messages in the packet inspector</label
         >
         <p class="hint">Off by default. Turning it off deletes a stored key of the connected radio.</p>
+        <label class="check"
+          ><input type="checkbox" name="smazAutoEnable" .checked=${s.smazAutoEnable.value}
+            @change=${(e: Event) => s.setSmazAutoEnable((e.target as HTMLInputElement).checked)} />
+          Turn on compression for a contact when they send a compressed message</label
+        >
+        <p class="hint">
+          Off by default. A contact who sends SMAZ-compressed (“s:…”) messages uses MeshCore Open or a compatible client, so it can decode them too.
+          Contacts where you turned compression off on their contact page are left alone.
+        </p>
       </form>
     </section>`;
   }
