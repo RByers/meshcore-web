@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
+import { ContactFlag } from '../protocol/constants.js';
 import { toHex } from '../util/bytes.js';
 import { smazEncodeIfSmaller } from '../util/smaz.js';
 import { channelKeyForPsk } from '../store/channels.js';
@@ -89,6 +90,29 @@ describe('ContactsModel', () => {
     expect(names()).toEqual(['Carol']);
     m.setSearch(toHex(scenarioKey('bob')).slice(0, 6));
     expect(names()).toEqual(['Bob']);
+  });
+
+  it('stars / unstars a contact on the radio (FAVOURITE flag) and lists favourites first', async () => {
+    const { app, s, hex } = await connected();
+    const m = app.contacts;
+    await vi.waitFor(() => expect(m.views.value).toHaveLength(6));
+    await m.settled();
+    const names = () => m.visible.value.map((v) => v.name);
+    m.setSort('name');
+    expect(names()[0]).toBe('Alice');
+
+    await m.setFavourite(hex.carol, true);
+    expect(m.view(hex.carol)!.favourite).toBe(true);
+    expect(s.emulator.getContact(s.keys.carol)!.flags & ContactFlag.FAVOURITE).toBe(ContactFlag.FAVOURITE);
+    expect(names()).toEqual(['Alice', 'Carol', 'Bob', 'Hilltop Repeater', 'Town Square', 'Weather Station']);
+
+    // Alice's favourite comes from the radio flag: unstarring clears it there too
+    await m.setFavourite(hex.alice, false);
+    expect(m.view(hex.alice)!.favourite).toBe(false);
+    expect(s.emulator.getContact(s.keys.alice)!.flags & ContactFlag.FAVOURITE).toBe(0);
+    expect(names()).toEqual(['Carol', 'Alice', 'Bob', 'Hilltop Repeater', 'Town Square', 'Weather Station']);
+    m.setSort('recent');
+    expect(names()[0]).toBe('Carol');
   });
 
   it('resets a path, shares, exports and re-imports, removes and adds by key', async () => {

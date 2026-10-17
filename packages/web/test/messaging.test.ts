@@ -107,6 +107,26 @@ describe('contacts page', () => {
     expect(t.emulatorScenario().emulator.getContact(t.emulatorScenario().keys.bob)).toBeUndefined();
   });
 
+  it('toggles a favourite with the star and lists favourites first', async () => {
+    const t = await connected();
+    const k = keys(t);
+    await go(t, '/contacts', '[data-contact]');
+    await t.fill('[data-field="sort"]', 'name');
+    const order = () => t.queryAll('[data-contact]').map((li) => li.dataset['contact']);
+    const star = (key: string) => t.query(`[data-contact="${key}"] [data-action="favourite"]`)!;
+    await t.until(() => order()[0] === k.alice, 3000, 'Alice (favourite) first');
+    expect(star(k.alice).getAttribute('aria-pressed')).toBe('true');
+    expect(star(k.bob).getAttribute('aria-pressed')).toBe('false');
+
+    await t.click(`[data-contact="${k.bob}"] [data-action="favourite"]`);
+    await t.until(() => star(k.bob).getAttribute('aria-pressed') === 'true', 3000, 'Bob starred');
+    expect(order().slice(0, 2)).toEqual([k.alice, k.bob]);
+
+    await t.click(`[data-contact="${k.alice}"] [data-action="favourite"]`);
+    await t.until(() => star(k.alice).getAttribute('aria-pressed') === 'false', 3000, 'Alice unstarred');
+    expect(order()[0]).toBe(k.bob);
+  });
+
   it('shows a node summary for repeaters', async () => {
     const t = await connected();
     const k = keys(t);

@@ -144,7 +144,7 @@ export class ContactsModel extends StoreBoundModel {
     });
   });
 
-  /** Filtered by type / search and sorted. */
+  /** Filtered by type / search and sorted, favourites first. */
   readonly visible: ReadonlySignal<readonly ContactView[]> = computed(() => {
     const filter = this.#filter.value;
     const q = this.#search.value.trim().toLowerCase();
@@ -158,8 +158,10 @@ export class ContactsModel extends StoreBoundModel {
     });
     const byName = (a: ContactView, b: ContactView): number =>
       a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }) || a.key.localeCompare(b.key);
-    if (sort === 'name') return out.sort(byName);
-    return out.sort((a, b) => Math.max(b.lastActivity, b.lastSeen) - Math.max(a.lastActivity, a.lastSeen) || byName(a, b));
+    const byRecent = (a: ContactView, b: ContactView): number =>
+      Math.max(b.lastActivity, b.lastSeen) - Math.max(a.lastActivity, a.lastSeen) || byName(a, b);
+    const inner = sort === 'name' ? byName : byRecent;
+    return out.sort((a, b) => Number(b.favourite) - Number(a.favourite) || inner(a, b));
   });
 
   setSort(s: ContactSort): void {
@@ -355,9 +357,40 @@ export class ContactsModel extends StoreBoundModel {
     return this.add(share);
   }
 
-  /** Local favourite flag. */
+  /**
+   * Stars / unstars a contact. Stored locally and, for a contact on the radio, as its FAVOURITE
+   * contact flag (as MeshCore Open does; the firmware never overwrites a favourite when full).
+   * Clearing a radio-flagged favourite needs a connection.
+   */
   async setFavourite(key: string, favourite: boolean): Promise<void> {
-    await this.store?.contacts.updateLocal(key, { favourite });
+    const store = this.store;
+    if (!store) throw new Error('Not connected');
+    const k = key.toLowerCase();
+    const rec = await store.contacts.get(k);
+    if (!rec) throw new Error('Unknown contact');
+    const client = this.connection.client.peek();
+    const onRadio = rec.onDevice && client?.connected;
+    const deviceFav = (rec.flags & ContactFlag.FAVOURITE) !== 0;
+    if (!favourite && deviceFav && !onRadio) throw new Error('Not connected');
+    await store.contacts.updateLocal(k, { favourite });
+    if (onRadio && deviceFav !== favourite) {
+      const c = client.findContact(rec.pubKey) ?? rec;
+      await client.addOrUpdateContact({
+        pubKey: c.pubKey,
+        type: c.type,
+        flags: favourite ? c.flags | ContactFlag.FAVOURITE : c.flags & ~ContactFlag.FAVOURITE,
+        outPathLen: c.outPathLen,
+        outPath: c.outPath,
+        name: c.name,
+        // the contact's own advert time, never our clock (the firmware uses it as a replay guard)
+        lastAdvert: c.lastAdvert,
+        lat: c.lat,
+        lon: c.lon,
+      });
+      await this.#persisted();
+    } else {
+      await this.reload();
+    }
   }
 
   /** Local SMAZ compression setting for outgoing DMs (MeshCore Open compatible). */

@@ -30,6 +30,22 @@ export class McContactsPage extends AppElement {
       .flags {
         font-size: 0.8rem;
       }
+      .star-btn {
+        flex: none;
+        border: 0;
+        background: transparent;
+        min-width: 2.5rem;
+        padding: 0;
+        font-size: 1.3rem;
+        line-height: 1;
+        color: var(--mc-text-muted);
+      }
+      .star-btn[aria-pressed='true'] {
+        color: #f5b400;
+      }
+      .star-btn:hover {
+        color: #f5b400;
+      }
       .share-url {
         width: 100%;
         font-family: var(--mc-mono);
@@ -78,7 +94,7 @@ export class McContactsPage extends AppElement {
     }
   }
 
-  async #act(v: ContactView, action: 'reset' | 'share' | 'export' | 'remove' | 'favourite'): Promise<void> {
+  async #act(v: ContactView, action: 'reset' | 'share' | 'export' | 'remove'): Promise<void> {
     this.renderRoot.querySelector<HTMLElement>(`#menu-${v.key}`)?.hidePopover();
     const m = this.app.contacts;
     try {
@@ -100,9 +116,6 @@ export class McContactsPage extends AppElement {
           this.#dialog('export-dialog')?.showModal();
           break;
         }
-        case 'favourite':
-          await m.setFavourite(v.key, !v.favourite);
-          break;
         case 'remove':
           this.#removeKey = v.key;
           this.requestUpdate();
@@ -112,6 +125,14 @@ export class McContactsPage extends AppElement {
       }
     } catch (err) {
       this.app.notifications.error(`Could not ${action === 'reset' ? 'reset path' : action} ${v.name}`, err);
+    }
+  }
+
+  async #toggleFavourite(v: ContactView): Promise<void> {
+    try {
+      await this.app.contacts.setFavourite(v.key, !v.favourite);
+    } catch (err) {
+      this.app.notifications.error(`Could not ${v.favourite ? 'unstar' : 'star'} ${v.name}`, err);
     }
   }
 
@@ -160,7 +181,6 @@ export class McContactsPage extends AppElement {
         <span class="row-main">
           <span class="row-title">
             <span class="name">${v.name}</span>
-            ${v.favourite ? html`<span class="flags" title="Favourite" aria-label="Favourite">★</span>` : nothing}
             ${!v.onDevice ? html`<span class="flags muted" title="Not on the radio">(not on radio)</span>` : nothing}
             <span class="when">${v.lastActivity ? formatRelative(v.lastActivity, now) : ''}</span>
           </span>
@@ -169,12 +189,19 @@ export class McContactsPage extends AppElement {
         </span>
         ${unreadBadge(v.unread)}
       </a>
+      <button
+        class="star-btn"
+        data-action="favourite"
+        aria-pressed=${v.favourite ? 'true' : 'false'}
+        aria-label=${`Favourite ${v.name}`}
+        title=${v.favourite ? 'Remove from favourites' : 'Add to favourites'}
+        @click=${() => void this.#toggleFavourite(v)}
+      >
+        ${v.favourite ? '★' : '☆'}
+      </button>
       <button class="menu-btn" popovertarget=${menuId} aria-label=${`Actions for ${v.name}`} data-menu=${v.key}>⋮</button>
       <div class="menu" id=${menuId} popover>
         <a data-action="info" href=${hrefFor(`/contact/${v.key}`)}>Contact info</a>
-        <button data-action="favourite" @click=${() => void this.#act(v, 'favourite')}>
-          ${v.favourite ? 'Remove favourite' : 'Add favourite'}
-        </button>
         <button data-action="set-path" @click=${() => (location.hash = hrefFor(`/path/${v.key}`))}>Set path…</button>
         <button data-action="reset-path" ?disabled=${!v.onDevice} @click=${() => void this.#act(v, 'reset')}>Reset path</button>
         <button data-action="share" ?disabled=${!v.onDevice} @click=${() => void this.#act(v, 'share')}>Share (zero hop)</button>
