@@ -335,6 +335,30 @@ export class PacketLogModel extends StoreBoundModel {
   readonly context: ReadonlySignal<SummaryContext> = this.#ctx.readonly;
   /** True when the radio's private key is stored for DM decryption (opt-in). */
   readonly selfKeyStored: ReadonlySignal<boolean> = computed(() => this.#selfKey.value !== null);
+  /**
+   * Keys for decrypting DMs to / from this radio (summaries, packet statistics), null unless the
+   * radio's private key is stored (opt-in). Shared secrets are cached per contact until the key
+   * changes. A new object whenever the key or the contact key list changes.
+   */
+  readonly dmKeys: ReadonlySignal<DmKeys | null> = computed(() => {
+    const priv = this.#selfKey.value;
+    const pub = this.connection.store.value?.pubKey;
+    const contacts = this.#contactKeys.value;
+    if (!priv || !pub) return null;
+    return {
+      selfPublicKey: fromHex(pub),
+      contacts,
+      sharedSecret: (peer: Uint8Array) => {
+        const k = toHex(peer);
+        let s = this.#secrets.get(k);
+        if (!s) {
+          s = calcSharedSecret(priv, peer).catch(() => null);
+          this.#secrets.set(k, s);
+        }
+        return s;
+      },
+    };
+  });
 
   /** Over-the-air packets. */
   readonly packets: LogView<PacketRecord, PacketFilter, PacketRow>;
@@ -513,22 +537,7 @@ export class PacketLogModel extends StoreBoundModel {
 
   /** DM decryption keys for summaries, when the radio's private key is stored (opt-in). */
   #dmKeys(): DmKeys | undefined {
-    const priv = this.#selfKey.peek();
-    const pub = this.store?.pubKey;
-    if (!priv || !pub) return undefined;
-    return {
-      selfPublicKey: fromHex(pub),
-      contacts: this.#contactKeys.peek(),
-      sharedSecret: (peer) => {
-        const k = toHex(peer);
-        let s = this.#secrets.get(k);
-        if (!s) {
-          s = calcSharedSecret(priv, peer).catch(() => null);
-          this.#secrets.set(k, s);
-        }
-        return s;
-      },
-    };
+    return this.dmKeys.peek() ?? undefined;
   }
 
   // ---- per-node activity ----

@@ -17,6 +17,7 @@ import {
   parseTxtMsgPlaintext,
   type ParsedPayload,
   type PeerDatagramPayload,
+  type TxtMsgPlaintext,
 } from '../packet/payloads.js';
 import type { FrameRecord, PacketRecord } from '../store/schema.js';
 
@@ -236,6 +237,18 @@ export async function summarizePacket(
 }
 
 async function dmSummary(p: PeerDatagramPayload, view: PacketView, dm: DmKeys): Promise<string | null> {
+  const r = await decryptDm(p, dm);
+  if (r === null) return null;
+  if (r === 'malformed') return `${view.summary} (decrypted, malformed)`;
+  return `${view.summary}: ${quote(r.text)}`;
+}
+
+/**
+ * Decrypts a TXT_MSG between this radio and a known contact (either direction): the parsed
+ * plaintext, 'malformed' when a contact's key verified but the plaintext did not parse, or null
+ * when no shared secret decrypts it.
+ */
+export async function decryptDm(p: PeerDatagramPayload, dm: DmKeys): Promise<TxtMsgPlaintext | 'malformed' | null> {
   const mine = dm.selfPublicKey[0];
   for (const c of dm.contacts) {
     if (!((c[0] === p.srcHash && mine === p.destHash) || (c[0] === p.destHash && mine === p.srcHash))) continue;
@@ -249,9 +262,9 @@ async function dmSummary(p: PeerDatagramPayload, view: PacketView, dm: DmKeys): 
     }
     if (!pt) continue;
     try {
-      return `${view.summary}: ${quote(parseTxtMsgPlaintext(pt).text)}`;
+      return parseTxtMsgPlaintext(pt);
     } catch {
-      return `${view.summary} (decrypted, malformed)`;
+      return 'malformed';
     }
   }
   return null;

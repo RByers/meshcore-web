@@ -5,7 +5,8 @@
  *
  * Derivation is two-stage so it stays cheap for thousands of packets:
  * 1. async, once per record while loading / live-tailing: the structural view (`viewPacket`) and,
- *    for GRP_TXT with a known channel PSK, the decrypted `"sender: text"` sender name;
+ *    for GRP_TXT with a known channel PSK, the decrypted `"sender: text"` sender name; for text
+ *    messages (GRP_TXT, and TXT_MSG with the opt-in DM keys) whether the text was SMAZ-compressed;
  * 2. sync, in a `computed`: attribution against the contacts / this radio (`resolveHop`), distance
  *    and airtime. Cached per record and recomputed only when contacts, SELF_INFO or the channel
  *    list change.
@@ -14,17 +15,18 @@
  * (payloads). Names and channel PSKs come from `PacketLogModel.context`.
  */
 
-import { decodePathLen, isValidPathLen } from '../protocol/constants.js';
+import { TxtType, decodePathLen, isValidPathLen } from '../protocol/constants.js';
 import type { SelfInfo } from '../protocol/types.js';
-import { PayloadType, hasTransportCodes } from '../packet/constants.js';
+import { PayloadType, hasTransportCodes, payloadTypeName } from '../packet/constants.js';
 import { decryptPayload, parseGrpTxtPlaintext } from '../packet/payloads.js';
+import { decodeReceivedText } from '../store/messages.js';
 import type { RadioStore } from '../store/radio-store.js';
 import type { ContactRecord, PacketRecord } from '../store/schema.js';
-import { fromHex, toHex } from '../util/bytes.js';
+import { fromHex, toHex, utf8Encode } from '../util/bytes.js';
 import { loraAirtimeMs, loraParamsFromSelfInfo, type LoraParams } from './airtime.js';
 import type { ConnectionModel } from './connection.js';
 import { haversineMeters, hasLocation, type LatLon } from './geo.js';
-import { viewPacket, type PacketView, type SummaryContext } from './packet-summary.js';
+import { decryptDm, viewPacket, type DmKeys, type PacketView, type SummaryContext } from './packet-summary.js';
 import { resolveHop } from './path-resolver.js';
 import { batch, computed, effect, signal, untracked, type ReadonlySignal } from './signal.js';
 import { StoreBoundModel } from './store-bound.js';
@@ -55,6 +57,20 @@ export interface NodeRef {
 
 export type TrafficCategory = 'dm' | 'channel' | 'advert' | 'ack' | 'trace' | 'path' | 'control' | 'other';
 export type StatDirection = 'in' | 'out';
+
+/**
+ * How a text message (TXT_MSG / GRP_TXT, plain or signed text) went on the air
+ * (docs/packet-stats.md §1.2): 'smaz' = a MeshCore Open SMAZ envelope (`"s:" + base64`,
+ * feature-inventory.md §2.4a), 'plain' = uncompressed, 'unknown' = not decrypted (no key, not
+ * for this radio, malformed).
+ */
+export type TextCompression = 'smaz' | 'plain' | 'unknown';
+
+/** UTF-8 sizes of a text message: `plain` = the readable text, `sent` = what went on the air. */
+export interface TextBytes {
+  plain: number;
+  sent: number;
+}
 
 export interface StatPacket {
   /** PacketRecord.id (the UI links to /packets/:id). */
@@ -96,6 +112,13 @@ export interface StatPacket {
   distanceM: number | null;
   /** Estimated time on air at the radio's current LoRa parameters; null when unknown. */
   airtimeMs: number | null;
+  /** Text messages only (see {@link TextCompression}); null for every other packet and for CLI DMs. */
+  compression: TextCompression | null;
+  /**
+   * Sizes of the text (channel messages: the part after "sender: "); `plain === sent` when
+   * 'plain'. Null when not a decrypted text, or for an outgoing text whose logged copy was cut.
+   */
+  textBytes: TextBytes | null;
 }
 
 export interface StatsSummary {
@@ -173,16 +196,42 @@ export interface HopCount {
   count: number;
 }
 
+/** Text message counts by {@link TextCompression}; `text` = smaz + plain + unknown. */
+export interface CompressionCounts {
+  text: number;
+  smaz: number;
+  plain: number;
+  unknown: number;
+}
+
+/** SMAZ compression usage over the filtered text messages (docs/packet-stats.md §1.6). */
+export interface CompressionStats extends CompressionCounts {
+  /** smaz / (smaz + plain): share of the decrypted texts that were compressed; null when none. */
+  compressedShare: number | null;
+  /** Totals over the 'smaz' packets whose sizes are known (`textBytes`). */
+  smazPlainBytes: number;
+  smazSentBytes: number;
+  /** smazPlainBytes − smazSentBytes. */
+  bytesSaved: number;
+  /** bytesSaved / smazPlainBytes; null when no sizes are known. */
+  savingsRatio: number | null;
+  byCategory: { dm: CompressionCounts; channel: CompressionCounts };
+  byDirection: { in: CompressionCounts; out: CompressionCounts };
+  /** Distinct sources (`nodeId`, this radio included) of at least one 'smaz' packet. */
+  compressedSources: number;
+}
+
 export type BinSetting = number | 'auto';
 
 /** A packet field the stats can be drilled down by (docs/packet-stats.md §6). */
-export type StatsFilterField = 'source' | 'type' | 'route' | 'direction' | 'category' | 'channel' | 'hops';
+export type StatsFilterField = 'source' | 'type' | 'route' | 'direction' | 'category' | 'channel' | 'hops' | 'compression';
 
 /**
  * One drill-down filter. `value` is the key the aggregations produce for the field: source →
  * `nodeId(source)` ('' = unattributed), type → typeName, route → routeName ('unknown' when
  * not known), direction → 'in' / 'out', category, channel → channel name (channel packets only),
- * hops → `String(hops)`. `label` is the caller's display text (chips).
+ * hops → `String(hops)`, compression → 'smaz' / 'plain' / 'unknown' (text messages only).
+ * `label` is the caller's display text (chips).
  */
 export interface StatsFilter {
   field: StatsFilterField;
@@ -207,6 +256,8 @@ export function filterKey(p: StatPacket, field: StatsFilterField): string | null
       return p.category === 'channel' ? p.channel : null;
     case 'hops':
       return p.hops === null ? null : String(p.hops);
+    case 'compression':
+      return p.compression;
   }
 }
 
@@ -326,19 +377,92 @@ interface RawPoint {
   channel?: string;
   /** GRP_TXT: "sender" of the decrypted "sender: text". */
   sender?: string;
+  /** See {@link StatPacket.compression} (the text itself is never kept). */
+  compression: TextCompression | null;
+  textBytes: TextBytes | null;
 }
 
 type Channels = SummaryContext['channels'];
+
+/** What stage 1 depends on besides the record: GRP_TXT on the channel PSKs, TXT_MSG on the DM keys. */
+interface DeriveSig {
+  ch: string;
+  dm: string;
+}
 
 function channelsSignature(chs: Channels): string {
   return chs.map((c) => `${c.hash}:${c.name}:${toHex(c.psk)}`).join('|');
 }
 
-async function derive(rec: PacketRecord, channels: Channels): Promise<RawPoint> {
+function dmSignature(dm: DmKeys | null): string {
+  return dm ? `${toHex(dm.selfPublicKey)}>${dm.contacts.map(toHex).join(',')}` : '';
+}
+
+/** A cached raw point is still valid under `now` when the keys it depended on are unchanged. */
+function reusable(raw: RawPoint, was: DeriveSig, now: DeriveSig): boolean {
+  const kind = raw.view.payload?.kind;
+  return (kind !== 'grpTxt' || was.ch === now.ch) && (kind !== 'txtMsg' || was.dm === now.dm);
+}
+
+/** Text types whose compression is counted: plain and signed text; CLI data / commands are not text. */
+function isTextType(txtType: number): boolean {
+  return txtType === TxtType.PLAIN || txtType === TxtType.SIGNED_PLAIN;
+}
+
+const NOT_TEXT = { compression: null, textBytes: null } as const;
+const UNKNOWN_TEXT = { compression: 'unknown', textBytes: null } as const;
+
+/** Classifies decrypted text exactly as received messages are (`decodeReceivedText`). */
+function classifyText(text: string, txtType: number): Pick<RawPoint, 'compression' | 'textBytes'> {
+  if (!isTextType(txtType)) return NOT_TEXT;
+  const sent = utf8Encode(text).length;
+  const r = decodeReceivedText(text, txtType);
+  return r.compressed ? { compression: 'smaz', textBytes: { plain: utf8Encode(r.text).length, sent } } : { compression: 'plain', textBytes: { plain: sent, sent } };
+}
+
+/** The packet log cuts the text of a requested transmission to 59 characters + '…' (packet-log.ts `quoted`). */
+const LOGGED_TEXT_MAX = 60;
+/** `…: "<json string>"[ (attempt n)]` at the end of a requested TXT_MSG / GRP_TXT summary. */
+const LOGGED_TEXT_RE = /: ("(?:[^"\\]|\\.)*")(?: \(attempt \d+\))?$/;
+
+/**
+ * An outgoing text the radio built itself (`format: 'none'`, packetInputFromCommand): the only
+ * copy of the wire text (the envelope when compressed) is the one quoted in `decodedSummary`.
+ * A cut copy still shows whether it was an envelope, but not the sizes.
+ */
+function classifyRequested(rec: PacketRecord): Pick<RawPoint, 'compression' | 'textBytes'> {
+  const summary = rec.decodedSummary ?? '';
+  if (rec.payloadType === PayloadType.TXT_MSG && summary.startsWith(`${payloadTypeName(PayloadType.TXT_MSG)} CLI `)) return NOT_TEXT;
+  const m = LOGGED_TEXT_RE.exec(summary);
+  let text: unknown;
+  try {
+    text = m?.[1] !== undefined ? JSON.parse(m[1]) : undefined;
+  } catch {
+    text = undefined;
+  }
+  if (typeof text !== 'string') return UNKNOWN_TEXT;
+  if (text.length === LOGGED_TEXT_MAX && text.endsWith('…')) {
+    return /^s:[A-Za-z0-9+/]+$/.test(text.slice(0, -1)) ? { compression: 'smaz', textBytes: null } : { compression: 'plain', textBytes: null };
+  }
+  return classifyText(text, TxtType.PLAIN);
+}
+
+async function derive(rec: PacketRecord, channels: Channels, dm: DmKeys | null): Promise<RawPoint> {
   const view = viewPacket(rec);
-  const raw: RawPoint = { rec, view };
+  const raw: RawPoint = { rec, view, ...NOT_TEXT };
   const p = view.payload;
+  if (rec.format === 'none') {
+    if (rec.direction === 'tx' && (rec.payloadType === PayloadType.TXT_MSG || rec.payloadType === PayloadType.GRP_TXT)) Object.assign(raw, classifyRequested(rec));
+    return raw;
+  }
+  if (p?.kind === 'txtMsg') {
+    Object.assign(raw, UNKNOWN_TEXT);
+    const t = dm ? await decryptDm(p, dm) : null;
+    if (t !== null && t !== 'malformed') Object.assign(raw, classifyText(t.text, t.txtType));
+    return raw;
+  }
   if (p?.kind !== 'grpTxt') return raw;
+  Object.assign(raw, UNKNOWN_TEXT);
   for (const ch of channels) {
     if (ch.hash !== p.channelHash) continue;
     let pt: Uint8Array | null = null;
@@ -350,8 +474,10 @@ async function derive(rec: PacketRecord, channels: Channels): Promise<RawPoint> 
     if (!pt) continue;
     raw.channel = ch.name;
     try {
-      const s = parseGrpTxtPlaintext(pt).senderName;
-      if (s) raw.sender = s;
+      const t = parseGrpTxtPlaintext(pt);
+      if (t.senderName) raw.sender = t.senderName;
+      // the envelope is the text after "sender: ", as on receive (messageInputFromChannelFrame)
+      Object.assign(raw, classifyText(t.message, t.txtType));
     } catch {
       // decrypted but malformed: the channel is still known
     }
@@ -545,6 +671,8 @@ function toStat(raw: RawPoint, R: Resolver, channels: Channels, radio: LoraParam
     pathKey: isTrace ? '' : view.path.join('>'),
     distanceM,
     airtimeMs: radio && bytes > 0 ? loraAirtimeMs(bytes, radio) : null,
+    compression: raw.compression,
+    textBytes: raw.textBytes,
   };
 }
 
@@ -622,6 +750,46 @@ function buildTimeline(pts: readonly StatPacket[], b: Binning | null, known: Rea
   return { binMs: b.binMs, bins, series };
 }
 
+function zeroCounts(): CompressionCounts {
+  return { text: 0, smaz: 0, plain: 0, unknown: 0 };
+}
+
+function compressionStats(pts: readonly StatPacket[]): CompressionStats {
+  const all = zeroCounts();
+  const byCategory = { dm: zeroCounts(), channel: zeroCounts() };
+  const byDirection = { in: zeroCounts(), out: zeroCounts() };
+  const sources = new Set<string>();
+  let plainBytes = 0;
+  let sentBytes = 0;
+  for (const p of pts) {
+    const c = p.compression;
+    if (c === null) continue;
+    for (const k of [all, p.category === 'dm' ? byCategory.dm : p.category === 'channel' ? byCategory.channel : null, byDirection[p.direction]]) {
+      if (!k) continue;
+      k.text++;
+      k[c]++;
+    }
+    if (c !== 'smaz') continue;
+    if (p.source) sources.add(nodeId(p.source));
+    if (p.textBytes) {
+      plainBytes += p.textBytes.plain;
+      sentBytes += p.textBytes.sent;
+    }
+  }
+  const decrypted = all.smaz + all.plain;
+  return {
+    ...all,
+    compressedShare: decrypted ? all.smaz / decrypted : null,
+    smazPlainBytes: plainBytes,
+    smazSentBytes: sentBytes,
+    bytesSaved: plainBytes - sentBytes,
+    savingsRatio: plainBytes ? (plainBytes - sentBytes) / plainBytes : null,
+    byCategory,
+    byDirection,
+    compressedSources: sources.size,
+  };
+}
+
 function hopCounts(pts: readonly StatPacket[]): HopCount[] {
   const m = new Map<number, number>();
   for (const p of pts) if (p.hops !== null) m.set(p.hops, (m.get(p.hops) ?? 0) + 1);
@@ -635,6 +803,8 @@ function hopCounts(pts: readonly StatPacket[]): HopCount[] {
 export interface PacketStatsDeps {
   /** Names / channel PSKs (PacketLogModel.context). A change of the channel list reloads. */
   context: ReadonlySignal<SummaryContext>;
+  /** DM keys (PacketLogModel.dmKeys) for classifying TXT_MSG text; a change of the keys reloads. */
+  dmKeys?: ReadonlySignal<DmKeys | null>;
   /** Stored contacts (ContactsModel.contacts). */
   contacts: ReadonlySignal<readonly ContactRecord[]>;
   /** Resolves when the models feeding `context` / `contacts` have settled (tests). */
@@ -651,9 +821,10 @@ export class PacketStatsModel extends StoreBoundModel {
   #rawIds = new Set<number>();
   /** Raw points by id from the last load, reused while the channel list is unchanged. */
   #rawCache = new Map<number, RawPoint>();
-  #rawCacheSig = '';
-  /** Channel signature the current / last load used (undefined before the first). */
-  #usedSig: string | undefined;
+  #rawCacheSig: DeriveSig = { ch: '', dm: '' };
+  /** Key signatures the current / last load used (undefined before the first). */
+  #usedSig: DeriveSig | undefined;
+  readonly #dmSig: ReadonlySignal<string>;
   #live: Promise<void> = Promise.resolve();
   /** Collects live appends while a load runs (null otherwise). */
   #liveSink: RawPoint[] | null = null;
@@ -688,10 +859,13 @@ export class PacketStatsModel extends StoreBoundModel {
   readonly timeline: ReadonlySignal<Timeline>;
   readonly utilization: ReadonlySignal<Utilization>;
   readonly hops: ReadonlySignal<HopCount[]>;
+  /** SMAZ compression usage of the text messages in `points`. */
+  readonly compression: ReadonlySignal<CompressionStats>;
 
   constructor(connection: ConnectionModel, deps: PacketStatsDeps) {
     super(connection);
     this.#deps = deps;
+    this.#dmSig = computed(() => dmSignature(deps.dmKeys?.value ?? null));
     this.radio = computed(() => loraParamsFromSelfInfo(connection.selfInfo.value), { equals: sameParams });
 
     const resolver = computed(() => new Resolver(deps.contacts.value, selfNode(connection.selfInfo.value, connection.store.value)));
@@ -815,6 +989,7 @@ export class PacketStatsModel extends StoreBoundModel {
     });
 
     this.hops = computed(() => hopCounts(this.points.value));
+    this.compression = computed(() => compressionStats(this.points.value));
   }
 
   /** Statistics of one contact (public key hex), from `allPoints` (the filters don't apply); cached per key. */
@@ -910,10 +1085,12 @@ export class PacketStatsModel extends StoreBoundModel {
       store.events.on('logChanged', (e) => {
         if (e.store === 'packets') void this.reload();
       }),
-      // channel PSKs decide GRP_TXT senders: re-derive when the channel list changes
+      // channel PSKs decide GRP_TXT senders / text, DM keys TXT_MSG text: re-derive when they change
       effect(() => {
-        const sig = channelsSignature(this.#deps.context.value.channels);
-        if (this.#usedSig !== undefined && sig !== this.#usedSig) untracked(() => void this.reload());
+        const ch = channelsSignature(this.#deps.context.value.channels);
+        const dm = this.#dmSig.value;
+        const used = this.#usedSig;
+        if (used !== undefined && (ch !== used.ch || dm !== used.dm)) untracked(() => void this.reload());
       }),
     ];
     return () => offs.forEach((off) => off());
@@ -925,15 +1102,22 @@ export class PacketStatsModel extends StoreBoundModel {
     const liveDuringLoad: RawPoint[] = [];
     this.#liveSink = liveDuringLoad;
     const channels = this.#deps.context.peek().channels;
-    const sig = channelsSignature(channels);
+    const dm = this.#deps.dmKeys?.peek() ?? null;
+    const sig: DeriveSig = { ch: channelsSignature(channels), dm: this.#dmSig.peek() };
     this.#usedSig = sig;
     const r = this.#range.peek();
     const [recs, bounds] = await Promise.all([
       store.packets.all({ ...(r.from !== null ? { from: r.from } : {}), ...(r.to !== null ? { to: r.to } : {}) }),
       store.packets.tsBounds(),
     ]);
-    const reuse = sig === this.#rawCacheSig ? this.#rawCache : new Map<number, RawPoint>();
-    const raws = await Promise.all(recs.map((rec) => reuse.get(rec.id) ?? derive(rec, channels)));
+    const was = this.#rawCacheSig;
+    const cached = this.#rawCache;
+    const raws = await Promise.all(
+      recs.map((rec) => {
+        const c = cached.get(rec.id);
+        return c && reusable(c, was, sig) ? c : derive(rec, channels, dm);
+      }),
+    );
     if (this.#liveSink === liveDuringLoad) this.#liveSink = null;
     if (gen !== this.#gen || this.store !== store) return;
     const loaded = new Set(raws.map((x) => x.rec.id));
@@ -953,7 +1137,7 @@ export class PacketStatsModel extends StoreBoundModel {
     this.#usedSig = undefined;
     this.#rawIds = new Set();
     this.#rawCache = new Map();
-    this.#rawCacheSig = '';
+    this.#rawCacheSig = { ch: '', dm: '' };
     batch(() => {
       this.#raw.value = [];
       this.#bounds.value = null;
@@ -969,11 +1153,12 @@ export class PacketStatsModel extends StoreBoundModel {
     if (this.store !== store) return;
     this.#bounds.value = mergeBounds(this.#bounds.peek(), [rec.ts]);
     if (!this.#inRange(rec.ts) || this.#rawIds.has(rec.id)) return;
-    const raw = await derive(rec, this.#deps.context.peek().channels);
+    const raw = await derive(rec, this.#deps.context.peek().channels, this.#deps.dmKeys?.peek() ?? null);
     if (this.store !== store || this.#rawIds.has(rec.id) || !this.#inRange(rec.ts)) return;
     this.#rawIds.add(rec.id);
     this.#liveSink?.push(raw);
-    if (this.#usedSig !== undefined && this.#usedSig === this.#rawCacheSig) this.#rawCache.set(rec.id, raw);
+    const used = this.#usedSig;
+    if (used !== undefined && used.ch === this.#rawCacheSig.ch && used.dm === this.#rawCacheSig.dm) this.#rawCache.set(rec.id, raw);
     const cur = this.#raw.peek();
     const last = cur[cur.length - 1];
     if (!last || compareRaw(last, raw) <= 0) {

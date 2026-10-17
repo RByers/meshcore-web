@@ -1,23 +1,26 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import 'fake-indexeddb/auto';
 import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
-import { ContactType } from '../protocol/constants.js';
-import type { SelfInfo } from '../protocol/types.js';
+import { ContactType, TxtType } from '../protocol/constants.js';
+import type { Command, SelfInfo } from '../protocol/types.js';
 import { PayloadType, RouteType } from '../packet/constants.js';
 import { buildPacket } from '../packet/packet.js';
 import {
   buildGroupDatagramPayload,
   buildGrpTxtPlaintext,
+  buildPeerDatagramPayload,
   buildTracePayload,
+  buildTxtMsgPlaintext,
   channelHash,
   encodeAdvertAppData,
 } from '../packet/payloads.js';
 import { publicChannelSecret } from '../emulator/scenarios.js';
-import type { PacketInput } from '../store/packet-log.js';
+import { packetInputFromCommand, type PacketInput } from '../store/packet-log.js';
 import type { RadioStore } from '../store/radio-store.js';
 import { DEFAULT_CONTACT_LOCAL, type ContactRecord } from '../store/schema.js';
 import { hexKey, key32, makeContact, openStore } from '../store/test-helpers.js';
-import { concatBytes, toHex } from '../util/bytes.js';
+import { concatBytes, toHex, utf8Encode } from '../util/bytes.js';
+import { smazEncodeIfSmaller } from '../util/smaz.js';
 import { loraAirtimeMs } from './airtime.js';
 import { AppModel, createEmulatorTransportFactory } from './app-model.js';
 import { memoryPreferences, type ConnectionModel } from './connection.js';
@@ -36,8 +39,8 @@ import {
   type StatPacket,
   type StatsFilter,
 } from './packet-stats-model.js';
-import type { SummaryContext } from './packet-summary.js';
-import { signal } from './signal.js';
+import type { DmKeys, SummaryContext } from './packet-summary.js';
+import { signal, type ReadonlySignal } from './signal.js';
 
 const T = 1_800_000_000_000;
 const MIN = 60_000;
@@ -113,7 +116,7 @@ afterEach(() => {
   for (const c of cleanups.splice(0)) c();
 });
 
-async function harness(inputs: PacketInput[], opts: { contacts?: readonly ContactRecord[]; self?: SelfInfo | null; channels?: SummaryContext['channels'] } = {}): Promise<Harness> {
+async function harness(inputs: PacketInput[], opts: { contacts?: readonly ContactRecord[]; self?: SelfInfo | null; channels?: SummaryContext['channels']; dmKeys?: ReadonlySignal<DmKeys | null> } = {}): Promise<Harness> {
   const store = await openStore(0x01);
   if (inputs.length) await store.packets.appendMany(inputs);
   const storeSig = signal<RadioStore | null>(null);
@@ -122,7 +125,7 @@ async function harness(inputs: PacketInput[], opts: { contacts?: readonly Contac
   const channels = opts.channels ?? [{ name: 'Test', psk: PSK, hash: await channelHash(PSK) }];
   const context = signal<SummaryContext>({ nodes: [], channels });
   const contacts = signal<readonly ContactRecord[]>(opts.contacts ?? CONTACTS);
-  const model = new PacketStatsModel(connection, { context: context.readonly, contacts: contacts.readonly }).start();
+  const model = new PacketStatsModel(connection, { context: context.readonly, contacts: contacts.readonly, ...(opts.dmKeys ? { dmKeys: opts.dmKeys } : {}) }).start();
   storeSig.value = store;
   await model.settled();
   cleanups.push(() => {
@@ -555,6 +558,118 @@ describe('PacketStatsModel — drill-down filters (§6)', () => {
     model.clearFilters();
     expect(model.filters.value).toEqual([]);
     expect(model.points.value).toEqual(model.allPoints.value);
+  });
+});
+
+describe('PacketStatsModel — SMAZ compression (§1.2, §1.6)', () => {
+  const SECRET = new Uint8Array(32).fill(5);
+  const DM_KEYS: DmKeys = { selfPublicKey: SELF.pubKey, contacts: [ALICE.pubKey, BOB.pubKey], sharedSecret: () => Promise.resolve(SECRET) };
+  const CH_TEXT = 'this is the message that should compress well';
+  const DM_TEXT = 'there is another message in the mail for you';
+  const OUT_TEXT = 'the one that I send';
+  const LONG_TEXT = 'this is a rather long message that I send to the channel, and it is long enough that the logged copy of the envelope is cut';
+  const utf8 = (s: string): number => utf8Encode(s).length;
+  const env = (s: string): string => {
+    const e = smazEncodeIfSmaller(s);
+    expect(e.startsWith('s:')).toBe(true);
+    return e;
+  };
+  async function dm(src: number, dest: number, text: string, txtType: number = TxtType.PLAIN): Promise<Uint8Array> {
+    const payload = await buildPeerDatagramPayload({ destHash: dest, srcHash: src, secret: SECRET, plaintext: buildTxtMsgPlaintext({ timestamp: 1, text, txtType }) });
+    return buildPacket({ routeType: RouteType.FLOOD, payloadType: PayloadType.TXT_MSG, payload });
+  }
+  function sent(cmd: Command, ts: number): PacketInput {
+    const p = packetInputFromCommand(cmd, { ts });
+    if (!p) throw new Error('not a transmission');
+    return p;
+  }
+
+  async function compressed(dmKeys: ReadonlySignal<DmKeys | null> = signal<DmKeys | null>(DM_KEYS).readonly): Promise<Harness> {
+    expect(env(OUT_TEXT).length).toBeLessThan(60); // logged in full
+    expect(env(LONG_TEXT).length).toBeGreaterThan(60); // logged cut
+    return harness(
+      [
+        rx(await grpTxt(PSK, 'Alice', env(CH_TEXT)), T),
+        rx(await grpTxt(PSK, 'Bob', 'hi'), T + 1),
+        rx(grpUnknown(0x99), T + 2),
+        rx(await dm(0xa1, 0x01, env(DM_TEXT)), T + 3),
+        rx(await dm(0xb2, 0x01, 'clock', TxtType.CLI_DATA), T + 4),
+        sent({ kind: 'sendTxtMsg', recipient: ALICE.pubKey, text: env(OUT_TEXT), timestamp: 1 }, T + 5),
+        sent({ kind: 'sendChannelTxtMsg', channelIdx: 0, text: env(LONG_TEXT), timestamp: 1 }, T + 6),
+        rx(ack(), T + 7),
+        rx(datagram(PayloadType.TXT_MSG, 0xb2, 0x01), T + 8), // MAC fails: not decrypted
+        rx(advert(ALICE.pubKey, { nodeType: ContactType.CHAT, name: 'Alice' }), T + 9),
+        sent({ kind: 'sendTxtMsg', recipient: BOB.pubKey, text: 'get clock', timestamp: 1, txtType: TxtType.CLI_DATA }, T + 10),
+      ],
+      { dmKeys },
+    );
+  }
+
+  it('classifies text messages, with sizes, and never non-text packets', async () => {
+    const { model } = await compressed();
+    const at = (dt: number): Pick<StatPacket, 'compression' | 'textBytes'> => {
+      const p = byTs(model.allPoints.value, T + dt);
+      return { compression: p.compression, textBytes: p.textBytes };
+    };
+    expect(at(0)).toEqual({ compression: 'smaz', textBytes: { plain: utf8(CH_TEXT), sent: utf8(env(CH_TEXT)) } });
+    expect(at(1)).toEqual({ compression: 'plain', textBytes: { plain: 2, sent: 2 } });
+    expect(at(2)).toEqual({ compression: 'unknown', textBytes: null });
+    expect(at(3)).toEqual({ compression: 'smaz', textBytes: { plain: utf8(DM_TEXT), sent: utf8(env(DM_TEXT)) } });
+    expect(at(4)).toEqual({ compression: null, textBytes: null }); // CLI data is not text
+    expect(at(5)).toEqual({ compression: 'smaz', textBytes: { plain: utf8(OUT_TEXT), sent: utf8(env(OUT_TEXT)) } });
+    expect(at(6)).toEqual({ compression: 'smaz', textBytes: null }); // logged copy cut: no sizes
+    expect(at(7)).toEqual({ compression: null, textBytes: null });
+    expect(at(8)).toEqual({ compression: 'unknown', textBytes: null });
+    expect(at(9)).toEqual({ compression: null, textBytes: null });
+    expect(at(10)).toEqual({ compression: null, textBytes: null });
+  });
+
+  it('aggregates counts, bytes saved and compressed sources over the filtered points', async () => {
+    const { model } = await compressed();
+    const plain = utf8(CH_TEXT) + utf8(DM_TEXT) + utf8(OUT_TEXT);
+    const sentB = utf8(env(CH_TEXT)) + utf8(env(DM_TEXT)) + utf8(env(OUT_TEXT));
+    expect(model.compression.value).toEqual({
+      text: 7,
+      smaz: 4,
+      plain: 1,
+      unknown: 2,
+      compressedShare: 4 / 5,
+      smazPlainBytes: plain,
+      smazSentBytes: sentB,
+      bytesSaved: plain - sentB,
+      savingsRatio: (plain - sentB) / plain,
+      byCategory: { dm: { text: 3, smaz: 2, plain: 0, unknown: 1 }, channel: { text: 4, smaz: 2, plain: 1, unknown: 1 } },
+      byDirection: { in: { text: 5, smaz: 2, plain: 1, unknown: 2 }, out: { text: 2, smaz: 2, plain: 0, unknown: 0 } },
+      compressedSources: 2, // Alice (channel + DM) and this radio
+    });
+    model.addFilter({ field: 'direction', value: 'in', label: 'in' });
+    expect(model.compression.value).toMatchObject({ text: 5, smaz: 2, compressedSources: 1 });
+    model.addFilter({ field: 'category', value: 'advert', label: 'advert' });
+    expect(model.compression.value).toMatchObject({ text: 0, compressedShare: null, savingsRatio: null, bytesSaved: 0, compressedSources: 0 });
+  });
+
+  it('drills down by compression; non-text packets never match', async () => {
+    const { model } = await compressed();
+    const tss = (): number[] => model.points.value.map((p) => p.ts - T);
+    model.addFilter({ field: 'compression', value: 'smaz', label: 'Compressed' });
+    expect(tss()).toEqual([0, 3, 5, 6]);
+    model.addFilter({ field: 'compression', value: 'unknown', label: 'Not decrypted' });
+    expect(tss()).toEqual([2, 8]);
+    model.addFilter({ field: 'compression', value: 'plain', label: 'Plain' });
+    expect(tss()).toEqual([1]);
+    expect(matchesFilter(byTs(model.allPoints.value, T + 7), { field: 'compression', value: '', label: '' })).toBe(false);
+  });
+
+  it('DMs are not decrypted without the DM keys, and are re-derived when the keys arrive', async () => {
+    const keys = signal<DmKeys | null>(null);
+    const { model } = await compressed(keys.readonly);
+    expect(byTs(model.allPoints.value, T + 3).compression).toBe('unknown');
+    expect(byTs(model.allPoints.value, T + 4).compression).toBe('unknown');
+    keys.value = DM_KEYS;
+    await model.settled();
+    expect(byTs(model.allPoints.value, T + 3).compression).toBe('smaz');
+    expect(byTs(model.allPoints.value, T + 4).compression).toBeNull();
+    expect(byTs(model.allPoints.value, T).compression).toBe('smaz');
   });
 });
 

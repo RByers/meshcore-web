@@ -1,7 +1,7 @@
 /**
  * `<mc-packet-stats>`: the Stats tab of `/packets` (docs/packet-stats.md §3). Renders the core
  * `PacketStatsModel` (`app.packetStats`) as tiles and charts: packets per source node, packets
- * over time (dot plot with y / colour selectors), packet rate, network utilisation and the hop
+ * over time (dot plot with y / colour selectors), packet rate, network utilisation, text compression and the hop
  * count distribution. The date range and bin size live in the model (`<mc-stats-range>`); only
  * the chart selectors are local state. Everything here maps model output to chart props.
  *
@@ -14,6 +14,8 @@ import {
   formatDistance,
   nodeId,
   type Breakdown,
+  type CompressionCounts,
+  type CompressionStats,
   type HopCount,
   type LoraParams,
   type NodeRef,
@@ -21,6 +23,7 @@ import {
   type StatPacket,
   type StatsFilter,
   type StatsFilterField,
+  type TextCompression,
   type Timeline,
 } from '@meshcore-web/core/app';
 import { packetTypeNameDescription } from '@meshcore-web/core/packet';
@@ -50,7 +53,7 @@ import '../../components/stats-range.js';
 // ------------------------------------------------------------------------------ selectors
 
 export type YField = 'snr' | 'rssi' | 'distance' | 'hops' | 'size';
-export type ColorField = 'type' | 'route' | 'lastHop' | 'source' | 'channel' | 'direction';
+export type ColorField = 'type' | 'route' | 'lastHop' | 'source' | 'channel' | 'direction' | 'compression';
 
 interface YOption {
   id: YField;
@@ -76,12 +79,23 @@ export const COLOR_OPTIONS: readonly { id: ColorField; label: string }[] = [
   { id: 'source', label: 'Source' },
   { id: 'channel', label: 'Channel' },
   { id: 'direction', label: 'Direction' },
+  { id: 'compression', label: 'Compression' },
 ];
 
 /** Payload type → fixed palette slot (docs/packet-stats.md §3); other types are "Other". */
 export const TYPE_SLOTS: Readonly<Record<string, number>> = { TXT_MSG: 1, GRP_TXT: 2, ADVERT: 3, ACK: 4, PATH: 5, TRACE: 6, REQ: 7, RESPONSE: 7, CONTROL: 8 };
 
 const DIRECTION_LABEL: Readonly<Record<string, string>> = { in: 'Received', out: 'Sent' };
+
+/** Compression filter value → label (chip text, breakdown segment, dot plot legend). */
+export const COMPRESSION_LABEL: Readonly<Record<TextCompression, string>> = { smaz: 'Compressed', plain: 'Plain', unknown: 'Not decrypted' };
+const COMPRESSION_ORDER: readonly TextCompression[] = ['smaz', 'plain', 'unknown'];
+const COMPRESSION_KEY_SLOTS: Readonly<Record<string, number>> = { smaz: 1, plain: 2, unknown: 0 };
+const COMPRESSION_LABELS = new Map(COMPRESSION_ORDER.map((k) => [k, COMPRESSION_LABEL[k]]));
+/** Breakdown palettes are keyed by segment label: Compressed / Plain get slots, Not decrypted is grey. */
+const COMPRESSION_SEGMENT_PALETTE = fixedSlots({ [COMPRESSION_LABEL.smaz]: 1, [COMPRESSION_LABEL.plain]: 2, [COMPRESSION_LABEL.unknown]: 0 });
+const NOT_DECRYPTED_HINT =
+  'Not decrypted: no key for the message, so its compression is unknown. Channel texts need the channel added; DMs need the radio private key stored (Settings) and must be to or from a known contact.';
 
 // ------------------------------------------------------------------------------ mapping helpers
 
@@ -100,6 +114,8 @@ export function colorKey(p: StatPacket, by: ColorField): { key: string | null; l
       return nodeKey(p.source);
     case 'lastHop':
       return nodeKey(p.lastHop);
+    case 'compression':
+      return p.compression ? { key: p.compression, label: COMPRESSION_LABEL[p.compression] } : { key: null, label: 'Not text' };
   }
 }
 
@@ -110,6 +126,7 @@ function nodeKey(n: NodeRef | null): { key: string | null; label: string } {
 /** Palette for a colouring: fixed slots for payload types, else the top 8 keys by count. */
 export function dotPalette(points: readonly StatPacket[], by: ColorField): SeriesPalette {
   if (by === 'type') return fixedSlots(TYPE_SLOTS);
+  if (by === 'compression') return fixedSlots(COMPRESSION_KEY_SLOTS, COMPRESSION_LABELS);
   const labels = new Map<string, string>();
   const keys: string[] = [];
   for (const p of points) {
@@ -202,6 +219,29 @@ export function breakdownSegments(
   }));
 }
 
+/** Compression breakdown segments (message counts), keyed by the compression filter value. */
+export function compressionSegments(c: CompressionCounts, active?: string): BreakdownSegment[] {
+  return COMPRESSION_ORDER.map((k) => ({
+    label: COMPRESSION_LABEL[k],
+    value: c[k],
+    title: `${formatNumber(c[k], 0)} text ${c[k] === 1 ? 'message' : 'messages'}`,
+    key: k,
+    selected: k === active,
+  }));
+}
+
+/** "N bytes saved (X%) across M compressed messages · Y% of decrypted texts compressed · S senders". */
+export function compressionSummary(c: CompressionStats): string {
+  const parts: string[] = [];
+  parts.push(c.compressedShare === null ? 'No decrypted text messages' : `${formatPercent(c.compressedShare)} of decrypted text messages compressed`);
+  if (c.smaz > 0) {
+    const msgs = `${formatNumber(c.smaz, 0)} compressed ${c.smaz === 1 ? 'message' : 'messages'}`;
+    parts.push(c.savingsRatio === null ? msgs : `${formatBytes(c.bytesSaved)} saved (${formatPercent(c.savingsRatio)}) across ${msgs}`);
+    parts.push(`${formatNumber(c.compressedSources, 0)} ${c.compressedSources === 1 ? 'sender' : 'senders'} using compression`);
+  }
+  return parts.join(' · ');
+}
+
 function hopLabel(hops: number): string {
   return hops === 0 ? '0 (direct)' : String(hops);
 }
@@ -220,6 +260,7 @@ export const FILTER_FIELD_LABEL: Readonly<Record<StatsFilterField, string>> = {
   category: 'Category',
   channel: 'Channel',
   hops: 'Hops',
+  compression: 'Compression',
 };
 
 export function formatBytes(b: number): string {
@@ -391,6 +432,39 @@ export class McPacketStats extends AppElement {
   /** `segment-select` handler for a breakdown of `field`; `label` maps the key to chip text. */
   #onSegment(field: StatsFilterField, label: (key: string) => string = (k) => k) {
     return (e: CustomEvent<SegmentSelectDetail>): void => this.#toggle(field, e.detail.key, label(e.detail.key));
+  }
+
+  #compression(c: CompressionStats, active: string | undefined): TemplateResult {
+    const label = (k: string): string => COMPRESSION_LABEL[k as TextCompression] ?? k;
+    const describe = (l: string): string => (l === COMPRESSION_LABEL.unknown ? NOT_DECRYPTED_HINT : '');
+    const onSeg = this.#onSegment('compression', label);
+    const row = (id: string, name: string, counts: CompressionCounts): TemplateResult | typeof nothing =>
+      counts.text > 0
+        ? html`<mc-breakdown
+            data-breakdown=${`compression-${id}`}
+            label=${name}
+            .segments=${compressionSegments(counts, active)}
+            .palette=${COMPRESSION_SEGMENT_PALETTE}
+            .describe=${describe}
+            .format=${(v: number) => formatNumber(v, 0)}
+            @segment-select=${onSeg}
+          ></mc-breakdown>`
+        : nothing;
+    return html`<section class="card" data-section="compression">
+      <h3>Text compression</h3>
+      ${c.text === 0
+        ? html`<p class="note muted" data-empty="compression">No text messages in these packets.</p>`
+        : html`<p class="note" data-field="compression-summary">${compressionSummary(c)}</p>
+            ${c.unknown > 0
+              ? html`<p class="note muted" data-field="compression-unknown" title=${NOT_DECRYPTED_HINT}>
+                  ${formatNumber(c.unknown, 0)} ${c.unknown === 1 ? 'message' : 'messages'} could not be decrypted (no key), so ${c.unknown === 1 ? 'its' : 'their'} compression is unknown.
+                </p>`
+              : nothing}
+            <div class="breakdowns">
+              ${row('all', 'Text messages', c)} ${row('dm', 'DMs', c.byCategory.dm)} ${row('channel', 'Channels', c.byCategory.channel)}
+              ${row('out', 'Sent', c.byDirection.out)} ${row('in', 'Received', c.byDirection.in)}
+            </div>`}
+    </section>`;
   }
 
   #filterBar(filters: readonly StatsFilter[], shown: number, total: number): TemplateResult {
@@ -571,6 +645,8 @@ export class McPacketStats extends AppElement {
             : nothing}
         </div>
       </section>
+
+      ${this.#compression(stats.compression.value, active('compression'))}
 
       <section class="card" data-section="hops">
         <h3>Hop count</h3>

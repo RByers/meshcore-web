@@ -205,6 +205,7 @@ export class AppModel {
   get packetStats(): PacketStatsModel {
     return (this.#packetStats ??= new PacketStatsModel(this.connection, {
       context: this.packetLog.context,
+      dmKeys: this.packetLog.dmKeys,
       contacts: this.contacts.contacts,
       ready: () => Promise.all([this.packetLog.settled(), this.contacts.settled()]),
     }).start());

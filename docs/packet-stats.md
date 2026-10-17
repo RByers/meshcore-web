@@ -70,9 +70,31 @@ interface StatPacket {
   direct: boolean;        // path is empty (heard straight from the source)
   distanceM: number | null; // see 1.4
   airtimeMs: number | null; // see 1.5
+  compression: 'smaz' | 'plain' | 'unknown' | null; // text messages only, see below
+  textBytes: { plain: number; sent: number } | null; // UTF-8 sizes of the text / of what went on air
 }
 points: ReadonlySignal<readonly StatPacket[]> // ascending ts, within range
 ```
+
+**Compression** (SMAZ, feature-inventory.md §2.4a). There is no protocol flag: a text counts as
+compressed when the decrypted text is a canonical `"s:" + base64` envelope, checked with
+`decodeReceivedText` (`smazTryDecode`), exactly as received messages are, so stats and chat agree.
+Only the classification and sizes are kept, never the text.
+
+- *Text* = TXT_MSG and GRP_TXT whose txt_type is plain or signed plain (signed: the text after
+  the 4-byte author prefix). CLI data / commands (and every other payload type) → `null`.
+- GRP_TXT: decrypted with the known channel PSKs (stage 1, as for the sender); the envelope is the
+  part after `"sender: "`. TXT_MSG: decrypted with `PacketLogModel.dmKeys` (only when the radio's
+  private key is stored, opt-in), for packets between this radio and a known contact, either
+  direction. Not decrypted (no PSK / no DM keys / not for us / malformed) → `'unknown'`.
+- Outgoing texts the radio builds itself are logged as `format: 'none'` records with no bytes; the
+  wire text (the envelope when compressed) is read back from the JSON-quoted text in
+  `decodedSummary`. The packet log cuts that copy to 59 characters + `…`: a cut copy is still
+  classified (`'smaz'` when it is `s:` + base64 characters) but `textBytes` is null. A summary that
+  doesn't parse → `'unknown'`; an outgoing CLI DM → `null`.
+- `textBytes`: `'smaz'` → `{ plain: decoded text, sent: envelope }`; `'plain'` → `plain === sent`.
+- Stage 1 depends on the channel PSKs (GRP_TXT) and the DM keys (TXT_MSG: this radio's public key +
+  the contact key list). A change of either reloads; cached points of other kinds are reused.
 
 ### 1.3 Source and last hop attribution
 
@@ -125,6 +147,18 @@ utilization: {
   byRoute: …  byDirection: …  byCategory: …  byChannel: …
 }
 hops: { hops: number; count: number }[]
+compression: CompressionStats   // text messages only (compression !== null)
+interface CompressionCounts { text: number; smaz: number; plain: number; unknown: number }
+interface CompressionStats extends CompressionCounts {
+  compressedShare: number | null;   // smaz / (smaz + plain); null when nothing decrypted
+  smazPlainBytes: number;           // totals over 'smaz' packets with known textBytes
+  smazSentBytes: number;
+  bytesSaved: number;               // smazPlainBytes − smazSentBytes
+  savingsRatio: number | null;      // bytesSaved / smazPlainBytes; null without sizes
+  byCategory: { dm: CompressionCounts; channel: CompressionCounts };
+  byDirection: { in: CompressionCounts; out: CompressionCounts };
+  compressedSources: number;        // distinct nodeId(source) with ≥ 1 'smaz' packet (this radio included)
+}
 ```
 
 Keep the series naming stable (color follows the entity: the UI maps series name → palette slot).
@@ -190,20 +224,29 @@ filters of the list tabs are not shown; the inspector split is hidden). Layout, 
    unresolved; footer line "n packets could not be attributed, m more nodes".
 3. **Packets over time** (`mc-dot-plot`): x = time (range or log bounds), y selector
    (*SNR* default, *RSSI*, *Distance*, *Hops*, *Size*), colour selector (*Packet type* default,
-   *Route type*, *Last hop*, *Source*, *Channel*, *Direction*), dot area ∝ bytes. Clicking a dot
+   *Route type*, *Last hop*, *Source*, *Channel*, *Direction*, *Compression*), dot area ∝ bytes. Clicking a dot
    navigates to `/packets/:id`. Payload types get a fixed slot map (TXT_MSG 1, GRP_TXT 2, ADVERT 3,
    ACK 4, PATH 5, TRACE 6, REQ/RESPONSE 7, CONTROL 8, rest Other); for node / channel colourings
-   the top 8 by count in the current points take slots in count order, rest "Other".
+   the top 8 by count in the current points take slots in count order, rest "Other". *Compression*
+   uses fixed slots (Compressed 1, Plain 2, Not decrypted / non-text packets "Other").
 4. **Packet rate** (`mc-line-chart`): the `timeline` series (per channel, unknown channels, DMs,
    adverts, ACKs, paths, traces, requests, control); the 8 biggest get a line, the rest are summed into *Other*; toggle *stacked*.
 5. **Network utilisation**: `mc-line-chart` of airtime fraction over time (single series, %), then
    `mc-breakdown` rows for payload type, route type, direction, channel / category — each showing
    airtime share (with packet count in the tooltip). When airtime is unknown, fall back to bytes
    and say so.
-6. **Hop count** distribution (`mc-bar-chart`, vertical-ish is fine as horizontal rows 0,1,2…).
+6. **Text compression** (`compression`, §1.6): a summary line ("X% of decrypted text messages
+   compressed · N B saved (Y%) across M compressed messages · S senders using compression"), a
+   muted "n messages could not be decrypted (no key)" note when any are `'unknown'`, then
+   `mc-breakdown` rows of message counts — all text, DMs, Channels, Sent, Received (rows with no
+   text omitted) — each with segments *Compressed* / *Plain* / *Not decrypted* (grey; its legend
+   tooltip says why: no channel PSK, or no stored private key / unknown contact for DMs). Every
+   segment is keyed by the compression filter value (chip "Compression: Compressed"). No text
+   messages in the shown packets → one-line empty state.
+7. **Hop count** distribution (`mc-bar-chart`, vertical-ish is fine as horizontal rows 0,1,2…).
 
 **Drill-down** (model side in §6): clicking a source bar, a hop-count bar, or a breakdown segment /
-legend entry (type, route, direction, category, channel) adds a filter for that value; clicking the
+legend entry (type, route, direction, category, channel, compression) adds a filter for that value; clicking the
 active value again removes it. On source bars the *bar* filters and the *label* stays the contact
 link. Charts opt in per item with a `key` (`<mc-bar-chart>` dispatches `bar-select`, keyed rows
 are `role=button` hit rects with Enter / Space; `<mc-breakdown>` dispatches `segment-select` from
@@ -217,7 +260,8 @@ one empty-state line. Browser tests (`packages/web/test/packet-stats.test.ts`, h
 emulator scenario that produces packets): the tab appears and renders tiles and the four chart
 elements; the source chart has links to `/contact/…`; the y/colour selectors change the dot plot's
 axis label / legend; a date preset shrinks the packet count tile; source-bar / segment / keyboard
-filtering, chip removal, *Clear filters* and the no-match state.
+filtering, chip removal, *Clear filters* and the no-match state; the compression section's counts,
+summary, *Compressed* filter, empty state and the *Compression* dot colouring.
 
 ## 4. Docs
 
@@ -267,7 +311,7 @@ Clicking a bar on the packets Stats tab narrows every statistic to the matching 
 holds the filters (in memory only, not persisted; they survive range changes):
 
 ```ts
-type StatsFilterField = 'source' | 'type' | 'route' | 'direction' | 'category' | 'channel' | 'hops';
+type StatsFilterField = 'source' | 'type' | 'route' | 'direction' | 'category' | 'channel' | 'hops' | 'compression';
 interface StatsFilter { field: StatsFilterField; value: string; label: string /* chip text, from the caller */ }
 filters: ReadonlySignal<readonly StatsFilter[]>
 addFilter(f) / removeFilter(field) / clearFilters()
@@ -280,10 +324,11 @@ matchesFilter(p, f) / filterKey(p, field) / filterPoints(points, filters)   // p
 - `value` is the key the aggregations already produce: source → `nodeId(source)` (`''` =
   unattributed), type → `typeName`, route → `routeName || 'unknown'`, direction → `'in'`/`'out'`,
   category, channel → the channel name (channel packets only), hops → `String(hops)` (packets with
-  unknown hops never match).
+  unknown hops never match), compression → `'smaz'` / `'plain'` / `'unknown'` (non-text packets
+  never match).
 - Filters AND together; at most one per field — adding one on a field that already has one
   replaces it.
-- `summary`, `bySource`, `timeline`, `utilization` and `hops` count the filtered `points`.
+- `summary`, `bySource`, `timeline`, `utilization`, `hops` and `compression` count the filtered `points`.
   `window` (and so the bins and `summary.spanMs`) comes from the range and `allPoints`, so axes
   don't move while drilling down.
 - `forContact()` reads `allPoints`: the packets page's filters don't leak into the contact page.

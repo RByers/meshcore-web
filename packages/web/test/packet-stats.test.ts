@@ -4,6 +4,7 @@ import { page } from 'vitest/browser';
 import { buildPacket, packetTypeNameDescription, PayloadType, RouteType } from '@meshcore-web/core/packet';
 import '../src/mc-app.js';
 import '../src/pages/packets/index.js';
+import { smazEncodeIfSmaller } from '@meshcore-web/core/util/smaz';
 import { createHarness, type Harness } from '../src/testing/harness.js';
 import { timelinePalette, timelineSeries, type McPacketStats } from '../src/pages/packets/packet-stats.js';
 
@@ -250,5 +251,96 @@ describe('/packets Stats drill-down filters', () => {
     await settle(t, el);
     expect(t.query('[data-empty="filtered"]')).toBeNull();
     expect(t.query('[data-tiles]')).not.toBeNull();
+  });
+});
+
+describe('/packets Stats text compression', () => {
+  const COMPRESSIBLE = 'this is the message that should compress well';
+
+  /** openStats plus one SMAZ-compressed channel text from bob (and his plain "hello from bob"). */
+  async function openWithCompressed(): Promise<{ t: Harness; el: McPacketStats }> {
+    const r = await openStats();
+    const { t, el } = r;
+    const envelope = smazEncodeIfSmaller(COMPRESSIBLE);
+    expect(envelope.startsWith('s:')).toBe(true);
+    t.emulatorScenario().nodes.bob.sendChannelMessage('Public', envelope);
+    await t.app.connection.capture!.idle();
+    await t.until(() => t.app.packetStats.compression.value.smaz > 0, 5000, 'compressed text counted');
+    await settle(t, el);
+    return r;
+  }
+
+  function segments(el: McPacketStats, id: string): Record<string, string> {
+    const b = el.shadowRoot!.querySelector(`mc-breakdown[data-breakdown="compression-${id}"]`);
+    if (!b) return {};
+    return Object.fromEntries([...b.shadowRoot!.querySelectorAll<HTMLElement>('[data-legend] li')].map((li) => [li.dataset['legendKey']!, li.querySelector('.share')!.textContent!.trim()]));
+  }
+
+  it('renders compressed / plain counts, the savings summary and per-category rows', async () => {
+    const { t, el } = await openWithCompressed();
+    const c = t.app.packetStats.compression.value;
+    expect(c.smaz).toBeGreaterThanOrEqual(1);
+    expect(c.plain).toBeGreaterThanOrEqual(1);
+    expect(c.byCategory.channel.smaz).toBe(c.smaz);
+    expect(c.bytesSaved).toBeGreaterThan(0);
+
+    const section = el.shadowRoot!.querySelector('[data-section="compression"]')!;
+    expect(section.querySelector('h3')!.textContent).toBe('Text compression');
+    // the section sits between network utilisation and hop count
+    const order = [...el.shadowRoot!.querySelectorAll('[data-section]')].map((s) => s.getAttribute('data-section'));
+    expect(order.indexOf('compression')).toBe(order.indexOf('utilization') + 1);
+    expect(order.indexOf('hops')).toBe(order.indexOf('compression') + 1);
+
+    const summary = section.querySelector('[data-field="compression-summary"]')!.textContent!;
+    expect(summary).toContain('of decrypted text messages compressed');
+    expect(summary).toContain(`${c.bytesSaved} B saved`);
+    expect(summary).toContain(`across ${c.smaz} compressed message`);
+    expect(summary).toMatch(/1 sender using compression/);
+
+    expect(Object.keys(segments(el, 'all'))).toEqual(expect.arrayContaining(['Compressed', 'Plain']));
+    expect(Object.keys(segments(el, 'channel'))).toEqual(expect.arrayContaining(['Compressed', 'Plain']));
+    expect(Object.keys(segments(el, 'in'))).toContain('Compressed');
+    // a legend entry's tooltip explains "Not decrypted" (only present when some text had no key)
+    const b = section.querySelector('mc-breakdown[data-breakdown="compression-all"]')!;
+    const nd = [...b.shadowRoot!.querySelectorAll<HTMLElement>('[data-legend] li')].find((li) => li.dataset['legendKey'] === 'Not decrypted');
+    if (nd) expect(nd.title).toContain('no key');
+  });
+
+  it('clicking the Compressed segment filters to compressed texts', async () => {
+    const { t, el } = await openWithCompressed();
+    const stats = t.app.packetStats;
+    const b = el.shadowRoot!.querySelector('mc-breakdown[data-breakdown="compression-all"]')!;
+    b.shadowRoot!.querySelector<HTMLElement>('[data-mark="segment"][data-key="smaz"]')!.click();
+    await t.until(() => t.query('[data-filterbar]'), 3000, 'filter bar');
+    await settle(t, el);
+    expect(t.queryAll('[data-chip]').map((c) => c.textContent!.replace('×', '').replace(/\s+/g, ' ').trim())).toEqual(['Compression: Compressed']);
+    await t.until(() => Number(tileValue(t, 'packets')) === stats.summary.value.packets, 3000, 'filtered tile');
+    expect(stats.points.value.length).toBeGreaterThan(0);
+    expect(stats.points.value.every((p) => p.compression === 'smaz')).toBe(true);
+    expect(stats.points.value.length).toBeLessThan(stats.unfilteredCount.value);
+    await settle(t, el);
+    const seg = el.shadowRoot!.querySelector('mc-breakdown[data-breakdown="compression-all"]')!.shadowRoot!.querySelector('[data-legend] button[data-key="smaz"]')!;
+    expect(seg.getAttribute('aria-pressed')).toBe('true');
+    // clicking again removes it
+    (seg as HTMLElement).click();
+    await settle(t, el);
+    expect(t.query('[data-filterbar]')).toBeNull();
+  });
+
+  it('shows a one-line empty state when no text messages are shown', async () => {
+    const { t, el } = await openStats();
+    t.app.packetStats.addFilter({ field: 'type', value: 'ADVERT', label: 'ADVERT' });
+    await settle(t, el);
+    expect(t.query('[data-empty="compression"]')!.textContent).toContain('No text messages');
+    expect(el.shadowRoot!.querySelector('mc-breakdown[data-breakdown^="compression-"]')).toBeNull();
+  });
+
+  it('the dot plot can be coloured by compression', async () => {
+    const { t, el } = await openWithCompressed();
+    select(t.query('[data-select="color"]')!, 'compression');
+    await settle(t, el);
+    await t.until(() => inChart(el, 'dots', 'mc-dot-plot', '[data-legend] li').length > 0, 3000, 'legend');
+    const keys = inChart(el, 'dots', 'mc-dot-plot', '[data-legend] li').map((li) => li.dataset['legendKey']);
+    expect(keys).toEqual(expect.arrayContaining(['smaz', 'plain']));
   });
 });

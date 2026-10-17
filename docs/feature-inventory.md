@@ -345,6 +345,10 @@ paths, `models/channel_message.dart`, `storage/{contact,channel}_settings_store.
     on the Settings page (App section). A compressed message (sent or received, DM or channel)
     shows a small icon in its meta line whose tooltip / `aria-label` reads "Sent|Received
     SMAZ-compressed: N → M bytes" (UTF-8 size of the plain text → of the envelope, `smazSizes`).
+  - *Packet stats.* The packet log's Stats tab counts compression usage over logged text packets
+    (`StatPacket.compression`, `PacketStatsModel.compression`, the `compression` drill-down
+    filter; docs/packet-stats.md §1.2, §1.6, §6), classified with the same check as received
+    messages (`decodeReceivedText`).
 
 ### 2.4b Emoji reactions (implemented in MeshCore Web, issue #5)
 
