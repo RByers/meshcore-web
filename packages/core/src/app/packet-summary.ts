@@ -105,6 +105,11 @@ export function viewPacket(rec: PacketRecord, ctx: SummaryContext = EMPTY_SUMMAR
   nodeHashes.push(...path);
   const typeName = payloadType >= 0 ? payloadTypeName(payloadType) : 'UNKNOWN';
   const view: PacketView = { typeName, routeName, hops, path, nodeHashes, nodeKeys, summary: '', payloadBytes };
+  if (rec.format === 'none') {
+    // a requested transmission: no bytes, only what the command asked for
+    view.summary = rec.decodedSummary ?? `${typeName} (requested)`;
+    return view;
+  }
   if (error !== undefined) {
     view.error = error;
     view.summary = `unparsable: ${error}`;

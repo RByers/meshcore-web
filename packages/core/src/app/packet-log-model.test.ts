@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
 import { toHex } from '../util/bytes.js';
+import { channelKeyForPsk } from '../store/channels.js';
+import { publicChannelSecret } from '../emulator/scenarios.js';
 import { PayloadType, RouteType } from '../packet/constants.js';
 import type { AnnotationNode } from '../packet/annotate.js';
 import { AppModel, createEmulatorTransportFactory } from './app-model.js';
@@ -315,5 +317,82 @@ describe('PacketLogModel — packets from other nodes (#10)', () => {
       await log.settled();
       expect(log.packets.rows.value.map((r) => r.summary)).toContain('TXT_MSG Alice → Emulator (encrypted)');
     });
+  });
+});
+
+describe('PacketLogModel — sent packets (#9)', () => {
+  it('logs DMs, channel messages, adverts and traces the app asked the radio to send as tx', async () => {
+    const { app, log, scenario } = await connected();
+    const alice = toHex(scenario.keys.alice);
+    const dm = app.chat('contact', alice);
+    await dm.settled();
+    expect((await (await dm.send('ping from me')).done).status).toBe('delivered');
+    const ch = app.chat('channel', await channelKeyForPsk(publicChannelSecret()));
+    await ch.settled();
+    await vi.waitFor(() => expect(ch.channel.value?.name).toBe('Public'));
+    await (await ch.send('hello all')).done;
+    const client = app.connection.client.value!;
+    await client.sendSelfAdvert('flood');
+    await client.tracePath(scenario.keys.repeater.subarray(0, 1)).catch(() => undefined);
+    await app.connection.capture!.idle();
+    await log.settled();
+
+    await log.packets.setFilter({ direction: 'tx' });
+    const rows = log.packets.rows.value;
+    expect(rows.every((r) => r.record.direction === 'tx' && r.record.source === 'sent')).toBe(true);
+    const by = (t: string) => rows.find((r) => r.typeName === t)!;
+    expect(by('TXT_MSG').summary).toBe('TXT_MSG → Alice: "ping from me"');
+    expect(by('TXT_MSG').record).toMatchObject({ format: 'none', hash: '', routeType: -1 });
+    expect(by('TXT_MSG').record.bytes.length).toBe(0);
+    expect(by('TXT_MSG').routeName).toBe('');
+    expect(by('GRP_TXT').summary).toBe('GRP_TXT Public: "hello all"');
+    expect(by('GRP_TXT').routeName).toBe('FLOOD');
+    expect(by('ADVERT').summary).toBe('ADVERT self (flood)');
+    const trace = by('TRACE');
+    expect(trace.record.format).toBe('payload');
+    expect(trace.record.bytes.length).toBe(10); // tag(4) auth(4) flags(1) + one 1-byte hop hash
+    expect(trace.record.bytes[9]).toBe(scenario.keys.repeater[0]);
+
+    // the rx view excludes them; no direction filter shows both
+    await log.packets.setFilter({ direction: 'rx' });
+    expect(log.packets.rows.value.length).toBeGreaterThan(0);
+    expect(log.packets.rows.value.some((r) => r.record.direction === 'tx')).toBe(false);
+    await log.packets.setFilter({ direction: undefined });
+    expect(new Set(log.packets.rows.value.map((r) => r.record.direction))).toEqual(new Set(['rx', 'tx']));
+
+    // inspector: no bytes, linked to the command frame; the frame links back
+    const txt = (await log.inspect(by('TXT_MSG').id))!;
+    expect(txt.annotation).toMatchObject({ length: 0, name: 'requested transmission', errors: [] });
+    expect(txt.sourceFrame?.direction).toBe('out');
+    expect(txt.summary).toBe('TXT_MSG → Alice: "ping from me"');
+    const frame = (await log.inspectFrame(txt.sourceFrame!.id))!;
+    expect(frame.decoded).toMatchObject({ kind: 'sendTxtMsg', text: 'ping from me' });
+    expect(frame.packetId).toBe(txt.record.id);
+    const tr = (await log.inspect(trace.id))!;
+    expect(tr.annotation.errors).toEqual([]);
+    expect(tr.annotation.length).toBe(10);
+
+    // live tail picks up new tx entries
+    await log.packets.setFilter({ direction: 'tx' });
+    await client.sendSelfAdvert('zeroHop');
+    await app.connection.capture!.idle();
+    await log.settled();
+    expect(log.packets.rows.value[0]!.summary).toBe('ADVERT self (zero-hop)');
+    expect(log.packets.rows.value[0]!.routeName).toBe('DIRECT');
+
+    // export / import keep tx entries
+    const exp = await log.exportPackets({ filtered: true });
+    expect(exp.items.length).toBe(log.packets.matching.value);
+    expect(exp.items.every((i) => i.direction === 'tx')).toBe(true);
+    const json = JSON.stringify(exp);
+    await log.clearPackets();
+    await vi.waitFor(() => expect(log.packets.total.value).toBe(0));
+    expect(await log.importJson(json)).toEqual({ packets: exp.items.length, frames: 0 });
+    await vi.waitFor(async () => {
+      await log.settled();
+      expect(log.packets.rows.value.map((r) => r.summary)).toContain('TXT_MSG → Alice: "ping from me"');
+    });
+    const back = log.packets.rows.value.find((r) => r.typeName === 'TXT_MSG')!.record;
+    expect(back).toMatchObject({ direction: 'tx', format: 'none', source: 'sent', hash: '' });
   });
 });

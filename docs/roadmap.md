@@ -20,7 +20,10 @@ truth = firmware companion-v1.18.0), `mesh-packet-format.md` (over-the-air packe
    it in node; the UI is tested against it in a real Chromium.
 3. **Everything is recorded.** Every host↔device frame and every over-the-air packet the
    device reports (LOG_RX_DATA / RAW_DATA / TRACE_DATA pushes) is stored in IndexedDB with
-   its radio metadata (SNR, RSSI, timestamp, direction, interface). A packet inspector
+   its radio metadata (SNR, RSSI, timestamp, direction, interface). Packets the app asks the
+   radio to send are logged too (direction `tx`, from the command frame: the device does not
+   echo them, so firmware-built packets such as DMs and channel messages are recorded as the
+   requested fields without on-air bytes, `format: 'none'`). A packet inspector
    explains each byte according to the protocol spec.
 4. **Minimal dependencies.** Runtime: `lit` only (Phase 12 decided against Leaflet: the
    map is an in-house tile view, see "Phase 12 notes"). Dev:
@@ -94,7 +97,7 @@ made on `main`. Phases are sequential unless marked parallelisable.
 | 6 | App model + web shell | `app/` models; `<mc-app>` with router, connect panel (Serial / BLE / Emulator), device info header, connection state, error toasts; e2e browser tests using in-process emulator via mocked navigator APIs | done |
 | 7 | Contacts & direct messages | Contact list (type icons, last seen, path, SNR), add/remove/share/reset path, DM chat with status (pending/sent/delivered/failed), retries, unread counts, message persistence | done |
 | 8 | Channels | Channel list from device (GET_CHANNEL), add/edit (name + PSK / hashtag channels), group chat with "sender: text" convention, reply/reaction conventions from `feature-inventory.md` | done |
-| 9 | Packet log & inspector | Packet log view with filters (direction, type, node, time), live tail, per-packet inspector showing hex dump with the annotation tree, decrypted view when key known, frame-level log of host↔device traffic, export/import JSON | done; DM text in rows (with the opt-in radio key) added for issue #10 |
+| 9 | Packet log & inspector | Packet log view with filters (direction, type, node, time), live tail, per-packet inspector showing hex dump with the annotation tree, decrypted view when key known, frame-level log of host↔device traffic, export/import JSON | done; DM text in rows (with the opt-in radio key) added for issue #10; sent (tx) entries for issue #9 |
 | 10 | Repeater / room / sensor admin | Login, status, telemetry, CLI (send command text, show replies), trace path, path discovery, neighbours; room-server posts | done |
 | 11 | Device settings | Name, lat/lon, radio params (freq/bw/sf/cr/tx power), advert interval/flood settings, other params, tuning, time sync, battery, stats, export/import private key, reboot/factory reset, manual-add / auto-add flags, advert send (flood / zero-hop) | done |
 | 12 | Map & polish | Node map (contacts with location, own location), PWA manifest + offline shell, keyboard/accessibility pass, settings export, README user guide, release build | done (see Phase 12 notes; settings export not done) |

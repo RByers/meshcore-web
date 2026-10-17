@@ -154,10 +154,15 @@ example your own tile server. Tiles are not stored for offline use.
 The radio reports every packet it hears while the app is connected (and the app logs every
 frame exchanged with it). **Packets** shows them live:
 
-- **Packets** tab: time, direction, type, route, path/hops, SNR/RSSI, size and a summary.
-  Filter by direction, type, node and time. Click a row to open the **inspector**: a hex
-  dump and a tree explaining every byte (header bits, path, payload fields); hovering a
-  field highlights its bytes and vice versa.
+- **Packets** tab: time, direction (↓ rx received, ↑ tx sent), type, route, path/hops,
+  SNR/RSSI, size and a summary. Filter by direction (all / rx / tx), type, node and time.
+  Click a row to open the **inspector**: a hex dump and a tree explaining every byte (header
+  bits, path, payload fields); hovering a field highlights its bytes and vice versa.
+- **Sent packets** (tx) are logged when the app asks the radio to transmit (messages, channel
+  posts, adverts, logins and requests, traces, raw data). The radio does not report what it
+  actually put on air, so for packets it builds and encrypts itself (DMs, channel messages,
+  adverts, requests) the entry shows what was requested and has no bytes (size "—"); for
+  traces, raw data and raw packets the bytes are the ones the app supplied.
 - Messages the radio received while no app was connected (delivered later from its message
   queue) have no packet in the log: the radio only reports packets as it hears them.
 - Direct messages show as `TXT_MSG sender → recipient (encrypted)` unless the radio key is

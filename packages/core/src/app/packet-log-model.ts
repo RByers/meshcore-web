@@ -44,6 +44,11 @@ import { batch, computed, signal, type ReadonlySignal, type Signal } from './sig
 export const SELF_PRIVATE_KEY_SETTING = 'packetLog.selfPrivateKey';
 
 export const BUNDLE_FORMAT = 'meshcore-web/log-bundle';
+
+/** Explains `format: 'none'` packet records (sent packets logged from the host command). */
+export const NO_BYTES_MEANING =
+  'Logged from the command the app sent to the radio. The radio builds (and encrypts) the on-air packet itself and does not report it back, so its bytes are unknown; the fields shown are what was requested.';
+
 // ---------------------------------------------------------------------------
 // Filters and rows
 // ---------------------------------------------------------------------------
@@ -112,7 +117,7 @@ export interface FrameInspection {
   /** decodeFrame (in) / decodeCommand (out) result; null when it failed. */
   decoded: DeviceFrame | Command | null;
   decodeError?: string;
-  /** The packet log entry this frame carried (LOG_RX_DATA etc), if any. */
+  /** The packet log entry this frame carried (LOG_RX_DATA etc) or requested (a tx entry), if any. */
   packetId?: number;
 }
 
@@ -520,8 +525,12 @@ export class PacketLogModel extends StoreBoundModel {
     const record = await store.packets.get(id);
     if (!record) return null;
     const keys = this.annotateKeys();
-    const annotation =
-      record.format === 'packet' ? await annotatePacket(record.bytes, { keys }) : await annotatePayload(record.payloadType, record.bytes, { keys });
+    const annotation: Annotation =
+      record.format === 'packet'
+        ? await annotatePacket(record.bytes, { keys })
+        : record.format === 'payload'
+          ? await annotatePayload(record.payloadType, record.bytes, { keys })
+          : { offset: 0, length: 0, name: 'requested transmission', value: record.decodedSummary ?? '', meaning: NO_BYTES_MEANING, errors: [] };
     const ctx = this.#ctx.peek();
     const view = viewPacket(record, ctx);
     const summary = await summarizePacket(record, ctx, view, this.#dmKeys());
@@ -556,11 +565,10 @@ export class PacketLogModel extends StoreBoundModel {
     } catch (e) {
       out.decodeError = e instanceof Error ? e.message : String(e);
     }
-    if (record.direction === 'in') {
-      const page = await store.packets.query({ from: record.ts, to: record.ts, limit: 1, match: (p) => p.sourceFrameId === record.id });
-      const p = page.items[0];
-      if (p) out.packetId = p.id;
-    }
+    // the packet an 'in' push carried, or the tx packet an 'out' command asked the radio to send
+    const page = await store.packets.query({ from: record.ts, to: record.ts, limit: 1, match: (p) => p.sourceFrameId === record.id });
+    const p = page.items[0];
+    if (p) out.packetId = p.id;
     return out;
   }
 

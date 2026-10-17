@@ -89,10 +89,15 @@ export type PacketDirection = 'rx' | 'tx';
 export type PacketSource = 'logRxData' | 'rawData' | 'traceData' | 'sent' | 'import' | 'other';
 
 /**
- * What `bytes` holds: a full over-the-air packet (`packet`), or only a payload (`payload`, for
- * RAW_DATA and TRACE_DATA pushes where the device does not report the envelope).
+ * What `bytes` holds: a full over-the-air packet (`packet`), only a payload (`payload`, for
+ * RAW_DATA and TRACE_DATA pushes where the device does not report the envelope, and for sent
+ * packets whose payload the host supplied), or nothing (`none`: a transmission the host asked the
+ * radio to make, e.g. CMD_SEND_TXT_MSG, recorded from the command frame. The radio builds and
+ * encrypts the on-air bytes itself and does not echo them, so only the requested fields, kept in
+ * `decodedSummary`, are known; `bytes` is empty and `hash` is ''). Adding `none` needed no
+ * IndexedDB migration: `format` is not indexed.
  */
-export type PacketBytesFormat = 'packet' | 'payload';
+export type PacketBytesFormat = 'packet' | 'payload' | 'none';
 
 export interface PacketRecord {
   id: number;

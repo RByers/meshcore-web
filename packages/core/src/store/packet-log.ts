@@ -3,7 +3,8 @@
  * metadata. Packet envelope / hash per docs/mesh-packet-format.md §1.
  */
 
-import type { DeviceFrame } from '../protocol/types.js';
+import type { Command, DeviceFrame } from '../protocol/types.js';
+import { TxtType } from '../protocol/constants.js';
 import { toHex } from '../util/bytes.js';
 import { PayloadType, RouteType, payloadTypeName, routeTypeName } from '../packet/constants.js';
 import { packetHash, parsePacket } from '../packet/packet.js';
@@ -82,6 +83,8 @@ export async function packetRecordFromInput(input: PacketInput, now = Date.now()
       parseError = err instanceof Error ? err.message : String(err);
       summary = `unparsable, ${input.bytes.length} B`;
     }
+  } else if (format === 'none') {
+    summary = payloadType >= 0 ? `${payloadTypeName(payloadType)} (requested)` : 'requested transmission';
   } else {
     if (payloadType >= 0) {
       hash = toHex(await packetHash({ payloadType, pathLen: Math.max(0, pathLen), payload: input.bytes }));
@@ -163,6 +166,115 @@ export function packetInputFromFrame(frame: DeviceFrame, meta: { ts?: number; so
   }
 }
 
+/** Names resolved from the store for a sent-packet summary. */
+export interface CommandPacketNames {
+  /** Name of the contact a command addresses (by its pubkey / prefix). */
+  peer?: string;
+  /** Name of the channel a channel command addresses. */
+  channel?: string;
+}
+
+const quoted = (s: string): string => JSON.stringify(s.length > 60 ? `${s.slice(0, 59)}…` : s);
+const hex6 = (b: Uint8Array): string => toHex(b.subarray(0, 6));
+
+/**
+ * Maps a host command that makes the radio transmit to a `tx` {@link PacketInput}, or null for
+ * commands that do not transmit. The companion protocol does not echo transmitted packets, so the
+ * record holds what the command asked for (companion-protocol.md §4; firmware MyMesh.cpp
+ * handleCmdFrame):
+ * - SEND_RAW_PACKET (0x41): the complete packet → `format: 'packet'`.
+ * - SEND_RAW_DATA (0x19, RAW_CUSTOM via `sendDirect` along the given path), SEND_CONTROL_DATA
+ *   (0x37, CONTROL via `sendZeroHop`), SEND_TRACE_PATH (0x24, TRACE via `sendDirect`: tag, auth,
+ *   flags, then the path hashes appended to the payload, path_len 0): the exact payload →
+ *   `format: 'payload'`.
+ * - Everything the firmware builds and encrypts itself (TXT_MSG, GRP_TXT, GRP_DATA, ADVERT,
+ *   REQ, ANON_REQ): no bytes → `format: 'none'`, with the requested fields in `decodedSummary`.
+ *   Route type is set only where the firmware fixes it (channel text / adverts: flood or zero-hop);
+ *   DMs and requests go direct or flood depending on the contact's stored path, so -1.
+ */
+export function packetInputFromCommand(
+  cmd: Command,
+  meta: { ts?: number; sourceFrameId?: number; names?: CommandPacketNames } = {},
+): PacketInput | null {
+  const base = {
+    direction: 'tx' as const,
+    source: 'sent' as const,
+    ...(meta.ts !== undefined ? { ts: meta.ts } : {}),
+    ...(meta.sourceFrameId !== undefined ? { sourceFrameId: meta.sourceFrameId } : {}),
+  };
+  const peer = (key: Uint8Array): string => meta.names?.peer ?? hex6(key);
+  const channel = (idx: number): string => meta.names?.channel ?? `slot ${idx}`;
+  const none = (payloadType: number, decodedSummary: string, routeType = -1, pathLen = -1): PacketInput => ({
+    ...base,
+    bytes: new Uint8Array(0),
+    format: 'none',
+    payloadType,
+    routeType,
+    pathLen,
+    decodedSummary,
+  });
+  const name = payloadTypeName;
+  switch (cmd.kind) {
+    case 'sendTxtMsg': {
+      const t = cmd.txtType ?? TxtType.PLAIN;
+      const kind = t === TxtType.CLI_DATA ? ' CLI' : t === TxtType.SIGNED_PLAIN ? ' signed' : '';
+      const attempt = cmd.attempt ? ` (attempt ${cmd.attempt})` : '';
+      return none(PayloadType.TXT_MSG, `${name(PayloadType.TXT_MSG)}${kind} → ${peer(cmd.recipient)}: ${quoted(cmd.text)}${attempt}`);
+    }
+    case 'sendChannelTxtMsg':
+      return none(PayloadType.GRP_TXT, `${name(PayloadType.GRP_TXT)} ${channel(cmd.channelIdx)}: ${quoted(cmd.text)}`, RouteType.FLOOD, 0);
+    case 'sendChannelData': {
+      const direct = cmd.pathLen !== undefined && cmd.pathLen !== 0xff;
+      const hex = cmd.dataType.toString(16).padStart(4, '0');
+      return none(
+        PayloadType.GRP_DATA,
+        `${name(PayloadType.GRP_DATA)} ${channel(cmd.channelIdx)}: data type 0x${hex}, ${cmd.payload.length} B`,
+        direct ? RouteType.DIRECT : RouteType.FLOOD,
+        direct ? (cmd.pathLen ?? -1) : 0,
+      );
+    }
+    case 'sendSelfAdvert':
+      return none(PayloadType.ADVERT, `${name(PayloadType.ADVERT)} self (${cmd.flood ? 'flood' : 'zero-hop'})`, cmd.flood ? RouteType.FLOOD : RouteType.DIRECT, 0);
+    case 'shareContact':
+      return none(PayloadType.ADVERT, `${name(PayloadType.ADVERT)} sharing ${peer(cmd.pubKey)} (zero-hop)`, RouteType.DIRECT, 0);
+    case 'sendLogin':
+      return none(PayloadType.ANON_REQ, `${name(PayloadType.ANON_REQ)} login → ${peer(cmd.pubKey)}`);
+    case 'sendAnonReq':
+      return none(PayloadType.ANON_REQ, `${name(PayloadType.ANON_REQ)} → ${peer(cmd.pubKey)}, ${cmd.data.length} B`);
+    case 'sendStatusReq':
+      return none(PayloadType.REQ, `${name(PayloadType.REQ)} status → ${peer(cmd.pubKey)}`);
+    case 'sendTelemetryReq':
+      // no pubKey = the radio's own telemetry: answered locally, nothing is transmitted
+      return cmd.pubKey ? none(PayloadType.REQ, `${name(PayloadType.REQ)} telemetry → ${peer(cmd.pubKey)}`) : null;
+    case 'sendBinaryReq': {
+      const hex = (cmd.data[0] ?? 0).toString(16).padStart(2, '0');
+      return none(PayloadType.REQ, `${name(PayloadType.REQ)} type 0x${hex} → ${peer(cmd.pubKey)}, ${cmd.data.length} B`);
+    }
+    case 'sendPathDiscoveryReq':
+      // firmware clears the contact's path for this request, so it always floods
+      return none(PayloadType.REQ, `${name(PayloadType.REQ)} path discovery → ${peer(cmd.pubKey)}`, RouteType.FLOOD, 0);
+    case 'sendTracePath': {
+      const flags = Math.max(0, [1, 2, 4, 8].indexOf(cmd.pathHashSize ?? 1));
+      return {
+        ...base,
+        bytes: buildTracePayload({ tag: cmd.tag, authCode: cmd.authCode, flags, hashes: cmd.path }),
+        format: 'payload',
+        payloadType: PayloadType.TRACE,
+        routeType: RouteType.DIRECT,
+        pathLen: 0,
+      };
+    }
+    case 'sendRawData':
+      return { ...base, bytes: cmd.payload, format: 'payload', payloadType: PayloadType.RAW_CUSTOM, routeType: RouteType.DIRECT, pathLen: cmd.pathLen };
+    case 'sendControlData':
+      return { ...base, bytes: cmd.payload, format: 'payload', payloadType: PayloadType.CONTROL, routeType: RouteType.DIRECT, pathLen: 0 };
+    case 'sendRawPacket':
+      return { ...base, bytes: cmd.packet, format: 'packet' };
+    default:
+      return null;
+  }
+}
+
 export class PacketLog extends TimeLog<PacketRecord, PacketQuery> {
   protected readonly storeName = STORE.packets;
   protected readonly tsIndex = INDEX.packets.ts;
@@ -224,7 +336,7 @@ export class PacketLog extends TimeLog<PacketRecord, PacketQuery> {
       ts: reqNumber(o, 'ts'),
       direction: reqOneOf(o, 'direction', ['rx', 'tx'] as const),
       bytes,
-      format: reqOneOf(o, 'format', ['packet', 'payload'] as const),
+      format: reqOneOf(o, 'format', ['packet', 'payload', 'none'] as const),
       source: reqOneOf(o, 'source', PACKET_SOURCES),
       routeType: reqNumber(o, 'routeType'),
       payloadType: reqNumber(o, 'payloadType'),

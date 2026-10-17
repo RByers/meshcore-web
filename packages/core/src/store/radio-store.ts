@@ -1,14 +1,15 @@
 /** Facade opening every repository of one radio's database (`meshcore-web:<pubkeyHex>`). */
 
-import type { DeviceFrame } from '../protocol/types.js';
+import type { Command, DeviceFrame } from '../protocol/types.js';
 import { decodeFrame } from '../protocol/decode.js';
+import { tryDecodeCommand } from '../protocol/decode-command.js';
 import { TypedEmitter } from '../util/events.js';
 import { deleteDatabase, openDatabase, type IdbDatabase } from './idb.js';
 import { RADIO_DB_MIGRATIONS, RADIO_DB_VERSION, pubKeyHex, radioDbName, type FrameDirection, type FrameRecord, type PacketRecord } from './schema.js';
 import type { LogStoreName, RadioStoreEvents } from './events.js';
 import { DEFAULT_RETENTION, type RetentionPolicy } from './time-log.js';
 import { FrameLog } from './frame-log.js';
-import { PacketLog } from './packet-log.js';
+import { PacketLog, packetInputFromCommand, type CommandPacketNames } from './packet-log.js';
 import { ContactsRepo } from './contacts.js';
 import { MessagesRepo } from './messages.js';
 import { ChannelsRepo } from './channels.js';
@@ -22,7 +23,10 @@ export interface RadioStoreOptions extends StoreOpenOptions {
 
 export interface CaptureResult {
   frame: FrameRecord;
-  /** The over-the-air packet carried by the frame (LOG_RX_DATA / RAW_DATA / TRACE / CONTROL). */
+  /**
+   * The over-the-air packet carried by an 'in' frame (LOG_RX_DATA / RAW_DATA / TRACE / CONTROL),
+   * or the `tx` packet an 'out' command frame asked the radio to send (see packetInputFromCommand).
+   */
   packet: PacketRecord | null;
   /** The decoded frame for 'in' frames (null if decoding failed or for 'out'). */
   decoded: DeviceFrame | null;
@@ -70,7 +74,9 @@ export class RadioStore {
 
   /**
    * Capture pipeline step: logs a frame and, for packet-bearing pushes, the packet it carries
-   * (linked via `sourceFrameId`). Pass `decoded` if the caller already decoded the frame.
+   * (linked via `sourceFrameId`). For command frames that make the radio transmit, logs a `tx`
+   * packet record of what was requested (the device never echoes sent packets). Pass `decoded`
+   * if the caller already decoded the frame.
    */
   async captureFrame(
     direction: FrameDirection,
@@ -87,8 +93,32 @@ export class RadioStore {
     }
     const ts = opts.ts ?? Date.now();
     const frame = await this.frames.append({ direction, bytes, ts, ...(decoded ? { kind: decoded.kind } : {}) });
-    const packet = decoded ? await this.packets.appendFromFrame(decoded, { ts, sourceFrameId: frame.id }) : null;
+    let packet: PacketRecord | null = null;
+    if (decoded) packet = await this.packets.appendFromFrame(decoded, { ts, sourceFrameId: frame.id });
+    else if (direction === 'out') {
+      const res = tryDecodeCommand(bytes);
+      if (res.ok) {
+        const input = packetInputFromCommand(res.command, { ts, sourceFrameId: frame.id, names: await this.#commandNames(res.command) });
+        if (input) packet = await this.packets.append(input);
+      }
+    }
     return { frame, packet, decoded };
+  }
+
+  /** Contact / channel names for a sent-packet summary (best effort). */
+  async #commandNames(cmd: Command): Promise<CommandPacketNames> {
+    try {
+      if (cmd.kind === 'sendChannelTxtMsg' || cmd.kind === 'sendChannelData') {
+        const ch = await this.channels.byDeviceIndex(cmd.channelIdx);
+        return ch?.name ? { channel: ch.name } : {};
+      }
+      const key = cmd.kind === 'sendTxtMsg' ? cmd.recipient : 'pubKey' in cmd && cmd.pubKey instanceof Uint8Array ? cmd.pubKey : undefined;
+      if (!key) return {};
+      const matches = await this.contacts.findByPrefix(key.subarray(0, 6));
+      return matches.length === 1 && matches[0]!.name ? { peer: matches[0]!.name } : {};
+    } catch {
+      return {};
+    }
   }
 
   /** Applies both logs' retention policies. */

@@ -402,9 +402,9 @@ export class McPacketsPage extends AppElement {
       <label
         >Direction
         <select data-filter="direction" @change=${(e: Event) => this.#setPacketFilter({ direction: ((e.target as HTMLSelectElement).value || undefined) as PacketFilter['direction'] })}>
-          <option value="" ?selected=${!f.direction}>Both</option>
-          <option value="rx" ?selected=${f.direction === 'rx'}>rx</option>
-          <option value="tx" ?selected=${f.direction === 'tx'}>tx</option>
+          <option value="" ?selected=${!f.direction}>All</option>
+          <option value="rx" ?selected=${f.direction === 'rx'}>↓ rx (received)</option>
+          <option value="tx" ?selected=${f.direction === 'tx'}>↑ tx (sent)</option>
         </select>
       </label>
       <details class="types">
@@ -569,20 +569,24 @@ export class McPacketsPage extends AppElement {
               @keydown=${(e: KeyboardEvent) => this.#rowKey(e, 'packets', r.id)}
             >
               <td class="mono">${formatLogTime(rec.ts)}</td>
-              <td class="dir-${rec.direction}">${rec.direction}</td>
+              <td class="dir-${rec.direction}" data-dir=${rec.direction} title=${rec.direction === 'rx' ? 'received: heard by the radio' : 'sent: transmitted at this app\'s request'}>
+                ${rec.direction === 'rx' ? '↓ rx' : '↑ tx'}
+              </td>
               <td>${r.typeName}</td>
               <td>${r.routeName || '—'}</td>
               <td class="mono" title=${r.path.join(' → ')} data-field="path">
                 ${r.hops === null ? '—' : r.path.length ? hopsLink(`${r.path.join('→')} (${r.hops})`, { kind: 'packet', id: r.id }) : String(r.hops)}
               </td>
               <td class="num">${rec.snr !== undefined ? `${rec.snr} dB` : '—'}${rec.rssi !== undefined ? ` / ${rec.rssi}` : ''}</td>
-              <td class="num">${rec.bytes.length}</td>
+              ${rec.format === 'none'
+                ? html`<td class="num muted" title="On-air bytes unknown: logged from the command sent to the radio">—</td>`
+                : html`<td class="num">${rec.bytes.length}</td>`}
               <td class="summary">${r.summary}</td>
             </tr>`;
           })}
         </tbody>
       </table>
-      ${rows.length === 0 ? html`<p class="empty muted">${this.#log.packets.total.value ? 'No packets match the filters.' : 'No packets logged yet. Packets the radio hears appear here live.'}</p>` : nothing}
+      ${rows.length === 0 ? html`<p class="empty muted">${this.#log.packets.total.value ? 'No packets match the filters.' : 'No packets logged yet. Packets the radio hears, and those this app asks it to send, appear here live.'}</p>` : nothing}
     </div>`;
   }
 

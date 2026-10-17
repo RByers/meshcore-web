@@ -1,5 +1,5 @@
 /** Formatting helpers for the packet log pages and the inputs of `<mc-packet-inspector>`. */
-import type { FrameInspection, PacketInspection } from '@meshcore-web/core/app';
+import { NO_BYTES_MEANING, type FrameInspection, type PacketInspection } from '@meshcore-web/core/app';
 import type { Annotation } from '@meshcore-web/core/packet';
 import { toHex } from '@meshcore-web/core/util/bytes';
 import type { InspectorMeta } from './packet-inspector.js';
@@ -38,7 +38,7 @@ export function packetInspectorProps(ins: PacketInspection): InspectorProps {
   const r = ins.record;
   const meta: InspectorMeta[] = [
     { label: 'Time', value: new Date(r.ts).toISOString() },
-    { label: 'Direction', value: r.direction === 'rx' ? 'rx (heard by the radio)' : 'tx (sent by the radio)' },
+    { label: 'Direction', value: r.direction === 'rx' ? '↓ rx (heard by the radio)' : '↑ tx (sent by the radio at this app\'s request)' },
     { label: 'Type', value: `${ins.view.typeName}${ins.view.routeName ? ` · ${ins.view.routeName}` : ''}` },
     { label: 'Summary', value: ins.summary },
   ];
@@ -48,7 +48,8 @@ export function packetInspectorProps(ins: PacketInspection): InspectorProps {
   }
   if (r.snr !== undefined) meta.push({ label: 'SNR', value: `${r.snr} dB` });
   if (r.rssi !== undefined) meta.push({ label: 'RSSI', value: `${r.rssi} dBm` });
-  meta.push({ label: 'Size', value: `${r.bytes.length} B${r.format === 'payload' ? ' (payload only)' : ''}` });
+  if (r.format === 'none') meta.push({ label: 'Bytes', value: `none: ${NO_BYTES_MEANING}` });
+  else meta.push({ label: 'Size', value: `${r.bytes.length} B${r.format === 'payload' ? ' (payload only)' : ''}` });
   if (r.hash) meta.push({ label: 'Packet hash', value: `${r.hash}${ins.copies > 1 ? ` (${ins.copies} copies logged)` : ''}` });
   meta.push({ label: 'Source', value: r.source + (ins.sourceFrame ? ` · frame #${ins.sourceFrame.id} (${ins.sourceFrame.kind})` : '') });
   return {

@@ -159,6 +159,39 @@ describe('/packets page', () => {
     expect(data.items[0]!.bytes).toMatch(/^[0-9a-f]+$/);
   });
 
+  it('shows sent (tx) packets next to received ones, filters by direction and inspects a tx entry', async () => {
+    const t = await openLog();
+    await traffic(t);
+    const client = t.app.connection.client.value!;
+    await client.sendSelfAdvert('flood');
+    await client.sendChannelMessage(0, 'sent from the web');
+    await t.until(() => t.query('tr[data-type="GRP_TXT"] td[data-dir="tx"]'), 3000, 'tx GRP_TXT row');
+    const txRow = t.query('tr[data-type="GRP_TXT"] td[data-dir="tx"]')!.closest('tr')!;
+    expect(txRow.textContent).toContain('↑ tx');
+    expect(txRow.textContent).toContain('GRP_TXT Public: "sent from the web"');
+    expect(txRow.textContent).toContain('—'); // no on-air bytes
+    expect(t.query('td[data-dir="rx"]')!.textContent).toContain('↓ rx');
+
+    await t.fill('select[data-filter="direction"]', 'tx');
+    await t.until(() => {
+      const dirs = t.queryAll('td[data-dir]').map((d) => d.dataset['dir']);
+      return dirs.length >= 2 && dirs.every((d) => d === 'tx');
+    }, 3000, 'only tx rows');
+    await t.fill('select[data-filter="direction"]', 'rx');
+    await t.until(() => {
+      const dirs = t.queryAll('td[data-dir]').map((d) => d.dataset['dir']);
+      return dirs.length > 0 && dirs.every((d) => d === 'rx');
+    }, 3000, 'only rx rows');
+    await t.fill('select[data-filter="direction"]', '');
+    await t.until(() => t.query('td[data-dir="tx"]') && t.query('td[data-dir="rx"]'), 3000, 'both directions');
+
+    const id = t.query('tr[data-type="GRP_TXT"] td[data-dir="tx"]')!.closest('tr')!.dataset['packetId']!;
+    await t.click(`tr[data-packet-id="${id}"]`);
+    await t.until(() => t.query('aside mc-packet-inspector'), 3000, 'inspector');
+    await t.until(() => t.text().includes('sent by the radio at this app'), 3000, 'tx direction in inspector');
+    expect(t.text()).toContain('does not report it back');
+  });
+
   it('clear asks for confirmation and empties the log', async () => {
     const t = await openLog();
     await traffic(t);
