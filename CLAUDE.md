@@ -43,7 +43,10 @@ If `.ref/` is missing, clone those three repos into it.
 ## Git workflow
 - `main` is the primary branch; origin and local should be kept in sync.
 - Before starting any task, ALWAYS fetch and rebase onto `origin/main`. DO NOT work from a stale local main.
-- Do all work in a branch on a worktree (`EnterWorktree`), branched from main.
+- In particular, before entering a worktree, fast-forward the local `main` checkout to `origin/main`
+  (`git fetch origin && git merge --ff-only origin/main` on `main`), so the new branch starts from the
+  latest main. If local `main` can't fast-forward (it has commits origin lacks), stop and report.
+- Do all work in a branch on a worktree (`EnterWorktree`), branched from the up-to-date main.
 - Whenever a set of changes is complete (typecheck and tests pass), commit and push it to `origin/main`
   (`git push origin HEAD:main`; no pull requests).
 - Then, before cleaning up the worktree, fast-forward main by rebasing from `origin/main`.
