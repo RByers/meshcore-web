@@ -138,6 +138,37 @@ export interface ContactLocalFields {
    * records written before this field existed read as off, so no migration is needed.
    */
   smaz?: boolean;
+  /**
+   * Paths used for (or observed towards) this contact with their delivery statistics, most
+   * recently used first (issue #6, mirrors MeshCore Open's path history). Optional: absent = none.
+   */
+  pathHistory?: PathHistoryEntry[];
+}
+
+/** Outcome of the last message sent over a path. */
+export type PathResult = 'success' | 'failure';
+
+/** One remembered path to a contact (see `app/path-history.ts`). */
+export interface PathHistoryEntry {
+  /** Raw out_path_len byte (0xFF = flood). */
+  pathLen: number;
+  /** The hop hashes (hops × hash size bytes); empty for flood / direct. */
+  path: Uint8Array;
+  /** Messages sent over this path (each message counts once per path, retries included). */
+  attempts: number;
+  /** Messages delivered (ACK) over this path. */
+  successes: number;
+  /** Messages not delivered over this path (ACK timeout). */
+  failures: number;
+  /** Epoch ms this path was last used for a send, set or observed. */
+  lastUsed: number;
+  /** Epoch ms of the last delivery over this path. */
+  lastSuccess?: number;
+  lastResult?: PathResult;
+  /** Round trip of the last delivery (ms). */
+  roundTripMs?: number;
+  /** First learnt from the device (PATH_UPDATED / advert) rather than by sending over it. */
+  observed?: boolean;
 }
 
 export interface ContactRecord extends Contact, ContactLocalFields {

@@ -26,6 +26,7 @@ import { NotificationsModel, type NotificationsTimers } from './notifications.js
 import { MapModel } from './map-model.js';
 import { PathModel } from './path-model.js';
 import { PacketLogModel } from './packet-log-model.js';
+import { ContactPathsModel } from './path-history.js';
 import { RemoteAdminModel, type RemoteAdminOptions } from './remote-admin-model.js';
 import { signal, type ReadonlySignal } from './signal.js';
 import { UnreadModel } from './unread-model.js';
@@ -88,6 +89,7 @@ export class AppModel {
   #remoteAdmin: RemoteAdminModel | undefined;
   #map: MapModel | undefined;
   #paths: PathModel | undefined;
+  #contactPaths: ContactPathsModel | undefined;
   readonly #chats = new Map<string, ChatModel>();
   #offs: Array<() => void> = [];
 
@@ -200,12 +202,17 @@ export class AppModel {
     return (this.#paths ??= new PathModel({ contacts: this.contacts.views, selfInfo: this.connection.selfInfo, store: this.connection.store }));
   }
 
+  /** Contact paths: set path, path history with delivery stats, repeater candidates (issue #6). */
+  get contactPaths(): ContactPathsModel {
+    return (this.#contactPaths ??= new ContactPathsModel(this.connection, this.contacts).start());
+  }
+
   /** The model of one conversation (cached per conversation). */
   chat(convType: ConversationType, convKey: string): ChatModel {
     const id = `${convType}:${convKey.toLowerCase()}`;
     let m = this.#chats.get(id);
     if (!m) {
-      m = new ChatModel(this.connection, convType, convKey, this.#opts.messaging ?? {}).start();
+      m = new ChatModel(this.connection, convType, convKey, { pathRecorder: this.contactPaths, ...this.#opts.messaging }).start();
       this.#chats.set(id, m);
     }
     return m;
@@ -215,7 +222,7 @@ export class AppModel {
   async dispose(): Promise<void> {
     await this.connection.disconnect();
     for (const off of this.#offs.splice(0)) off();
-    for (const m of [this.#contacts, this.#channels, this.#unread, this.#conversations, this.#packetLog, ...this.#chats.values()]) m?.dispose();
+    for (const m of [this.#contacts, this.#channels, this.#unread, this.#conversations, this.#packetLog, this.#contactPaths, ...this.#chats.values()]) m?.dispose();
     this.#remoteAdmin?.dispose();
     this.#deviceSettings?.dispose();
     this.#appSettings?.dispose();

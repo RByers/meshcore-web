@@ -165,7 +165,7 @@ route drawn on `<mc-tile-map>` (new `.lines` polylines and `approximate` / `glyp
 Maths is core: `path-geometry.ts` (hash → contacts, preferring repeaters for hops; Mercator-linear
 interpolation between located stops and extrapolation past the first / last; ambiguous hops
 take the candidate nearest the estimate; no map when nothing is located) and `path-model.ts`
-(`app.paths`: contact out_path, logged packets, messages). Messages only carry path_len, so their
+(`app.contactPaths`: contact out_path, logged packets, messages). Messages only carry path_len, so their
 hashes are recovered from the packet log (the TXT_MSG from the contact / GRP_TXT with the channel
 hash and the same path_len heard nearest the arrival); otherwise only the hop count is shown.
 Not linked: the contacts list row (the row is itself a link). The path hash resolver will be
@@ -174,3 +174,22 @@ unified with issue #3's resolver.
 **Not done in Phase 12:** settings export/import (app preferences + per-radio local data as a
 file); a dedicated keyboard/accessibility audit beyond what earlier phases added; `REPO_URL`
 is a placeholder until the repository is published.
+
+## Contact paths (issue #6)
+
+`/path/:key` (from the chat header "Path…" and the contacts menu "Set path…") shows the
+contact's current path with hops resolved to repeater / room names (hop hash = public key
+prefix; ambiguous hops show "A | B", unknown ones the hex), a hop-list editor (searchable
+repeater list with add / reorder / remove, or tap repeaters on a `<mc-tile-map>`), "Use
+flood", and previously used paths with delivered / attempted counts, round trip, last use and
+a "Use" button. Logic is `ContactPathsModel` (`app.contactPaths`, `packages/core/src/app/path-history.ts`),
+mirroring MeshCore Open's routing sheet / `path_history_service.dart`: a hop list is set with
+ADD_UPDATE_CONTACT (the contact's own type / flags / name / last_advert, new out_path_len /
+out_path; hash size = the radio's path hash mode + 1), flood with RESET_PATH. Each DM counts
+one attempt per distinct path it went out on (the device's out_path at each SENT, or flood);
+the ACK's path gets the success and the message's other paths a failure; a final timeout is a
+failure for all of them; a late ACK turns the failure into a success. Paths the device learns
+(PATH_UPDATED, adverts) are added with 0/0 ("learnt from the radio"). History is stored on the
+contact record (`ContactRecord.pathHistory`, local field, kept across device syncs, no
+migration), newest first, capped at 20. Not mirrored: MeshCore Open's auto route rotation /
+path scoring, route weights and the per-path trace button; there is no free-form hex hop entry.

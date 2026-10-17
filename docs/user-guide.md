@@ -116,7 +116,11 @@ with a **Disconnect** button; disconnect first to connect to a different radio.
 - **Contacts** lists the contacts stored on the radio, with type icons (chat, repeater,
   room, sensor), last heard, route (direct with hop count, or flood) and SNR. Search,
   filter by type or unread, and sort. The actions menu per contact offers chat, admin (for
-  repeaters/rooms/sensors), share, reset path and remove.
+  repeaters/rooms/sensors), share, set path, reset path and remove.
+- **Set path** (contacts menu, or **Path…** in a chat): shows the current route with repeater
+  names, lets you build a hop list from the known repeaters (search the list, or tap them on
+  the map) or switch to flood, and lists previously used paths with how many messages each
+  delivered; **Use** switches back to one.
 - **Add a contact** from a `meshcore://` share link or a public key. Contacts also appear
   when their adverts are heard (unless the radio's auto-add is off; see Settings).
 - **Chat**: type and send; the counter shows the remaining bytes (a MeshCore text message

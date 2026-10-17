@@ -16,6 +16,7 @@ import { fromHex } from '../util/bytes.js';
 import { StoreBoundModel } from './store-bound.js';
 import type { ConnectionModel } from './connection.js';
 import { computed, signal, type ReadonlySignal } from './signal.js';
+import type { DmPathRecorder } from './path-history.js';
 import { messageByteLimit, outboundText, parseReply, replyPrefix, textByteLength, type ByteBudget } from './messaging.js';
 import { ContactType, TxtType } from '../protocol/constants.js';
 import { encodeReaction, ownReaction, reactionChips, reactionMessageHash, type ReactionChip } from './reactions.js';
@@ -26,6 +27,8 @@ export type ChatRetryOptions = Omit<RetryOptions, 'onProgress' | 'timestamp'>;
 export interface ChatModelOptions {
   pageSize?: number;
   retry?: ChatRetryOptions;
+  /** Records per-path delivery statistics of DMs (AppModel passes `app.contactPaths`). */
+  pathRecorder?: DmPathRecorder;
 }
 
 /** Default: 5 attempts, 30 s late-ACK grace (feature-inventory.md §3.3). */
@@ -101,6 +104,7 @@ export class ChatModel extends StoreBoundModel {
 
   readonly pageSize: number;
   readonly #retry: ChatRetryOptions;
+  readonly #paths: DmPathRecorder | undefined;
 
   constructor(
     connection: ConnectionModel,
@@ -112,6 +116,7 @@ export class ChatModel extends StoreBoundModel {
     const o = typeof opts === 'number' ? { pageSize: opts } : opts;
     this.pageSize = o.pageSize ?? 50;
     this.#retry = o.retry ?? DEFAULT_CHAT_RETRY;
+    this.#paths = o.pathRecorder;
     this.convKey = convKey.toLowerCase();
   }
 
@@ -433,7 +438,9 @@ export class ChatModel extends StoreBoundModel {
     // progress callbacks are synchronous; apply them to the store in order
     let chain: Promise<unknown> = Promise.resolve();
     let last: MessageRecord = record;
+    const paths = this.#paths?.track(this.convKey);
     const apply = (p: SendProgress): void => {
+      paths?.progress(p);
       chain = chain.then(async () => {
         const patch: { ackCode?: number; attempt?: number; roundTripMs?: number; deliveredAt?: number } = { attempt: p.attempt };
         if (p.ackCode !== undefined) patch.ackCode = p.ackCode;

@@ -550,7 +550,8 @@ export class McChatPage extends AppElement {
           ? html`<button data-action="mute" aria-pressed=${ch?.muted ? 'true' : 'false'} @click=${() => void this.#headerAction('mute')}>
               ${ch?.muted ? '🔕 Muted' : '🔔 Mute'}
             </button>`
-          : html`${this.#mapLink(chat)}<button data-action="reset-path" @click=${() => void this.#headerAction('reset-path')}>Reset path</button>`}
+          : html`${this.#mapLink(chat)}<button data-action="path" @click=${() => (location.hash = hrefFor(`/path/${this.key}`))}>Path…</button>
+              <button data-action="reset-path" @click=${() => void this.#headerAction('reset-path')}>Reset path</button>`}
       </header>
       <div class="log-wrap">
         <div class="log" @scroll=${() => this.#onScroll()}>

@@ -173,6 +173,7 @@ export class McContactsPage extends AppElement {
         <button data-action="favourite" @click=${() => void this.#act(v, 'favourite')}>
           ${v.favourite ? 'Remove favourite' : 'Add favourite'}
         </button>
+        <button data-action="set-path" @click=${() => (location.hash = hrefFor(`/path/${v.key}`))}>Set path…</button>
         <button data-action="reset-path" ?disabled=${!v.onDevice} @click=${() => void this.#act(v, 'reset')}>Reset path</button>
         <button data-action="share" ?disabled=${!v.onDevice} @click=${() => void this.#act(v, 'share')}>Share (zero hop)</button>
         <button data-action="export" ?disabled=${!v.onDevice} @click=${() => void this.#act(v, 'export')}>Export link…</button>
