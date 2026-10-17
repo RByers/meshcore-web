@@ -16,6 +16,7 @@ import {
   type ContactRecord,
   type ConversationType,
   type MessageDirection,
+  type MessageReaction,
   type MessageRecord,
   type MessageStatus,
 } from './schema.js';
@@ -239,7 +240,7 @@ export class MessagesRepo {
   async updateStatus(
     id: number,
     status: MessageStatus,
-    patch: { ackCode?: number; attempt?: number; roundTripMs?: number; deliveredAt?: number; compressed?: boolean } = {},
+    patch: { ackCode?: number; attempt?: number; roundTripMs?: number; deliveredAt?: number; compressed?: boolean; timestamp?: number } = {},
   ): Promise<MessageRecord | undefined> {
     const rec = await this.db.transaction(STORE.messages, 'readwrite', async (t) => {
       const s = t.store<MessageRecord>(STORE.messages);
@@ -249,10 +250,61 @@ export class MessagesRepo {
       if (patch.ackCode !== undefined) next.ackCode = patch.ackCode >>> 0;
       if (patch.attempt !== undefined) next.attempt = patch.attempt;
       if (patch.roundTripMs !== undefined) next.roundTripMs = patch.roundTripMs;
+      if (patch.timestamp !== undefined) next.timestamp = patch.timestamp;
       if (patch.compressed === true) next.compressed = true;
       else if (patch.compressed === false) delete next.compressed;
       if (patch.deliveredAt !== undefined) next.deliveredAt = patch.deliveredAt;
       else if (status === 'delivered' && prev.status !== 'delivered') next.deliveredAt = Date.now();
+      await s.put(next);
+      return next;
+    });
+    if (rec) safeEmit(this.emitter, 'message', { type: 'update', record: rec });
+    return rec;
+  }
+
+  // ---- reactions (feature-inventory.md §2.4b) ----
+
+  /**
+   * Adds a reaction to message `id`. The same emoji from the same sender is only counted once; for
+   * our own reaction a repeat replaces the stored one (a resend: new status / time). Returns the
+   * updated record, or undefined when the message is gone or nothing changed.
+   */
+  async addReaction(id: number, reaction: MessageReaction): Promise<MessageRecord | undefined> {
+    return this.#patchReactions(id, (rs) => {
+      const i = rs.findIndex((r) => r.emoji === reaction.emoji && (reaction.own ? r.own === true : !r.own && r.sender === reaction.sender));
+      if (i < 0) return [...rs, reaction];
+      if (!reaction.own) return null;
+      const next = [...rs];
+      next[i] = reaction;
+      return next;
+    });
+  }
+
+  /** Sets the send status of our own reaction `emoji` on message `id`. */
+  async setReactionStatus(id: number, emoji: string, status: MessageStatus): Promise<MessageRecord | undefined> {
+    return this.#patchReactions(id, (rs) => {
+      const i = rs.findIndex((r) => r.own === true && r.emoji === emoji);
+      if (i < 0 || rs[i]!.status === status) return null;
+      const next = [...rs];
+      next[i] = { ...rs[i]!, status };
+      return next;
+    });
+  }
+
+  /** Newest message of a conversation (among the latest `limit`, by arrival) that satisfies `match`. */
+  async findRecent(convKey: string, match: (m: MessageRecord) => boolean, limit = 500): Promise<MessageRecord | undefined> {
+    const { items } = await this.list(convKey, { limit });
+    return items.find(match);
+  }
+
+  async #patchReactions(id: number, f: (rs: readonly MessageReaction[]) => MessageReaction[] | null): Promise<MessageRecord | undefined> {
+    const rec = await this.db.transaction(STORE.messages, 'readwrite', async (t) => {
+      const s = t.store<MessageRecord>(STORE.messages);
+      const prev = await s.get(id);
+      if (!prev) return undefined;
+      const reactions = f(prev.reactions ?? []);
+      if (!reactions) return undefined;
+      const next: MessageRecord = { ...prev, reactions };
       await s.put(next);
       return next;
     });

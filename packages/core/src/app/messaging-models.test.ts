@@ -9,6 +9,7 @@ import { AppModel, createEmulatorTransportFactory, type AppModelOptions } from '
 import { memoryPreferences } from './connection.js';
 import { base64Encode } from './messaging.js';
 import { messagePreview } from './contacts-model.js';
+import { computeReactionHash, reactionMessageHash } from './reactions.js';
 
 const apps: AppModel[] = [];
 
@@ -485,5 +486,93 @@ describe('SMAZ compression (MeshCore Open compatible)', () => {
     expect((await store.channels.get(pubKey))?.smaz).toBe(true);
     await app.channels.edit(pubKey, { smaz: false });
     expect((await store.channels.get(pubKey))?.smaz).toBe(false);
+  });
+});
+
+describe('emoji reactions (MeshCore Open compatible)', () => {
+  it('DM: a virtual contact reacts to our message; we react to theirs with the exact "r:" text', async () => {
+    const { app, hex, s, store } = await connected();
+    const chat = app.chat('contact', hex.alice);
+    await chat.settled();
+    await vi.waitFor(() => expect(chat.contact.value?.name).toBe('Alice'));
+
+    const mine = await (await chat.send('Lunch at noon?')).done;
+    expect(mine.status).toBe('delivered');
+    // Alice (MeshCore Open) reacts 👍: hash over "<ts>" + first 5 chars, no sender name in DMs
+    const hash = computeReactionHash(mine.timestamp, null, 'Lunch at noon?');
+    s.nodes.alice.sendText(s.keys.self, `r:${hash}:00`);
+    await vi.waitFor(() => expect(chat.messages.value.find((m) => m.id === mine.id)?.reactions).toEqual([{ emoji: '👍', sender: 'Alice', at: expect.any(Number) }]), {
+      timeout: 5000,
+    });
+    // a reaction to nothing we know is dropped, never shown as a bubble
+    s.nodes.alice.sendText(s.keys.self, 'r:0000:01');
+    s.nodes.alice.sendText(s.keys.self, 'after');
+    await vi.waitFor(() => expect(chat.messages.value.at(-1)?.text).toBe('after'), { timeout: 5000 });
+    expect(chat.messages.value.some((m) => m.text.startsWith('r:'))).toBe(false);
+    expect(chat.reactions(chat.messages.value.find((m) => m.id === mine.id)!)).toEqual([{ emoji: '👍', count: 1, senders: ['Alice'], own: false }]);
+
+    // we react ❤️ to Alice's incoming message
+    const theirs = chat.messages.value.find((m) => m.direction === 'in' && m.text === 'after')!;
+    expect(chat.canReact(theirs)).toBe(true);
+    expect(chat.canReact(mine)).toBe(false);
+    const h = await chat.react(theirs.id, '❤️');
+    const expected = `r:${computeReactionHash(theirs.timestamp, null, 'after')}:01`;
+    expect(h.text).toBe(expected);
+    expect(chat.reactions(h.record)).toEqual([{ emoji: '❤️', count: 1, senders: ['Emulator'], own: true, state: 'pending' }]);
+    expect(await h.done).toBe('delivered');
+    expect(s.nodes.alice.inbox.at(-1)?.text).toBe(expected);
+    expect((await store.messages.get(theirs.id))?.reactions).toEqual([{ emoji: '❤️', sender: 'Emulator', own: true, status: 'delivered', at: expect.any(Number) }]);
+    await expect(chat.react(theirs.id, '🦄')).rejects.toThrow(/Unsupported/);
+    expect(chat.messages.value.some((m) => m.text.startsWith('r:'))).toBe(false);
+  });
+
+  it('DM: an unacknowledged reaction fails and can be retried', async () => {
+    const { app, hex, s, store } = await connected({ messaging: { retry: FAST_RETRY } });
+    const chat = app.chat('contact', hex.alice);
+    await chat.settled();
+    await vi.waitFor(() => expect(chat.messages.value.length).toBeGreaterThan(0));
+    const theirs = chat.messages.value.find((m) => m.direction === 'in')!;
+    s.nodes.alice.config.ackPolicy = 'never';
+    expect(await (await chat.react(theirs.id, '😂')).done).toBe('failed');
+    await vi.waitFor(() => expect(chat.reactions(chat.messages.value.find((m) => m.id === theirs.id)!)[0]?.state).toBe('failed'));
+    s.nodes.alice.config.ackPolicy = 'auto';
+    expect(await (await chat.retryReaction(theirs.id, '😂')).done).toBe('delivered');
+    expect((await store.messages.get(theirs.id))?.reactions).toHaveLength(1);
+    await expect(chat.retryReaction(theirs.id, '😂')).rejects.toThrow(/failed/);
+  });
+
+  it('channel: "sender: r:…" attaches with the sender name; ours goes out uncompressed as "name: r:…"', async () => {
+    const { app, s } = await connected();
+    const pubKey = await channelKeyForPsk(publicChannelSecret());
+    const chat = app.chat('channel', pubKey);
+    await chat.settled();
+    await vi.waitFor(() => expect(chat.messages.value.map((m) => m.text)).toEqual(['Good morning everyone']));
+    const dave = chat.messages.value[0]!;
+    const hash = computeReactionHash(dave.timestamp, 'Dave', 'Good morning everyone');
+    expect(reactionMessageHash(dave)).toBe(hash);
+
+    s.nodes.bob.sendChannelMessage('Public', `r:${hash}:03`);
+    s.nodes.carol.sendChannelMessage('Public', `r:${hash}:03`);
+    await vi.waitFor(() => expect(chat.reactions(chat.messages.value[0]!)).toEqual([{ emoji: '🎉', count: 2, senders: ['Bob', 'Carol'], own: false }]), { timeout: 5000 });
+
+    // with compression on, a reaction is still sent as is
+    await app.channels.setSmaz(pubKey, true);
+    await vi.waitFor(() => expect(chat.compression.value).toBe(true));
+    const h = await chat.react(dave.id, '🎉');
+    expect(h.text).toBe(`r:${hash}:03`);
+    expect(await h.done).toBe('sent');
+    await vi.waitFor(() => expect(s.nodes.alice.channelMessages.at(-1)?.text).toBe(`Emulator: r:${hash}:03`));
+    await vi.waitFor(() =>
+      expect(chat.reactions(chat.messages.value[0]!)).toEqual([{ emoji: '🎉', count: 3, senders: ['Bob', 'Carol', 'Emulator'], own: true }]),
+    );
+    expect(chat.messages.value).toHaveLength(1);
+
+    // a reaction to our own channel message (sender = our name)
+    const mine = await (await chat.send('see you all')).done;
+    s.nodes.bob.sendChannelMessage('Public', `r:${computeReactionHash(mine.timestamp, 'Emulator', 'see you')}:05`);
+    await vi.waitFor(() => expect(chat.reactions(chat.messages.value.find((m) => m.id === mine.id)!)).toEqual([{ emoji: '🔥', count: 1, senders: ['Bob'], own: false }]), {
+      timeout: 5000,
+    });
+    expect(chat.messages.value).toHaveLength(2);
   });
 });

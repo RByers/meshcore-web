@@ -478,6 +478,7 @@ Total 148 bytes. In CMD_ADD_UPDATE_CONTACT, offsets 136-147 are optional (lat/lo
 - `attempt`: the low 2 bits go in the on-air flags byte. If attempt > 3, two bytes `0x00, attempt` follow the text inside the ciphertext (`BCM composeMsgPacket` L451-471). This changes the ACK only via `attempt&3`.
 - Max text: 160 bytes (158 if attempt>3). Longer → `ERR 3`. Channel text is truncated so that `"name: " + text` ≤ 160 bytes.
 - Timestamps: the host supplies the sender_timestamp (unix seconds) for PLAIN and channel messages, and the device uses it as given. The recipient reports it unchanged.
+- Application conventions (not firmware): clients identify a message by these on-air fields. MeshCore Open's emoji reaction `r:<hash>:<idx>` hashes the sender_timestamp, the channel `"name: "` sender name (none for DMs) and the first 5 UTF-16 units of the text (`feature-inventory.md` §2.4b). A host that resends with a new timestamp must remember the new one, or reactions to it will not match.
 
 ---
 

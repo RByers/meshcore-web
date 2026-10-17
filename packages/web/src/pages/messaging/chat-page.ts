@@ -19,6 +19,7 @@ import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
 import { avatar, listStyles } from './common.js';
 import { hopsLink } from '../../components/path-dialog.js';
+import { LongPress, reactionChipsTemplate, reactionStyles, type McReactionPicker } from './reactions.js';
 
 /** Joins strings / templates with " · ". */
 function dotJoin(parts: readonly (string | TemplateResult)[]): TemplateResult {
@@ -36,6 +37,7 @@ export class McChatPage extends AppElement {
   static override styles = [
     shared,
     listStyles,
+    reactionStyles,
     css`
       :host {
         display: flex;
@@ -271,6 +273,9 @@ export class McChatPage extends AppElement {
   #newBelow = false;
   #lastCount = 0;
   #lastId: number | undefined;
+  /** The message the reaction picker is open for. */
+  #reactTo: number | undefined;
+  #longPress = new LongPress();
 
   get convType(): ConversationType {
     return this.mode === 'channel' ? 'channel' : 'contact';
@@ -379,6 +384,33 @@ export class McChatPage extends AppElement {
     }
   }
 
+  // ---- reactions (see reactions.ts) ----
+
+  #openReactions(m: MessageRecord): void {
+    if (!this.#chat?.canReact(m) || !this.app.connection.connected.peek()) return;
+    this.#reactTo = m.id;
+    void this.renderRoot.querySelector<McReactionPicker>('mc-reaction-picker')?.open();
+  }
+
+  async #react(emoji: string): Promise<void> {
+    const id = this.#reactTo;
+    this.#reactTo = undefined;
+    if (id === undefined) return;
+    try {
+      await this.#chat?.react(id, emoji);
+    } catch (err) {
+      this.app.notifications.error('Could not react', err);
+    }
+  }
+
+  async #retryReaction(m: MessageRecord, emoji: string): Promise<void> {
+    try {
+      await this.#chat?.retryReaction(m.id, emoji);
+    } catch (err) {
+      this.app.notifications.error('Could not retry the reaction', err);
+    }
+  }
+
   #reply(m: MessageRecord): void {
     this.#chat?.setReplyTo(m);
     this.renderRoot.querySelector<HTMLTextAreaElement>('[data-field="composer"]')?.focus();
@@ -441,7 +473,19 @@ export class McChatPage extends AppElement {
     }
     return html`<li class="msg" data-id=${m.id} data-dir=${m.direction} data-status=${m.status}>
       ${showSender ? html`<span class="sender" data-field="sender">${m.senderName ?? 'unknown'}</span>` : nothing}
-      <div class="bubble">
+      <div
+        class="bubble"
+        @contextmenu=${(e: Event) => {
+          if (!chat.canReact(m)) return;
+          e.preventDefault();
+          this.#openReactions(m);
+        }}
+        @pointerdown=${(e: PointerEvent) => this.#longPress.start(e, () => this.#openReactions(m))}
+        @pointermove=${(e: PointerEvent) => this.#longPress.move(e)}
+        @pointerup=${() => this.#longPress.cancel()}
+        @pointercancel=${() => this.#longPress.cancel()}
+        @pointerleave=${() => this.#longPress.cancel()}
+      >
         ${reply
           ? html`<span class="quote" data-field="quote">↪ ${reply.name}${quoted ? html`: ${parseReply(quoted.text)?.text ?? quoted.text}` : nothing}</span
               ><span data-field="text">${reply.text}</span>`
@@ -451,8 +495,12 @@ export class McChatPage extends AppElement {
         <time datetime=${new Date(m.receivedAt).toISOString()}>${formatTime(m.receivedAt)}</time>
         ${extra.length ? html`<span data-field="route">${dotJoin(extra)}</span>` : nothing}
         ${m.compressed ? html`<span data-field="smaz" title="Sent over the air SMAZ-compressed">SMAZ</span>` : nothing} ${this.#status(m)}
+        ${chat.canReact(m)
+          ? html`<button data-action="react" aria-label="React" title="React (or right-click / long-press the message)" @click=${() => this.#openReactions(m)}>☺+</button>`
+          : nothing}
         <button data-action="reply" aria-label="Reply" title="Reply" @click=${() => this.#reply(m)}>↩</button>
       </div>
+      ${reactionChipsTemplate(chat.reactions(m), (emoji) => void this.#retryReaction(m, emoji))}
     </li>`;
   }
 
@@ -562,6 +610,7 @@ export class McChatPage extends AppElement {
           </div>
         </div>
       </form>
+      <mc-reaction-picker @reaction-pick=${(e: CustomEvent<{ emoji: string }>) => void this.#react(e.detail.emoji)}></mc-reaction-picker>
     `;
   }
 }

@@ -13,6 +13,31 @@ function dm(convKey: string, i: number, over: Partial<MessageInput> = {}): Messa
 }
 
 describe('MessagesRepo', () => {
+  it('stores reactions on the message (deduped per sender and emoji) and own reaction status', async () => {
+    const s = await openStore();
+    const A = hexKey(2);
+    const m = await s.messages.append(dm(A, 0));
+    const events: string[] = [];
+    s.events.on('message', (e) => events.push(e.type));
+    expect((await s.messages.addReaction(m.id, { emoji: '👍', sender: 'Bob', at: 1 }))?.reactions).toHaveLength(1);
+    expect(await s.messages.addReaction(m.id, { emoji: '👍', sender: 'Bob', at: 2 })).toBeUndefined(); // duplicate
+    await s.messages.addReaction(m.id, { emoji: '👍', sender: 'Me', own: true, status: 'pending', at: 3 });
+    await s.messages.setReactionStatus(m.id, '👍', 'failed');
+    // reacting again with the same emoji replaces our own entry (resend)
+    await s.messages.addReaction(m.id, { emoji: '👍', sender: 'Me', own: true, status: 'pending', at: 4 });
+    expect((await s.messages.get(m.id))?.reactions).toEqual([
+      { emoji: '👍', sender: 'Bob', at: 1 },
+      { emoji: '👍', sender: 'Me', own: true, status: 'pending', at: 4 },
+    ]);
+    expect(events).toEqual(['update', 'update', 'update', 'update']);
+    expect(await s.messages.addReaction(999, { emoji: '👍', sender: 'Bob', at: 1 })).toBeUndefined();
+    // status updates keep reactions; a retry can move the sender timestamp
+    const up = await s.messages.updateStatus(m.id, 'failed', { timestamp: 4242 });
+    expect(up).toMatchObject({ timestamp: 4242, reactions: [{ sender: 'Bob' }, { sender: 'Me' }] });
+    expect((await s.messages.findRecent(A, (x) => x.text === 'm0'))?.id).toBe(m.id);
+    s.close();
+  });
+
   it('appends with defaults and pages a conversation newest-first', async () => {
     const s = await openStore();
     const A = hexKey(2);

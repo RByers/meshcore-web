@@ -194,6 +194,24 @@ export interface MessageRecord {
   roundTripMs?: number;
   /** Sent / received SMAZ-compressed ("s:" envelope, feature-inventory.md §2.4a); `text` is plain. */
   compressed?: boolean;
+  /**
+   * Emoji reactions to this message (MeshCore Open compatible, feature-inventory.md §2.4b), in
+   * arrival order. Optional: records written before this field existed have none, so no migration.
+   */
+  reactions?: MessageReaction[];
+}
+
+/** One reaction on a message. Incoming `r:` texts are stored here, never as messages. */
+export interface MessageReaction {
+  emoji: string;
+  /** Who reacted: the channel sender / DM contact name; our advert name for our own reactions. */
+  sender: string;
+  /** Our own reaction. */
+  own?: true;
+  /** Own reactions: send state (pending → sent → delivered for DMs, pending → sent for channels, or failed). */
+  status?: MessageStatus;
+  /** Local arrival (or send) time, epoch ms. */
+  at: number;
 }
 
 export interface ChannelRecord {

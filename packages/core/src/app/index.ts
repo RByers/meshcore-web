@@ -20,3 +20,4 @@ export * from './map-model.js';
 export * from './path-geometry.js';
 export * from './path-model.js';
 export * from './app-model.js';
+export * from './reactions.js';

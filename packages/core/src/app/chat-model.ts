@@ -17,6 +17,8 @@ import { StoreBoundModel } from './store-bound.js';
 import type { ConnectionModel } from './connection.js';
 import { computed, signal, type ReadonlySignal } from './signal.js';
 import { messageByteLimit, outboundText, parseReply, replyPrefix, textByteLength, type ByteBudget } from './messaging.js';
+import { ContactType, TxtType } from '../protocol/constants.js';
+import { encodeReaction, ownReaction, reactionChips, reactionMessageHash, type ReactionChip } from './reactions.js';
 
 /** Retry tuning for DMs (the model supplies timestamp and onProgress). */
 export type ChatRetryOptions = Omit<RetryOptions, 'onProgress' | 'timestamp'>;
@@ -34,6 +36,15 @@ export interface SendHandle {
   record: MessageRecord;
   /** Resolves with the record in its final state ('delivered' / 'sent' / 'failed'). */
   done: Promise<MessageRecord>;
+}
+
+export interface ReactionHandle {
+  /** The target message with our reaction stored ('pending'). */
+  record: MessageRecord;
+  /** The on-air text, `"r:<hash>:<index>"`. */
+  text: string;
+  /** Resolves with the reaction's final status ('delivered' / 'sent' / 'failed'). */
+  done: Promise<MessageStatus>;
 }
 
 export class ChatModel extends StoreBoundModel {
@@ -305,9 +316,88 @@ export class ChatModel extends StoreBoundModel {
     const channelIdx = this.convType === 'channel' ? await this.#channelIndex(store) : -1;
     // the compression setting may have changed since the first attempt
     const compressed = this.#wire(rec.text) !== rec.text;
-    const record = (await store.messages.updateStatus(id, 'pending', { attempt: 0, compressed })) ?? rec;
-    const done = this.#track(this.#deliver(store, client, record, channelIdx, Math.floor(client.clock.now() / 1000)));
+    // the record keeps the timestamp that went on air: reactions to it hash over it
+    const timestamp = Math.floor(client.clock.now() / 1000);
+    const record = (await store.messages.updateStatus(id, 'pending', { attempt: 0, compressed, timestamp })) ?? rec;
+    const done = this.#track(this.#deliver(store, client, record, channelIdx, timestamp));
     return { record, done };
+  }
+
+  // ---- reactions (MeshCore Open compatible, feature-inventory.md §2.4b) ----
+
+  /**
+   * Whether we can react to `m`: incoming, not a CLI reply, and not in a room server (MeshCore
+   * Open hashes room posts with the author's name, which the store does not keep). Like MeshCore
+   * Open, our own messages cannot be reacted to.
+   */
+  canReact(m: MessageRecord): boolean {
+    if (m.direction !== 'in' || m.convKey !== this.convKey) return false;
+    if (m.txtType === TxtType.CLI_DATA || m.txtType === TxtType.CLI_COMMAND) return false;
+    return this.convType === 'channel' || this.#contact.peek()?.type !== ContactType.ROOM;
+  }
+
+  /** The reaction chips under `m` (counts, who reacted, our pending / failed state). */
+  reactions(m: MessageRecord): ReactionChip[] {
+    return reactionChips(m);
+  }
+
+  /**
+   * Reacts to message `id` with `emoji` (one of `REACTION_EMOJIS`): stores our reaction as
+   * 'pending' and sends `"r:<hash>:<index>"` as a DM (with ACK and retries; SMAZ applies as for any
+   * DM text, though it never makes a reaction shorter) or a channel message (never compressed, as
+   * in MeshCore Open). Reacting again with the same emoji resends it (e.g. after a failure).
+   */
+  async react(id: number, emoji: string): Promise<ReactionHandle> {
+    const store = this.store;
+    if (!store) throw new Error('Not connected');
+    const client = this.#client();
+    const target = await store.messages.get(id);
+    if (!target || !this.canReact(target)) throw new Error('Cannot react to this message');
+    const text = encodeReaction(reactionMessageHash(target), emoji);
+    if (text === null) throw new Error('Unsupported reaction emoji');
+    const channelIdx = this.convType === 'channel' ? await this.#channelIndex(store) : -1;
+    const now = client.clock.now();
+    const record =
+      (await store.messages.addReaction(id, { emoji, sender: this.selfName.peek() || 'me', own: true, status: 'pending', at: now })) ?? target;
+    const done = this.#track(this.#sendReaction(store, client, id, emoji, text, channelIdx, Math.floor(now / 1000)));
+    return { record, text, done };
+  }
+
+  /** Resends our failed reaction `emoji` on message `id`. */
+  async retryReaction(id: number, emoji: string): Promise<ReactionHandle> {
+    const m = await this.store?.messages.get(id);
+    if (!m || ownReaction(m, emoji)?.status !== 'failed') throw new Error('Only failed reactions can be retried');
+    return this.react(id, emoji);
+  }
+
+  async #sendReaction(store: RadioStore, client: CompanionClient, id: number, emoji: string, text: string, channelIdx: number, timestamp: number): Promise<MessageStatus> {
+    const set = async (status: MessageStatus): Promise<MessageStatus> => {
+      await store.messages.setReactionStatus(id, emoji, status);
+      return status;
+    };
+    if (this.convType === 'channel') {
+      try {
+        await client.sendChannelMessage(channelIdx, text, { timestamp });
+        return await set('sent');
+      } catch {
+        return await set('failed');
+      }
+    }
+    let chain: Promise<unknown> = Promise.resolve();
+    let last: MessageStatus = 'pending';
+    const apply = (p: SendProgress): void => {
+      chain = chain.then(async () => {
+        if (!canMove(last, p.status, p.late === true)) return;
+        last = await set(p.status);
+      });
+    };
+    try {
+      await client.sendTextMessageWithRetry(fromHex(this.convKey), this.#wire(text), { ...this.#retry, timestamp, onProgress: apply });
+    } catch {
+      apply({ status: 'failed', attempt: 0 });
+    }
+    await chain;
+    return last;
   }
 
   /** Resolves when every send started by this model has settled (tests). */

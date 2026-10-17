@@ -3,7 +3,8 @@
  *
  * - every `frame` event → `RadioStore.captureFrame` (packets carried by LOG_RX/RAW/TRACE pushes
  *   are extracted there);
- * - contact / channel message pushes → `MessagesRepo.append` (which bumps unread counts);
+ * - contact / channel message pushes → `MessagesRepo.append` (which bumps unread counts); emoji
+ *   reactions (`r:…`) attach to their target message instead (`MessagesRepo.addReaction`);
  * - `contactsChanged` → `ContactsRepo.syncFromDevice` / `markRemovedFromDevice`;
  * - `selfInfo` updates → `DevicesRepo.update`;
  * - SEND_CONFIRMED pushes → `MessagesRepo.markDeliveredByAck` (outgoing DMs expecting that ACK).
@@ -21,6 +22,8 @@ import type { Unsubscribe } from '../util/events.js';
 import type { DevicesRepo } from '../store/devices.js';
 import { messageInputFromChannelFrame, messageInputFromContactFrame, type MessageInput } from '../store/messages.js';
 import type { RadioStore } from '../store/radio-store.js';
+import { TxtType } from '../protocol/constants.js';
+import { parseReaction, reactionMatches, type ParsedReaction } from './reactions.js';
 
 type Task = (store: RadioStore) => Promise<void>;
 
@@ -124,9 +127,30 @@ export class CapturePipeline {
   }
 
   async #append(store: RadioStore, input: MessageInput): Promise<void> {
+    if ((input.txtType ?? TxtType.PLAIN) === TxtType.PLAIN) {
+      const r = parseReaction(input.text);
+      // MeshCore Open: a matched reaction attaches to its target; an unmatched "r:" is dropped,
+      // an unmatched MeshCoreOne reaction is shown as an ordinary message.
+      if (r && ((await this.#react(store, input, r)) || r.format === 'ours')) return;
+    }
     if (await isDuplicate(store, input)) return;
     await store.messages.append(input);
     this.messagesCaptured++;
+  }
+
+  /**
+   * Attaches an incoming reaction to the newest message it targets (feature-inventory.md §2.4b).
+   * DMs: only our outgoing messages; channels: any message. Returns false when nothing matched.
+   */
+  async #react(store: RadioStore, input: MessageInput, r: ParsedReaction): Promise<boolean> {
+    const target = await store.messages.findRecent(input.convKey, (m) => (input.convType === 'channel' || m.direction === 'out') && reactionMatches(r, m));
+    if (!target) return false;
+    const sender =
+      input.convType === 'channel'
+        ? (input.senderName ?? 'unknown')
+        : ((await store.contacts.get(input.convKey))?.name || input.senderPrefix || input.convKey.slice(0, 12));
+    await store.messages.addReaction(target.id, { emoji: r.emoji, sender, at: input.receivedAt ?? Date.now() });
+    return true;
   }
 
   async #contactMessage(store: RadioStore, e: ContactMessageEvent): Promise<void> {

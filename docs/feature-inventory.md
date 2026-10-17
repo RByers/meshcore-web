@@ -50,8 +50,8 @@ Platform tags used below:
 |---|---|---|
 | Chat screen | N | Bubbles (outgoing right, incoming left, 72% max width). Avatar = initial or first emoji, colour hashed from name. Links are tappable. Pinch zoom 0.8x-1.8x. Jump-to-bottom FAB. Older messages loaded on scroll-up. Arrival-order display; clock-warning icon if sender time is >5 min in future. |
 | Composer | N | UTF-8 limit 156 bytes (enforced live). Attach menu: GIF, share location. Translate toggle (not on web). Enter sends on desktop. |
-| Message types | N | Text; GIF (`g:<id>`, Giphy CDN); location pin (`m:<lat>,<lon>\|<label>\|`); reaction (`r:<hash4hex>:<emoji2hex>`); URL image preview (per-contact opt-in, internet). |
-| Reactions | N | Long-press incoming message, pick emoji (quick set or full picker). Pending = 50% opacity + spinner; failed = retry icon. |
+| Message types | N | Text; GIF (`g:<id>`, Giphy CDN); location pin (`m:<lat>,<lon>\|<label>\|`); reaction (`r:<hash4hex>:<emoji2hex>`, §2.4b); URL image preview (per-contact opt-in, internet). |
+| Reactions | N | Long-press incoming message (own messages cannot be reacted to), pick emoji (quick set or full picker). Chips under the bubble with counts; channels: tap a chip for a "who reacted" report. Own DM reaction pending (until ACK) = 50% opacity + spinner; failed = retry button. Implemented in MeshCore Web (issue #5), §2.4b. |
 | Context actions | N | Copy, View path, Delete (local only), Mark unread, Retry (failed), Translate (NW), Open chat with sender (room messages). |
 | Routing sheet | N | Auto / Direct / Flood, plus recent paths (hops, RTT, age, success count). Clear path on max retry (setting). |
 | Chat settings | N | SMAZ compression, URL image previews, contact-level settings. |
@@ -265,7 +265,7 @@ Over-the-air payload types (inside LOG_RX_DATA raw packets, `meshcore_protocol.d
 |---|---|---|
 | Channel sender prefix | `"<name>: <text>"` in GRPTXT payload (sender is plain text, not verified) | `meshcore_protocol.dart:317`; docs channels.md |
 | Reply | `@[<senderName>] <text>` | docs chat/channels |
-| Reaction | `r:<hash 4 hex>:<emoji idx 2 hex>` | docs chat-and-messaging |
+| Reaction | `r:<hash 4 hex>:<emoji idx 2 hex>` — see §2.4b | `lib/helpers/reaction_helper.dart` |
 | GIF | `g:<giphy id>` | docs |
 | Location pin | `m:<lat>,<lon>\|<label>\|<type>` | docs map-and-location |
 | SMAZ compressed | `s:<base64>` (only if shorter) — see §2.4a | `lib/helpers/smaz.dart` |
@@ -318,6 +318,58 @@ paths, `models/channel_message.dart`, `storage/{contact,channel}_settings_store.
   composer ("Compress messages (SMAZ, MeshCore Open compatible)", DMs and channels) and the
   channel add/edit dialog. `ChatModel.byteLimit` no longer subtracts the reply prefix while
   compression is on (the prefix is compressed with the text and counted in `budget().used`).
+
+### 2.4b Emoji reactions (implemented in MeshCore Web, issue #5)
+
+Derived from `lib/helpers/reaction_helper.dart` (+ `test/reaction_helper_test.dart`),
+`lib/widgets/emoji_picker.dart`, `lib/widgets/reaction_chips.dart`, `connector/meshcore_connector.dart`
+(`sendMessage`, `sendChannelMessage`, `_addMessage`, `_addChannelMessage`, `_setReactionStatus`),
+`models/{message,channel_message}.dart`, `screens/{chat,channel_chat}_screen.dart`. Web
+implementation: `packages/core/src/app/reactions.ts`.
+
+- **Wire format.** An ordinary `TXT_TYPE_PLAIN` DM or channel text, exactly
+  `^r:([0-9a-f]{4}):([0-9a-f]{2})$` (lowercase; 9 bytes; on a channel the device sends
+  `"<name>: r:…"`). No flag, no txt_type.
+- **Hash (4 hex).** `stableStringHash(input) & 0xFFFF`, zero-padded lowercase hex, where `input` is
+  the decimal sender timestamp (secs), then the sender name (channels: the `"name: "` sender of
+  the target; DMs: omitted), then the first 5 UTF-16 code units of the target's text
+  (`substring(0, 5)`). `stableStringHash` is the Dart VM `String.hashCode`: one-at-a-time over
+  UTF-16 units (`h += u; h += h << 10; h ^= h >>> 6`, then `h += h << 3; h ^= h >>> 11;
+  h += h << 15`, 32-bit), masked to 30 bits, 0 → 1. Vectors: `(1700000000, "Bob", "hello")` →
+  `e779`; `(1700000000, none, "hi")` → `b5bd`; `(1700000000, "Привет😀", "x")` → `7fee`. The text is
+  the decoded text (SMAZ undone); channel replies are hashed without their `@[name] ` prefix
+  (MeshCore Open stores channel replies stripped). Room servers hash with the post's author name
+  (not supported in MeshCore Web, which does not store room authors).
+- **Emoji index (2 hex).** Position in a fixed 184-entry list: quick set (6: 👍 ❤️ 😂 🎉 👏 🔥), then
+  smileys (64), gestures (33), hearts (32), objects (49), copied verbatim from `EmojiPicker`
+  (multi-code-point entries such as `❤️` = U+2764 U+FE0F matter). Duplicates take the first index
+  (👍 = `00`, ❤️ = `01`, 🚀 = `b7`). Out-of-range indices do not parse.
+- **SMAZ.** DM reactions go through `prepareContactOutboundText` (not exempt like `g:`/`m:`), but a
+  9-byte reaction never compresses shorter (checked over all 65536 × 184 texts), so it is always plain. Channel reactions bypass
+  `prepareChannelOutboundText` and are never compressed. Received `s:` texts are decoded before
+  parsing.
+- **Receive / matching.** A parsed reaction is matched against the newest message in the
+  conversation whose hash is equal: DMs only against our outgoing messages, channels against all
+  messages. A match adds the reactor (DM: the contact's name; channel: the `"name: "` sender) under
+  that emoji and the reaction is not shown as a message. An unmatched `r:` is silently dropped
+  (no orphan store). Duplicates (same target, emoji, sender) are ignored (MeshCore Open: per
+  session, in memory; MeshCore Web: persisted).
+- **MeshCoreOne reactions** (receive only): `[@[target sender]]<emoji>\n<8 Crockford base32>` or the
+  legacy `<emoji>[@[target sender]]\n<hash>`; the emoji must be one grapheme starting ≥ U+2000 or
+  containing U+FE0F / U+20E3. Hash = lowercase Crockford base32 of the first 5 bytes of
+  SHA-256(utf8(text) ‖ u32le(timestamp)) (vector: `(1234567890, "Hello world!")` → `tyvbkb33`),
+  matched together with the target sender (empty for DMs). Unmatched ones are shown as ordinary
+  messages.
+- **Send / status.** Only incoming messages offer "Add reaction". DMs: the reaction is applied
+  locally at once and sent through the normal retry/ACK path; `reactionStatuses[emoji]` tracks
+  pending → delivered / failed; the chip is 50% opacity with a spinner while pending (or sent),
+  and a failed chip is a retry button that resends. Channels: applied locally and sent once, no
+  status (MeshCore Web marks a channel reaction failed if the radio rejects it).
+- **MeshCore Web.** `MessageRecord.reactions?: { emoji, sender, own?, status?, at }[]` (optional;
+  no migration). The capture pipeline attaches incoming reactions (`MessagesRepo.addReaction`);
+  `ChatModel.react / retryReaction / reactions / canReact`. UI: "☺+" button, right-click or
+  long-press on an incoming bubble opens the picker; chips list who reacted in their tooltip.
+  Retrying a failed message now records its new sender timestamp, so reactions to it match.
 
 ---
 
