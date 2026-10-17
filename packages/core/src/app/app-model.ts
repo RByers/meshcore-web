@@ -24,6 +24,7 @@ import { DeviceSettingsModel, type GeolocationProvider } from './device-settings
 import { AppSettingsModel } from './app-settings-model.js';
 import { NotificationsModel, type NotificationsTimers } from './notifications.js';
 import { MapModel } from './map-model.js';
+import { PathModel } from './path-model.js';
 import { PacketLogModel } from './packet-log-model.js';
 import { RemoteAdminModel, type RemoteAdminOptions } from './remote-admin-model.js';
 import { signal, type ReadonlySignal } from './signal.js';
@@ -86,6 +87,7 @@ export class AppModel {
   readonly #prefs: PreferencesStore;
   #remoteAdmin: RemoteAdminModel | undefined;
   #map: MapModel | undefined;
+  #paths: PathModel | undefined;
   readonly #chats = new Map<string, ChatModel>();
   #offs: Array<() => void> = [];
 
@@ -191,6 +193,11 @@ export class AppModel {
   /** Node map: contacts with a location, own location, filters (Phase 12). */
   get map(): MapModel {
     return (this.#map ??= new MapModel(this.contacts.views, this.connection.selfInfo, { preferences: this.#prefs }));
+  }
+
+  /** Path views for the "N hops" links: contact / message / packet routes and their map layout (issue #2). */
+  get paths(): PathModel {
+    return (this.#paths ??= new PathModel({ contacts: this.contacts.views, selfInfo: this.connection.selfInfo, store: this.connection.store }));
   }
 
   /** The model of one conversation (cached per conversation). */

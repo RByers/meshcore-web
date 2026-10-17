@@ -153,6 +153,21 @@ kind / age filter that would hide it; the page centres on it at zoom ≥ 14. The
 (contacts) and the node page header show a "Map" link when the contact has a location; the map's
 details card links back to the chat / node page.
 
+**Path views (issue #2).** Every "N hops" label (message meta in DM / channel chats, the chat
+subtitle and node header path, the map card, packet log rows and the packet inspector's Path
+row) is an `<mc-hops-link>` that fires `mc-show-path` with a core `PathRequest`; `<mc-app>`
+opens its single `<mc-path-dialog>`: the stops in order (origin, hops, destination) with the
+resolved name, the candidates when several contacts share a hash, or the hex hash, plus the
+route drawn on `<mc-tile-map>` (new `.lines` polylines and `approximate` / `glyph` markers).
+Maths is core: `path-geometry.ts` (hash → contacts, preferring repeaters for hops; Mercator-linear
+interpolation between located stops and extrapolation past the first / last; ambiguous hops
+take the candidate nearest the estimate; no map when nothing is located) and `path-model.ts`
+(`app.paths`: contact out_path, logged packets, messages). Messages only carry path_len, so their
+hashes are recovered from the packet log (the TXT_MSG from the contact / GRP_TXT with the channel
+hash and the same path_len heard nearest the arrival); otherwise only the hop count is shown.
+Not linked: the contacts list row (the row is itself a link). The path hash resolver will be
+unified with issue #3's resolver.
+
 **Not done in Phase 12:** settings export/import (app preferences + per-radio local data as a
 file); a dedicated keyboard/accessibility audit beyond what earlier phases added; `REPO_URL`
 is a placeholder until the repository is published.

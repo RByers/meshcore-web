@@ -18,7 +18,7 @@ import { shared } from '../../styles.js';
 
 export interface InspectorMeta {
   label: string;
-  value: string;
+  value: string | TemplateResult;
 }
 
 interface Indexed {

@@ -3,9 +3,10 @@
  * Bubbles with status for outgoing messages, auto-scroll with a "new messages" affordance,
  * composer with byte counter (Enter sends, Shift+Enter newline) and replies.
  */
-import { css, html, nothing, type PropertyValues } from 'lit';
+import { css, html, nothing, type PropertyValues, type TemplateResult } from 'lit';
 import {
   hasLocation,
+  hopsOfPathLen,
   parseReply,
   pathDisplay,
   receivedPathLabel,
@@ -17,7 +18,12 @@ import { formatDuration, formatRelative, formatSnr, formatTime } from '../../for
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
 import { avatar, listStyles } from './common.js';
+import { hopsLink } from '../../components/path-dialog.js';
 
+/** Joins strings / templates with " · ". */
+function dotJoin(parts: readonly (string | TemplateResult)[]): TemplateResult {
+  return html`${parts.map((p, i) => html`${i ? ' · ' : ''}${p}`)}`;
+}
 
 /** Distance from the bottom (px) still counted as "at the bottom". */
 const STICKY_PX = 48;
@@ -428,9 +434,9 @@ export class McChatPage extends AppElement {
     const reply = parseReply(m.text);
     const quoted = reply ? chat.quotedMessage(m) : undefined;
     const showSender = this.convType === 'channel' && m.direction === 'in';
-    const extra: string[] = [];
+    const extra: (string | TemplateResult)[] = [];
     if (m.direction === 'in') {
-      extra.push(receivedPathLabel(m.pathLen));
+      extra.push(hopsLink(receivedPathLabel(m.pathLen), (hopsOfPathLen(m.pathLen) ?? 0) > 0 ? { kind: 'message', message: m } : null));
       if (m.snr !== undefined) extra.push(`SNR ${formatSnr(m.snr)}`);
     }
     return html`<li class="msg" data-id=${m.id} data-dir=${m.direction} data-status=${m.status}>
@@ -443,7 +449,7 @@ export class McChatPage extends AppElement {
       </div>
       <div class="meta">
         <time datetime=${new Date(m.receivedAt).toISOString()}>${formatTime(m.receivedAt)}</time>
-        ${extra.length ? html`<span>${extra.join(' · ')}</span>` : nothing}
+        ${extra.length ? html`<span data-field="route">${dotJoin(extra)}</span>` : nothing}
         ${m.compressed ? html`<span data-field="smaz" title="Sent over the air SMAZ-compressed">SMAZ</span>` : nothing} ${this.#status(m)}
         <button data-action="reply" aria-label="Reply" title="Reply" @click=${() => this.#reply(m)}>↩</button>
       </div>
@@ -466,10 +472,11 @@ export class McChatPage extends AppElement {
     const v = this.app.contacts.view(this.key);
     const c = chat.contact.value;
     if (!c) return '';
-    const parts = [pathDisplay(c.outPathLen).label];
+    const path = pathDisplay(c.outPathLen);
+    const parts: (string | TemplateResult)[] = [hopsLink(path.label, path.kind === 'hops' ? { kind: 'contact', key: this.key } : null)];
     if (v?.lastSnr !== undefined) parts.push(`SNR ${formatSnr(v.lastSnr)}`);
     if (c.lastSeen) parts.push(`seen ${formatRelative(c.lastSeen)}`);
-    return parts.join(' · ');
+    return dotJoin(parts);
   }
 
   override render() {

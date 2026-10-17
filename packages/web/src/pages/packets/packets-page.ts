@@ -13,6 +13,7 @@ import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
 import { formatLogTime, frameInspectorProps, fromDatetimeLocal, packetInspectorProps, toDatetimeLocal, type InspectorProps } from './inspection.js';
 import { jsonReplacer } from './packet-inspector.js';
+import { hopsLink } from '../../components/path-dialog.js';
 import './packet-inspector.js';
 
 export type LogTab = 'packets' | 'frames';
@@ -571,7 +572,9 @@ export class McPacketsPage extends AppElement {
               <td class="dir-${rec.direction}">${rec.direction}</td>
               <td>${r.typeName}</td>
               <td>${r.routeName || '—'}</td>
-              <td class="mono" title=${r.path.join(' → ')}>${r.hops === null ? '—' : r.path.length ? `${r.path.join('→')} (${r.hops})` : String(r.hops)}</td>
+              <td class="mono" title=${r.path.join(' → ')} data-field="path">
+                ${r.hops === null ? '—' : r.path.length ? hopsLink(`${r.path.join('→')} (${r.hops})`, { kind: 'packet', id: r.id }) : String(r.hops)}
+              </td>
               <td class="num">${rec.snr !== undefined ? `${rec.snr} dB` : '—'}${rec.rssi !== undefined ? ` / ${rec.rssi}` : ''}</td>
               <td class="num">${rec.bytes.length}</td>
               <td class="summary">${r.summary}</td>

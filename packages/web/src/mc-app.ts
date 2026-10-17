@@ -9,6 +9,7 @@ import { PHASE_LABEL } from './format.js';
 import { HashRouter, hrefFor, pages, type PageDef, type Route } from './router.js';
 import { shared, tokens } from './styles.js';
 import './components/mc-toasts.js';
+import { SHOW_PATH_EVENT, type McPathDialog } from './components/path-dialog.js';
 import './pages/index.js';
 import { bindTheme } from './theme.js';
 import { installErrorBoundary } from './error-boundary.js';
@@ -249,6 +250,13 @@ export class McApp extends AppElement {
     void this.app.refreshDevices();
     this.#offs.push(bindTheme(this.app));
     this.#offs.push(installErrorBoundary(window, this.app.notifications));
+    // "N hops" links anywhere below open the shared path view
+    const onShowPath = (e: CustomEvent): void => {
+      e.stopPropagation();
+      void this.renderRoot.querySelector<McPathDialog>('mc-path-dialog')?.show(e.detail);
+    };
+    this.addEventListener(SHOW_PATH_EVENT, onShowPath);
+    this.#offs.push(() => this.removeEventListener(SHOW_PATH_EVENT, onShowPath));
   }
 
   override disconnectedCallback(): void {
@@ -331,6 +339,7 @@ export class McApp extends AppElement {
               </section>`}
         </main>
       </div>
+      <mc-path-dialog .app=${this.app}></mc-path-dialog>
       <mc-toasts .app=${this.app}></mc-toasts>
     `;
   }

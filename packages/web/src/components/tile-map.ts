@@ -6,7 +6,8 @@
  *   </mc-tile-map>
  *
  * - Children with `lat` / `lon` attributes are positioned over the map (any element works;
- *   `<mc-map-marker>` below is a labelled, focusable pin).
+ *   `<mc-map-marker>` below is a labelled, focusable pin; `approximate` draws it dashed with "?").
+ * - `.lines` draws polylines (SVG, under the markers): `[{ points: [{lat, lon}, …], dashed? }]`.
  * - Drag / touch pan, wheel / pinch zoom (fractional zoom; tiles from the nearest integer level,
  *   scaled), zoom buttons, arrow / +/- keys. Emits `mc-view-change` ({lat, lon, zoom}) after user
  *   interaction. `fitBounds()`, `setView()`, `project()` for callers.
@@ -15,7 +16,7 @@
  *
  * Math lives in `@meshcore-web/core/app` (geo.ts).
  */
-import { LitElement, css, html, nothing, unsafeCSS, type PropertyValues } from 'lit';
+import { LitElement, css, html, nothing, svg, unsafeCSS, type PropertyValues } from 'lit';
 import { repeat } from 'lit/directives/repeat.js';
 import {
   OSM_ATTRIBUTION,
@@ -32,6 +33,7 @@ import {
   wrapLongitude,
   type Bounds,
   type FitBoundsOptions,
+  type LatLon,
   type Point,
 } from '@meshcore-web/core/app';
 import { shared } from '../styles.js';
@@ -43,6 +45,17 @@ export interface TileMapView {
 }
 
 export const VIEW_CHANGE_EVENT = 'mc-view-change';
+
+/** A polyline drawn under the markers. */
+export interface MapLine {
+  points: readonly LatLon[];
+  /** Dashed stroke (e.g. a leg to or from an approximate position). */
+  dashed?: boolean;
+  /** Stroke colour (default the accent colour). */
+  color?: string;
+  /** Exposed as `data-line` on the SVG path (tests, styling). */
+  id?: string;
+}
 
 interface Tile {
   key: string;
@@ -83,6 +96,7 @@ export class McTileMap extends LitElement {
     maxZoom: { type: Number, attribute: 'max-zoom' },
     labelZoom: { type: Number, attribute: 'label-zoom' },
     label: {},
+    lines: { attribute: false },
   };
 
   static override styles = [
@@ -124,6 +138,25 @@ export class McTileMap extends LitElement {
         position: absolute;
         inset: 0;
         pointer-events: none;
+      }
+      svg.lines {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        overflow: visible;
+      }
+      svg.lines path {
+        fill: none;
+        stroke-width: 4;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        filter: drop-shadow(0 0 1.5px rgb(255 255 255 / 0.9));
+      }
+      svg.lines path[data-dashed] {
+        stroke-dasharray: 8 7;
+        stroke-width: 3;
       }
       ::slotted(*) {
         position: absolute;
@@ -172,6 +205,7 @@ export class McTileMap extends LitElement {
   declare labelZoom: number;
   /** Accessible name of the map. */
   declare label: string;
+  declare lines: readonly MapLine[];
 
   #w = 0;
   #h = 0;
@@ -196,6 +230,7 @@ export class McTileMap extends LitElement {
     this.maxZoom = 19;
     this.labelZoom = 13;
     this.label = 'Map';
+    this.lines = [];
   }
 
   override connectedCallback(): void {
@@ -354,6 +389,7 @@ export class McTileMap extends LitElement {
             />`,
           )}
         </div>
+        ${this.#lines()}
         <div class="markers"><slot @slotchange=${() => this.#positionMarkers()}></slot></div>
       </div>
       <span id="keys" class="visually-hidden">Arrow keys pan, plus and minus zoom.</span>
@@ -369,6 +405,20 @@ export class McTileMap extends LitElement {
           </div>`
         : nothing}
     `;
+  }
+
+  #lines() {
+    if (!this.lines.length || !this.#w || !this.#h) return nothing;
+    const d = (pts: readonly LatLon[]): string =>
+      pts
+        .map((p, i) => {
+          const q = this.project(p.lat, p.lon);
+          return `${i ? 'L' : 'M'}${q.x.toFixed(1)} ${q.y.toFixed(1)}`;
+        })
+        .join(' ');
+    return svg`<svg class="lines" aria-hidden="true">${this.lines.map(
+      (l) => svg`<path d=${d(l.points)} stroke=${l.color ?? 'var(--mc-accent)'} ?data-dashed=${!!l.dashed} data-line=${l.id ?? nothing}></path>`,
+    )}</svg>`;
   }
 
   protected override updated(changed: PropertyValues): void {
@@ -506,6 +556,8 @@ export class McMapMarker extends LitElement {
     label: {},
     kind: { reflect: true },
     selected: { type: Boolean, reflect: true },
+    approximate: { type: Boolean, reflect: true },
+    glyph: {},
     description: {},
   };
 
@@ -541,6 +593,9 @@ export class McMapMarker extends LitElement {
         border-radius: 50%;
         border: 3px solid #fff;
         background: var(--marker-color);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
         box-shadow: 0 1px 4px rgb(0 0 0 / 0.45);
       }
       button:hover:not(:disabled) {
@@ -550,6 +605,22 @@ export class McMapMarker extends LitElement {
       :host([selected]) button {
         outline: 3px solid var(--marker-color);
         outline-offset: 2px;
+      }
+      button .glyph {
+        color: #fff;
+        font-size: 0.7rem;
+        font-weight: 700;
+        line-height: 1;
+      }
+      /* an estimated position: dashed outline, translucent fill and a "?" */
+      :host([approximate]) button {
+        border-style: dashed;
+        border-color: var(--marker-color);
+        background: color-mix(in srgb, var(--marker-color) 25%, #fff);
+      }
+      :host([approximate]) button .glyph {
+        color: var(--marker-color);
+        font-size: 0.8rem;
       }
       .label {
         display: none;
@@ -578,6 +649,10 @@ export class McMapMarker extends LitElement {
   declare label: string;
   declare kind: string;
   declare selected: boolean;
+  /** Position is an estimate: drawn dashed with a "?" (path views). */
+  declare approximate: boolean;
+  /** Short text inside the pin (e.g. a hop number); replaced by "?" when approximate. */
+  declare glyph: string;
   /** Extra accessible description (e.g. "Repeater, 1.2 km NW"). */
   declare description: string;
 
@@ -588,13 +663,17 @@ export class McMapMarker extends LitElement {
     this.label = '';
     this.kind = '';
     this.selected = false;
+    this.approximate = false;
+    this.glyph = '';
     this.description = '';
   }
 
   override render() {
     const name = this.description ? `${this.label}, ${this.description}` : this.label;
     return html`<div class="wrap">
-      <button type="button" aria-label=${name} aria-pressed=${this.selected ? 'true' : 'false'}></button>
+      <button type="button" aria-label=${name} aria-pressed=${this.selected ? 'true' : 'false'}>
+        ${this.glyph || this.approximate ? html`<span class="glyph" aria-hidden="true">${this.approximate ? '?' : this.glyph}</span>` : nothing}
+      </button>
       <span class="label" aria-hidden="true">${this.label}</span>
     </div>`;
   }

@@ -3,6 +3,7 @@ import type { FrameInspection, PacketInspection } from '@meshcore-web/core/app';
 import type { Annotation } from '@meshcore-web/core/packet';
 import { toHex } from '@meshcore-web/core/util/bytes';
 import type { InspectorMeta } from './packet-inspector.js';
+import { hopsLink } from '../../components/path-dialog.js';
 
 /** "14:05:09.123" (local), with the date when not today. */
 export function formatLogTime(ts: number, now = Date.now()): string {
@@ -41,6 +42,10 @@ export function packetInspectorProps(ins: PacketInspection): InspectorProps {
     { label: 'Type', value: `${ins.view.typeName}${ins.view.routeName ? ` · ${ins.view.routeName}` : ''}` },
     { label: 'Summary', value: ins.summary },
   ];
+  if (ins.view.path.length) {
+    const n = ins.view.path.length;
+    meta.push({ label: 'Path', value: hopsLink(`${ins.view.path.join(' → ')} (${n} ${n === 1 ? 'hop' : 'hops'})`, { kind: 'packet', id: r.id }) });
+  }
   if (r.snr !== undefined) meta.push({ label: 'SNR', value: `${r.snr} dB` });
   if (r.rssi !== undefined) meta.push({ label: 'RSSI', value: `${r.rssi} dBm` });
   meta.push({ label: 'Size', value: `${r.bytes.length} B${r.format === 'payload' ? ' (payload only)' : ''}` });

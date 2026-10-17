@@ -17,4 +17,6 @@ export * from './app-settings-model.js';
 export * from './remote-admin-model.js';
 export * from './geo.js';
 export * from './map-model.js';
+export * from './path-geometry.js';
+export * from './path-model.js';
 export * from './app-model.js';

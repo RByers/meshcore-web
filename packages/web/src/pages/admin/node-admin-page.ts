@@ -24,6 +24,7 @@ import { formatRelative, formatSnr, formatTime, shortKey } from '../../format.js
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
 import { avatar, listStyles, TYPE_LABEL } from '../messaging/common.js';
+import { hopsLink } from '../../components/path-dialog.js';
 
 export const NODE_TABS = ['overview', 'telemetry', 'cli', 'tools', 'messages'] as const;
 export type NodeTab = (typeof NODE_TABS)[number];
@@ -297,7 +298,7 @@ export class McNodeAdminPage extends AppElement {
           <h2 data-field="name">${v.name}</h2>
           <div class="muted">
             <span class="type-badge" data-field="type">${TYPE_LABEL[v.typeName]}</span>
-            <span data-field="path">${v.path.label}</span>
+            <span data-field="path">${hopsLink(v.path.label, v.path.kind === 'hops' ? { kind: 'contact', key } : null)}</span>
             ${v.lastSnr !== undefined ? html` · SNR ${formatSnr(v.lastSnr)}` : nothing}
             · last seen ${v.lastSeen ? formatRelative(v.lastSeen) : 'never'}
           </div>
@@ -656,7 +657,11 @@ export class McNodeAdminPage extends AppElement {
       </section>
       <section class="card" data-card="path">
         <h3>Path</h3>
-        <p>Current path: <strong data-field="current-path">${node.contact.value?.path.label ?? '—'}</strong></p>
+        <p>Current path: <strong data-field="current-path"
+            >${node.contact.value
+              ? hopsLink(node.contact.value.path.label, node.contact.value.path.kind === 'hops' ? { kind: 'contact', key: this.#key } : null)
+              : '—'}</strong
+          ></p>
         <div class="row">
           <button data-action="discover" ?disabled=${this.#busy(node, 'discovery')} @click=${() => quiet(node.discoverPath())}>
             ${this.#busy(node, 'discovery') ? 'Discovering…' : 'Discover path'}

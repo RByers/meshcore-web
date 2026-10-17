@@ -18,6 +18,7 @@ import {
 import { AppElement } from '../../app-context.js';
 import '../../components/tile-map.js';
 import { KIND_COLORS, type McTileMap, type TileMapView } from '../../components/tile-map.js';
+import { hopsLink } from '../../components/path-dialog.js';
 import { formatRelative } from '../../format.js';
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
@@ -363,6 +364,8 @@ export class McMapPage extends AppElement {
           ? html`<dt>Distance</dt>
               <dd data-field="distance">${formatDistance(x.distanceM)} ${x.compass} (${Math.round(x.bearing ?? 0)}°)</dd>`
           : nothing}
+        <dt>Path</dt>
+        <dd data-field="path">${hopsLink(x.view.path.label, x.view.path.kind === 'hops' ? { kind: 'contact', key: x.key } : null)}</dd>
         <dt>Position</dt>
         <dd class="mono">${x.lat.toFixed(5)}, ${x.lon.toFixed(5)}</dd>
       </dl>
