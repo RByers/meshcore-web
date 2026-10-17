@@ -38,6 +38,17 @@ describe('RxPathCorrelator', () => {
     expect(c.claimContactMessage({ ...q, selfHash: 0x12 })).toBeUndefined();
   });
 
+  it('claims a copy re-heard after its packet was claimed, so the next message gets its own path', () => {
+    const c = new RxPathCorrelator();
+    const q = { pathLen: encodePathLen(2), channelHash: 0x06 };
+    c.observe(rec(grp(0x06, [0xa1, 0xb2]), 1000, 'first'));
+    expect([...c.claimChannelMessage({ ...q, now: 1100 })!]).toEqual([0xa1, 0xb2]);
+    c.observe(rec(grp(0x06, [0xc3, 0xd4]), 1200, 'first')); // late copy of the first message
+    c.observe(rec(grp(0x06, [0xe5, 0xf6], 2), 1300, 'second'));
+    expect([...c.claimChannelMessage({ ...q, now: 1400 })!]).toEqual([0xe5, 0xf6]);
+    expect(c.claimChannelMessage({ ...q, now: 1500 })).toBeUndefined();
+  });
+
   it('never matches zero-hop or direct-routed (0xFF) messages, or stale packets', () => {
     const c = new RxPathCorrelator({ maxAgeMs: 1000 });
     c.observe(rec(txt(0x11, 0x22, []), 0));

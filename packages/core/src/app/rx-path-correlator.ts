@@ -9,7 +9,8 @@
  *
  * This is a heuristic (1-byte hashes collide), so it only ever adds information: when no packet
  * matches, the message simply has no path. Re-heard copies of a claimed packet (same packet
- * hash) are claimed with it, so they cannot be attributed to the next message.
+ * hash), including copies heard after the claim, are claimed with it, so they cannot be
+ * attributed to the next message.
  */
 
 import { PayloadType, RouteType, isFloodRoute } from '../packet/constants.js';
@@ -69,7 +70,9 @@ export class RxPathCorrelator {
     } catch {
       return null;
     }
-    this.#entries.push({ ts: r.ts, hash: r.hash, packet, claimed: false });
+    // a copy re-heard after its packet was claimed belongs to that message, not the next one
+    const claimed = !!r.hash && this.#entries.some((x) => x.claimed && x.hash === r.hash);
+    this.#entries.push({ ts: r.ts, hash: r.hash, packet, claimed });
     if (this.#entries.length > this.#capacity) this.#entries.splice(0, this.#entries.length - this.#capacity);
     if (packet.payloadType !== PayloadType.ADVERT || packet.pathHashCount !== 0 || r.snr === undefined) return null;
     if (packet.routeType !== RouteType.FLOOD && packet.routeType !== RouteType.DIRECT) return null;
