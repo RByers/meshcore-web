@@ -6,8 +6,10 @@
  * (hops without a location, ambiguous hashes) are dashed markers with a "?" and dashed legs.
  * Resolution and layout live in core (`app.paths`, path-geometry.ts).
  *
+ * Each stop that resolves to one known node links to its contact page.
+ *
  * Test hooks: `mc-hops-link`, `[data-path-dialog]`, `[data-path-list] li[data-stop]` with
- * `data-role` / `data-position`, `mc-map-marker[data-stop]`, `[data-action="close-path"]`.
+ * `data-role` / `data-position`, `a[data-node-link]`, `mc-map-marker[data-stop]`, `[data-action="close-path"]`.
  */
 import { LitElement, css, html, nothing, type TemplateResult } from 'lit';
 import {
@@ -33,11 +35,17 @@ export function showPath(from: Element, req: PathRequest): void {
 
 /** An inline "N hops" button that opens the path view (clicks don't reach the parent). */
 export class McHopsLink extends LitElement {
-  static override properties = { request: { attribute: false } };
+  static override properties = { request: { attribute: false }, icon: { type: Boolean, reflect: true } };
 
   static override styles = css`
     :host {
       display: inline;
+    }
+    :host([icon]) {
+      margin-inline-start: 0.35em;
+    }
+    :host([icon]) button {
+      text-decoration: none;
     }
     button {
       font: inherit;
@@ -61,10 +69,13 @@ export class McHopsLink extends LitElement {
   `;
 
   declare request: PathRequest | undefined;
+  /** Icon-only button (next to a path whose node names are links themselves). */
+  declare icon: boolean;
 
   constructor() {
     super();
     this.request = undefined;
+    this.icon = false;
     this.addEventListener('click', (e) => {
       e.stopPropagation();
       e.preventDefault();
@@ -77,13 +88,21 @@ export class McHopsLink extends LitElement {
   }
 
   override render() {
-    return html`<button type="button" title="Show the path"><slot></slot></button>`;
+    // the icon lives in shadow DOM so the host's light-DOM text stays the path itself
+    return this.icon
+      ? html`<button type="button" title="Show the path on a map" aria-label="Show the path on a map">🧭</button>`
+      : html`<button type="button" title="Show the path"><slot></slot></button>`;
   }
 }
 
 /** `<mc-hops-link>` around `label` (plain text when there is nothing to show). */
 export function hopsLink(label: string, req: PathRequest | null): TemplateResult {
   return req ? html`<mc-hops-link .request=${req}>${label}</mc-hops-link>` : html`${label}`;
+}
+
+/** An icon-only `<mc-hops-link>` (for paths whose hops are node links). */
+export function pathViewButton(req: PathRequest): TemplateResult {
+  return html`<mc-hops-link icon .request=${req}></mc-hops-link>`;
 }
 
 const ROLE_LABEL: Record<PathStop['role'], string> = { from: 'From', hop: 'Hop', to: 'To' };
@@ -282,7 +301,9 @@ export class McPathDialog extends AppElement {
     return html`<li data-stop=${i} data-role=${s.role} data-position=${s.position} data-hash=${s.hash ?? nothing}>
       <span class="role">${s.role === 'hop' ? `Hop ${hopNo}` : ROLE_LABEL[s.role]}</span>
       <span class="who">
-        <span data-field="label">${s.label}</span>
+        ${s.node && s.node.kind !== 'self'
+          ? html`<a data-field="label" data-node-link=${s.node.key} href=${hrefFor(`/contact/${s.node.key}`)} title="Contact details" @click=${() => this.close()}>${s.label}</a>`
+          : html`<span data-field="label">${s.label}</span>`}
         ${s.hash && s.label !== s.hash ? html` <span class="hash">${s.hash}</span>` : nothing}
       </span>
       ${s.candidates.length > 1 && !s.node

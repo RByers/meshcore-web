@@ -19,7 +19,8 @@ import { decodeFrame } from '../protocol/decode.js';
 import { tryDecodeCommand } from '../protocol/decode-command.js';
 import type { Command, DeviceFrame } from '../protocol/types.js';
 import type { FrameQuery } from '../store/frame-log.js';
-import type { PacketQuery } from '../store/packet-log.js';
+import { PacketLog, type PacketQuery } from '../store/packet-log.js';
+import { sourceMatches } from '../store/packet-source.js';
 import type { RadioStore } from '../store/radio-store.js';
 import type { FrameDirection, FrameRecord, PacketDirection, PacketRecord } from '../store/schema.js';
 import { ImportError, isObject, type LogExport, type LogPage } from '../store/time-log.js';
@@ -34,6 +35,7 @@ import {
   type PacketView,
   type SummaryContext,
 } from './packet-summary.js';
+import { ACTIVITY_RANGES, bucketActivity, type ActivityRange, type NodeActivity } from './node-activity.js';
 import { StoreBoundModel } from './store-bound.js';
 import { batch, computed, signal, type ReadonlySignal, type Signal } from './signal.js';
 
@@ -67,6 +69,11 @@ export interface PacketFilter {
   text?: string;
   /** Hex node reference: a path / src / dest hash, or a public key (prefix). */
   node?: string;
+  /**
+   * Source node public key (or key prefix) hex: only packets this node originated (searched
+   * through the packet log's source index; see store/packet-source.ts).
+   */
+  src?: string;
 }
 
 export interface FrameFilter {
@@ -416,6 +423,7 @@ export class PacketLogModel extends StoreBoundModel {
 
   #packetQuery(f: PacketFilter): PacketQuery {
     const q: PacketQuery = {};
+    if (f.src !== undefined) q.src = f.src;
     if (f.direction) q.direction = f.direction;
     if (f.from !== undefined) q.from = f.from;
     if (f.to !== undefined) q.to = f.to;
@@ -444,6 +452,7 @@ export class PacketLogModel extends StoreBoundModel {
     if (f.to !== undefined && r.ts > f.to) return false;
     if (nonEmpty(f.payloadTypes) && !f.payloadTypes.includes(r.payloadType)) return false;
     if (nonEmpty(f.routeTypes) && !f.routeTypes.includes(r.routeType)) return false;
+    if (f.src !== undefined && !sourceMatches(r, PacketLog.srcQuery(f.src) ?? '')) return false;
     if (!f.text && !f.node) return true;
     const view = viewPacket(r, this.#ctx.peek());
     if (f.node && !packetMentionsNode(view, hexNorm(f.node))) return false;
@@ -505,6 +514,17 @@ export class PacketLogModel extends StoreBoundModel {
         return s;
       },
     };
+  }
+
+  // ---- per-node activity ----
+
+  /** Packets originated by node `key` over `range`, bucketed for a chart (indexed scan). */
+  async nodeActivity(key: string, range: ActivityRange, now = Date.now()): Promise<NodeActivity> {
+    const store = this.store;
+    const { spanMs, bucketMs } = ACTIVITY_RANGES[range];
+    const from = Math.floor(now / bucketMs) * bucketMs + bucketMs - spanMs;
+    const sightings = store ? await store.packets.sourceActivity(key, { from }) : [];
+    return bucketActivity(sightings, range, now);
   }
 
   // ---- inspection ----

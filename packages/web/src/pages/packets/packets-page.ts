@@ -2,11 +2,13 @@
  * `/packets`: the packet log (over-the-air packets the radio reported) and the frame log (every
  * host ↔ device frame), with filters, live tail, paging, export / import / clear, and the
  * inspector in a side panel (wide) or on its own page `/packets/:id` (narrow).
+ * `/packets/node/:key` opens the packet log filtered to the packets that node originated (linked
+ * from the contact page; the filter uses the packet log's source index).
  * State and logic live in the core PacketLogModel; this component renders and forwards intents.
  */
 import { css, html, nothing, type PropertyValues, type TemplateResult } from 'lit';
 import { repeat } from 'lit/directives/repeat.js';
-import { formatResolvedPath, resolvedPathTitle, type FrameRow, type LogView, type PacketFilter, type PacketRow } from '@meshcore-web/core/app';
+import { resolvedPathTitle, type FrameRow, type LogView, type PacketFilter, type PacketRow } from '@meshcore-web/core/app';
 import { PayloadType, RouteType, payloadTypeName } from '@meshcore-web/core/packet';
 import { CMD, PUSH, RESP } from '@meshcore-web/core/protocol';
 import { AppElement } from '../../app-context.js';
@@ -15,6 +17,7 @@ import { shared } from '../../styles.js';
 import { formatLogTime, frameInspectorProps, fromDatetimeLocal, packetInspectorProps, toDatetimeLocal, type InspectorProps } from './inspection.js';
 import { jsonReplacer } from './packet-inspector.js';
 import { hopsLink } from '../../components/path-dialog.js';
+import { pathHops } from '../../components/node-link.js';
 import './packet-inspector.js';
 
 export type LogTab = 'packets' | 'frames';
@@ -251,6 +254,22 @@ export class McPacketsPage extends AppElement {
         align-items: center;
         flex-wrap: wrap;
       }
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        align-self: end;
+        padding: 4px 4px 4px 10px;
+        border: 1px solid var(--mc-accent);
+        border-radius: 999px;
+        font-size: 0.85rem;
+      }
+      .chip button {
+        min-height: 0;
+        padding: 0 6px;
+        border: 0;
+        background: none;
+      }
       .visually-hidden {
         position: absolute;
         width: 1px;
@@ -260,6 +279,20 @@ export class McPacketsPage extends AppElement {
       }
     `,
   ];
+
+  /** /packets/node/:key: show what that node sent. */
+  #applyRouteFilter(changed: PropertyValues<this>): void {
+    const key = this.params['key']?.toLowerCase();
+    if (changed.has('params') && key && this.#log.packets.filter.peek().src !== key) {
+      this.tab = 'packets';
+      void this.#log.packets.setFilter({ src: key }, { replace: true });
+    }
+  }
+
+  #clearSrc(): void {
+    void this.#log.packets.setFilter({ src: undefined });
+    if (this.params['key']) location.hash = hrefFor('/packets');
+  }
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -287,6 +320,7 @@ export class McPacketsPage extends AppElement {
 
   override willUpdate(changed: PropertyValues<this>): void {
     super.willUpdate(changed);
+    this.#applyRouteFilter(changed);
     this.#anchor = this.#findAnchor();
   }
 
@@ -340,7 +374,7 @@ export class McPacketsPage extends AppElement {
     try {
       const props =
         tab === 'packets'
-          ? await this.#log.inspect(id).then((i) => (i ? packetInspectorProps(i) : null))
+          ? await this.#log.inspect(id).then((i) => (i ? packetInspectorProps(i, (p) => this.app.contacts.resolvePath(p)) : null))
           : await this.#log.inspectFrame(id).then((i) => (i ? frameInspectorProps(i) : null));
       if (seq === this.#loadSeq) this.inspector = props;
     } catch (err) {
@@ -446,6 +480,12 @@ export class McPacketsPage extends AppElement {
     const f = this.#log.packets.filter.value;
     const types = new Set(f.payloadTypes ?? []);
     return html`<div class="filters" role="search" aria-label="Packet filters">
+      ${f.src
+        ? html`<span class="chip" data-filter="src" title=${`Packets originated by ${f.src}`}
+            >From ${this.app.contacts.view(f.src)?.name ?? `${f.src.slice(0, 8)}…`}
+            <button data-action="clear-src" aria-label="Show packets from every node" @click=${() => this.#clearSrc()}>✕</button></span
+          >`
+        : nothing}
       <label
         >Direction
         <select data-filter="direction" @change=${(e: Event) => this.#setPacketFilter({ direction: ((e.target as HTMLSelectElement).value || undefined) as PacketFilter['direction'] })}>
@@ -501,7 +541,15 @@ export class McPacketsPage extends AppElement {
             this.#debouncedText(() => this.#setPacketFilter({ text: v.trim() || undefined }));
           }} />
       </label>
-      ${Object.keys(f).length ? html`<button data-action="clear-filters" @click=${() => void this.#log.packets.clearFilter()}>Reset</button>` : nothing}
+      ${Object.keys(f).length
+        ? html`<button
+            data-action="clear-filters"
+            @click=${() => {
+              void this.#log.packets.clearFilter();
+              if (this.params['key']) location.hash = hrefFor('/packets');
+            }}
+          >Reset</button>`
+        : nothing}
     </div>`;
   }
 
@@ -593,8 +641,10 @@ export class McPacketsPage extends AppElement {
     if (r.hops === null) return html`<td class="mono" data-field="path">—</td>`;
     if (!r.path.length) return html`<td class="mono" data-field="path">${r.hops}</td>`;
     const hops = this.app.contacts.resolvePath(r.path);
-    const text = this.app.appSettings.pathNames.value ? formatResolvedPath(hops) : r.path.join('→');
-    return html`<td class="mono" data-field="path" title=${resolvedPathTitle(hops)}>${hopsLink(`${text} (${r.hops})`, { kind: 'packet', id: r.id })}</td>`;
+    const names = this.app.appSettings.pathNames.value;
+    return html`<td class="mono" data-field="path" title=${resolvedPathTitle(hops)}
+      >${pathHops(hops, names ? { names } : { names, sep: '→' })} ${hopsLink(`(${r.hops})`, { kind: 'packet', id: r.id })}</td
+    >`;
   }
 
   #packetTable(rows: readonly PacketRow[]): TemplateResult {

@@ -9,6 +9,7 @@
 import type { Contact, DeviceInfo, SelfInfo } from '../protocol/types.js';
 import { toHex } from '../util/bytes.js';
 import type { Migration } from './idb.js';
+import { packetSourceOf } from './packet-source.js';
 
 // ---------------------------------------------------------------------------
 // Names
@@ -51,6 +52,7 @@ export const INDEX = {
     hash: 'hash',
     directionTs: 'direction_ts',
     payloadTypeTs: 'payloadType_ts',
+    srcHashTs: 'srcHash_ts',
   },
   messages: { convTs: 'conv_ts', convReceived: 'conv_received', status: 'status', ackCode: 'ackCode' },
   channels: { deviceIndex: 'deviceIndex' },
@@ -123,6 +125,14 @@ export interface PacketRecord {
   decodedSummary?: string;
   /** Set when `format === 'packet'` but the envelope did not parse. */
   parseError?: string;
+  /**
+   * Source node: first byte of the originating node's public key (2 hex chars), when the
+   * packet's plaintext names its source (see store/packet-source.ts). Indexed with `ts`
+   * (`srcHash_ts`) so the log can be searched by node. Absent = no known source.
+   */
+  srcHash?: string;
+  /** The originating node's full public key hex, when the packet carries it (ADVERT, ANON_REQ). */
+  srcKey?: string;
 }
 
 /** App-only contact fields (not on the device). */
@@ -346,7 +356,25 @@ const radioV2: Migration = ({ tx }) => {
   };
 };
 
-export const RADIO_DB_MIGRATIONS: readonly Migration[] = [radioV1, radioV2];
+/**
+ * v3: packet source node (`srcHash` / `srcKey`) with the `srcHash_ts` index, so the packet log can
+ * be searched by the node a packet came from; back-fills the fields on existing packets.
+ */
+const radioV3: Migration = ({ tx }) => {
+  const packets = tx.objectStore(STORE.packets);
+  packets.createIndex(INDEX.packets.srcHashTs, ['srcHash', 'ts']);
+  const req = packets.openCursor();
+  req.onsuccess = () => {
+    const cursor = req.result;
+    if (!cursor) return;
+    const rec = cursor.value as PacketRecord;
+    const src = packetSourceOf(rec);
+    if (src) cursor.update({ ...rec, ...src });
+    cursor.continue();
+  };
+};
+
+export const RADIO_DB_MIGRATIONS: readonly Migration[] = [radioV1, radioV2, radioV3];
 export const RADIO_DB_VERSION = RADIO_DB_MIGRATIONS.length;
 
 const devicesV1: Migration = ({ db }) => {

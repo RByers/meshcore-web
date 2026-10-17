@@ -203,7 +203,7 @@ describe('RemoteNodeModel against the emulator', () => {
     const rep = admin.node(k.repeater);
     expect(toHex(rep.defaultTracePath().path)).toBe(k.repeater.slice(0, 2));
     const t = await rep.tracePath();
-    expect(t.hops).toEqual([{ hash: k.repeater.slice(0, 2), name: 'Hilltop Repeater', ambiguous: false, snr: 8 }]);
+    expect(t.hops).toEqual([{ hash: k.repeater.slice(0, 2), name: 'Hilltop Repeater', ambiguous: false, key: k.repeater, snr: 8 }]);
     expect(t.finalSnr).toBe(8);
     expect(rep.lastTrace.value).toBe(t);
 

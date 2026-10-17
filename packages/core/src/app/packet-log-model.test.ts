@@ -130,6 +130,24 @@ describe('PacketLogModel — packets', () => {
     expect(types.has('ADVERT') && types.has('TXT_MSG')).toBe(true);
     expect(types.has('GRP_TXT')).toBe(false);
 
+    // src: only packets Alice originated (her advert copies and her DM), via the source index
+    const alice = toHex(scenario.keys.alice);
+    await log.packets.setFilter({ src: alice }, { replace: true });
+    const fromAlice = log.packets.rows.value;
+    expect(new Set(fromAlice.map((r) => r.typeName))).toEqual(new Set(['ADVERT', 'TXT_MSG']));
+    expect(fromAlice.every((r) => r.record.srcHash === alice.slice(0, 2))).toBe(true);
+    expect(log.packets.matching.value).toBe(fromAlice.length);
+    expect(fromAlice.every((r) => log.packetMatches(r.record, { src: alice }))).toBe(true);
+    await log.packets.setFilter({ src: toHex(scenario.keys.bob) }, { replace: true });
+    expect(log.packets.rows.value.map((r) => r.typeName)).not.toContain('TXT_MSG');
+
+    // per-node activity: Alice's packets land in the newest hourly slot
+    const act = await log.nodeActivity(alice, '24h');
+    expect(act.buckets).toHaveLength(24);
+    expect(act.total).toBe(fromAlice.length);
+    expect(act.buckets.at(-1)!.count).toBe(fromAlice.length);
+    expect(act.hashOnly).toBe(fromAlice.filter((r) => r.typeName === 'TXT_MSG').length);
+
     await log.packets.setFilter({ from: Date.now() + 60_000 }, { replace: true });
     expect(log.packets.rows.value).toEqual([]);
 

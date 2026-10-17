@@ -11,7 +11,7 @@ import { formatDuration, formatRelative, formatSnr, formatTime } from '../../for
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
 import { avatar, listStyles } from './common.js';
-import { hopsLink } from '../../components/path-dialog.js';
+import { pathLabelView } from '../../components/node-link.js';
 import { LongPress, reactionChipsTemplate, reactionStyles, type McReactionPicker } from './reactions.js';
 
 /** Joins strings / templates with " · ". */
@@ -533,7 +533,7 @@ export class McChatPage extends AppElement {
     const title = [path.title, sig.lastHopSnr !== undefined ? `SNR ${formatSnr(sig.lastHopSnr)}${sig.zeroHop ? '' : ' (last hop)'}` : '']
       .filter(Boolean)
       .join('\n');
-    const link = hopsLink(path.label, (sig.hops ?? 0) > 0 ? { kind: 'message', message: m } : null);
+    const link = pathLabelView(path, (sig.hops ?? 0) > 0 ? { kind: 'message', message: m } : null);
     return html`<span data-field="route"
       ><span data-field="signal" title=${title || nothing}
         ><span data-field="path">${link}</span>${sig.snr !== undefined ? html` · <span data-field="snr">SNR ${formatSnr(sig.snr)}</span>` : nothing}</span
@@ -574,7 +574,7 @@ export class McChatPage extends AppElement {
     const c = chat.contact.value;
     if (!c) return '';
     const path = v ? this.app.contacts.outPathLabel(v, this.app.appSettings.pathNames.value) : undefined;
-    const parts: (string | TemplateResult)[] = [path ? hopsLink(path.label, v?.path.kind === 'hops' ? { kind: 'contact', key: this.key } : null) : ''];
+    const parts: (string | TemplateResult)[] = [path ? pathLabelView(path, v?.path.kind === 'hops' ? { kind: 'contact', key: this.key } : null) : ''];
     if (v?.directSnr !== undefined) parts.push(`direct SNR ${formatSnr(v.directSnr)}`);
     if (c.lastSeen) parts.push(`seen ${formatRelative(c.lastSeen)}`);
     return dotJoin(parts);

@@ -66,7 +66,7 @@ export class McPacketDetailPage extends AppElement {
     const p =
       this.kind === 'frame'
         ? await log.inspectFrame(id).then((i) => (i ? frameInspectorProps(i) : null))
-        : await log.inspect(id).then((i) => (i ? packetInspectorProps(i) : null));
+        : await log.inspect(id).then((i) => (i ? packetInspectorProps(i, (p) => this.app.contacts.resolvePath(p)) : null));
     this.props = p;
     this.missing = p === null;
   }

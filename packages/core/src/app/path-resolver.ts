@@ -125,6 +125,8 @@ export interface PathLabel {
   resolved: ResolvedHop[];
   /** "Alice > Bob" (names on, path known) or the hop-count label. */
   label: string;
+  /** True when `label` is the name chain of `resolved` (false: the hop-count label). */
+  named: boolean;
   /** Per-hop tooltip (empty without path bytes). */
   title: string;
 }
@@ -140,11 +142,11 @@ export function pathLabel(
   opts: { names: boolean; self?: ResolvePathOptions['self'] },
 ): PathLabel {
   const b = o.pathLen & 0xff;
-  if (b === PATH_LEN_UNKNOWN) return { hops: null, resolved: [], label: o.countLabel, title: '' };
+  if (b === PATH_LEN_UNKNOWN) return { hops: null, resolved: [], label: o.countLabel, title: '', named: false };
   const info = decodePathLen(b);
   const bytes = o.path && o.path.length >= info.byteLength ? o.path.subarray(0, info.byteLength) : undefined;
   const resolved = bytes && info.hops > 0 ? resolvePath(bytes, contacts, { hashSize: info.hashSize, ...(opts.self ? { self: opts.self } : {}) }) : [];
   const title = resolvedPathTitle(resolved);
-  if (opts.names && resolved.length > 0) return { hops: info.hops, resolved, label: formatResolvedPath(resolved), title };
-  return { hops: info.hops, resolved, label: o.countLabel, title };
+  if (opts.names && resolved.length > 0) return { hops: info.hops, resolved, label: formatResolvedPath(resolved), title, named: true };
+  return { hops: info.hops, resolved, label: o.countLabel, title, named: false };
 }

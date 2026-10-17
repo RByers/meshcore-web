@@ -1,9 +1,11 @@
 /** Formatting helpers for the packet log pages and the inputs of `<mc-packet-inspector>`. */
-import { NO_BYTES_MEANING, type FrameInspection, type PacketInspection } from '@meshcore-web/core/app';
+import { html } from 'lit';
+import { NO_BYTES_MEANING, type FrameInspection, type PacketInspection, type ResolvedHop } from '@meshcore-web/core/app';
 import type { Annotation } from '@meshcore-web/core/packet';
 import { toHex } from '@meshcore-web/core/util/bytes';
 import type { InspectorMeta } from './packet-inspector.js';
 import { hopsLink } from '../../components/path-dialog.js';
+import { pathHops } from '../../components/node-link.js';
 
 /** "14:05:09.123" (local), with the date when not today. */
 export function formatLogTime(ts: number, now = Date.now()): string {
@@ -34,7 +36,10 @@ export interface InspectorProps {
   json: unknown;
 }
 
-export function packetInspectorProps(ins: PacketInspection): InspectorProps {
+/** Resolves path hop hashes to known contacts (so hops link to their contact pages). */
+export type HopResolver = (hashes: readonly string[]) => readonly ResolvedHop[];
+
+export function packetInspectorProps(ins: PacketInspection, resolve?: HopResolver): InspectorProps {
   const r = ins.record;
   const meta: InspectorMeta[] = [
     { label: 'Time', value: new Date(r.ts).toISOString() },
@@ -44,7 +49,14 @@ export function packetInspectorProps(ins: PacketInspection): InspectorProps {
   ];
   if (ins.view.path.length) {
     const n = ins.view.path.length;
-    meta.push({ label: 'Path', value: hopsLink(`${ins.view.path.join(' → ')} (${n} ${n === 1 ? 'hop' : 'hops'})`, { kind: 'packet', id: r.id }) });
+    const hops = resolve?.(ins.view.path);
+    const label = `(${n} ${n === 1 ? 'hop' : 'hops'})`;
+    meta.push({
+      label: 'Path',
+      value: hops
+        ? html`${pathHops(hops, { names: false, sep: ' → ' })} ${hopsLink(label, { kind: 'packet', id: r.id })}`
+        : hopsLink(`${ins.view.path.join(' → ')} ${label}`, { kind: 'packet', id: r.id }),
+    });
   }
   if (r.snr !== undefined) meta.push({ label: 'SNR', value: `${r.snr} dB` });
   if (r.rssi !== undefined) meta.push({ label: 'RSSI', value: `${r.rssi} dBm` });

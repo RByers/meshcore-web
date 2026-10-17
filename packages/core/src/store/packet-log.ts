@@ -18,6 +18,7 @@ import {
   type PacketSource,
 } from './schema.js';
 import { safeEmit } from './events.js';
+import { packetSourceOf, sourceMatches } from './packet-source.js';
 import { combine } from './frame-log.js';
 import {
   TimeLog,
@@ -56,6 +57,12 @@ export interface PacketQuery extends LogQueryBase {
   source?: PacketSource;
   /** Exact packet hash hex (finds re-heard copies of one packet). Results ordered by id. */
   hash?: string;
+  /**
+   * Source node: a public key or key prefix hex (at least 1 byte). Matches packets whose source
+   * hash byte matches and whose full source key, when known, agrees (see packet-source.ts). Uses
+   * the `srcHash_ts` index. Takes precedence over `hash`.
+   */
+  src?: string;
   /** Extra residual predicate (applied before offset/limit, and by count/export). */
   match?: (r: PacketRecord) => boolean;
 }
@@ -110,7 +117,30 @@ export async function packetRecordFromInput(input: PacketInput, now = Date.now()
   const decodedSummary = input.decodedSummary ?? summary;
   if (decodedSummary !== undefined) rec.decodedSummary = decodedSummary;
   if (parseError !== undefined) rec.parseError = parseError;
+  withSource(rec);
   return rec;
+}
+
+/** Sets `srcHash` / `srcKey` from the record's bytes (dropping any stale values). */
+function withSource<T extends Omit<PacketRecord, 'id'>>(rec: T): T {
+  delete rec.srcHash;
+  delete rec.srcKey;
+  const src = packetSourceOf(rec);
+  if (src) {
+    rec.srcHash = src.srcHash;
+    if (src.srcKey !== undefined) rec.srcKey = src.srcKey;
+  }
+  return rec;
+}
+
+/** One packet in a {@link PacketLog.sourceActivity} scan. */
+export interface SourceSighting {
+  id: number;
+  ts: number;
+  direction: PacketDirection;
+  payloadType: number;
+  /** The packet carried the full source key (so it is certainly from the node). */
+  keyed: boolean;
 }
 
 /**
@@ -308,6 +338,29 @@ export class PacketLog extends TimeLog<PacketRecord, PacketQuery> {
     return this.db.getAll<PacketRecord>(this.storeName, { index: INDEX.packets.hash, query: this.db.only(hash.toLowerCase()) });
   }
 
+  /** Normalised `src` query value: lowercase hex, at least one byte, or null. */
+  static srcQuery(node: string): string | null {
+    const n = node.trim().toLowerCase();
+    return /^([0-9a-f]{2})+$/.test(n) ? n : null;
+  }
+
+  /**
+   * Every logged packet from source node `node` (key or key prefix hex) in the ts window, oldest
+   * first, as light rows (no bytes kept). One `srcHash_ts` index range scan.
+   */
+  async sourceActivity(node: string, q: { from?: number; to?: number } = {}): Promise<SourceSighting[]> {
+    const n = PacketLog.srcQuery(node);
+    if (!n) return [];
+    const range = this.tsRange([n.slice(0, 2)], q);
+    return this.db.transaction(this.storeName, 'readonly', async (t) => {
+      const out: SourceSighting[] = [];
+      await t.store<PacketRecord>(this.storeName).each({ index: INDEX.packets.srcHashTs, query: range }, (r) => {
+        if (sourceMatches(r, n)) out.push({ id: r.id, ts: r.ts, direction: r.direction, payloadType: r.payloadType, keyed: r.srcKey !== undefined });
+      });
+      return out;
+    });
+  }
+
   protected plan(q: PacketQuery): QueryPlan<PacketRecord> {
     const { direction, routeType, source, payloadType } = q;
     const dirF = direction === undefined ? undefined : (r: PacketRecord) => r.direction === direction;
@@ -315,6 +368,16 @@ export class PacketLog extends TimeLog<PacketRecord, PacketQuery> {
     const srcF = source === undefined ? undefined : (r: PacketRecord) => r.source === source;
     const ptF = payloadType === undefined ? undefined : (r: PacketRecord) => r.payloadType === payloadType;
     const m = q.match;
+    if (q.src !== undefined) {
+      // an invalid node matches nothing ('' is never a stored srcHash)
+      const n = PacketLog.srcQuery(q.src) ?? '';
+      const hashF = q.hash === undefined ? undefined : (r: PacketRecord) => r.hash === q.hash!.toLowerCase();
+      return {
+        index: INDEX.packets.srcHashTs,
+        query: this.tsRange([n.slice(0, 2)], q),
+        ...combine([(r: PacketRecord) => sourceMatches(r, n), dirF, routeF, srcF, ptF, hashF, m]),
+      };
+    }
     if (q.hash !== undefined) {
       return {
         index: INDEX.packets.hash,
@@ -353,6 +416,7 @@ export class PacketLog extends TimeLog<PacketRecord, PacketQuery> {
     if (sourceFrameId !== undefined) rec.sourceFrameId = sourceFrameId;
     if (decodedSummary !== undefined) rec.decodedSummary = decodedSummary;
     if (parseError !== undefined) rec.parseError = parseError;
-    return rec;
+    // derived from the bytes, never trusted from the file
+    return withSource(rec);
   }
 }

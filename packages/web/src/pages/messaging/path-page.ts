@@ -16,6 +16,7 @@ import { formatDuration, formatRelative } from '../../format.js';
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
 import { avatar, errorText, listStyles } from './common.js';
+import { nodeLink } from '../../components/node-link.js';
 
 interface DraftHop {
   hash: Uint8Array;
@@ -141,6 +142,13 @@ export class McPathPage extends AppElement {
     this.requestUpdate();
   }
 
+  /** The contact a draft hop names, when its hash matches exactly one known repeater. */
+  #draftKey(h: DraftHop): string | undefined {
+    const hex = toHex(h.hash);
+    const m = this.app.contactPaths.candidatesFor(this.key).filter((c) => c.prefix.startsWith(hex));
+    return m.length === 1 ? m[0]!.key : undefined;
+  }
+
   #remove(i: number): void {
     this.#draft = this.#draft.filter((_, k) => k !== i);
     this.requestUpdate();
@@ -179,7 +187,7 @@ export class McPathPage extends AppElement {
   #pathText(p: ResolvedPath) {
     if (p.kind !== 'hops') return html`<span class="chain">${p.label}</span>`;
     return html`<span class="chain"
-      >${p.hops.map((h, i) => html`${i ? ' → ' : ''}<span title=${h.hex} data-hop=${h.hex}>${h.label}</span>`)}</span
+      >${p.hops.map((h, i) => html`${i ? ' → ' : ''}<span data-hop=${h.hex}>${nodeLink(h.label, h.matches.length === 1 ? h.matches[0]!.key : undefined, h.hex)}</span>`)}</span
     >`;
   }
 
@@ -307,7 +315,7 @@ export class McPathPage extends AppElement {
               ${this.#draft.map(
                 (h, i) => html`<li data-draft-hop=${i}>
                   <span class="muted">${i + 1}.</span>
-                  <span class="grow">${h.label} <span class="muted mono">${toHex(h.hash)}</span></span>
+                  <span class="grow">${nodeLink(h.label, this.#draftKey(h))} <span class="muted mono">${toHex(h.hash)}</span></span>
                   <button class="small" data-action="hop-up" aria-label="Move up" ?disabled=${i === 0} @click=${() => this.#move(i, -1)}>↑</button>
                   <button class="small" data-action="hop-down" aria-label="Move down" ?disabled=${i === this.#draft.length - 1} @click=${() => this.#move(i, 1)}>↓</button>
                   <button class="small" data-action="hop-remove" aria-label="Remove hop" @click=${() => this.#remove(i)}>✕</button>

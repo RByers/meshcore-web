@@ -110,6 +110,8 @@ export interface HopRef {
   name?: string;
   /** More than one known contact matches. */
   ambiguous: boolean;
+  /** The matching contact's public key hex, when exactly one matches (never for this radio). */
+  key?: string;
 }
 
 export interface NeighbourItem extends HopRef {
@@ -475,6 +477,7 @@ export class RemoteNodeModel {
     const first = pick[0];
     const ref: HopRef = { hash: hex, ambiguous: pick.length > 1 };
     if (first) ref.name = first.name || first.key.slice(0, 12);
+    if (first && pick.length === 1) ref.key = first.key;
     return ref;
   }
 

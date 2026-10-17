@@ -1,16 +1,21 @@
 /**
  * `/contact/:key`: what we know about one contact — type, key, path (as names when the setting
- * is on), direct (zero-hop) signal, last seen, location — with links to the chat / node pages.
- * Channel senders and DM headers link here (issue #12).
+ * is on, each known hop linking to its own contact page), direct (zero-hop) signal, last seen,
+ * location — with links to the chat / node pages and to the packet log filtered to this node, and
+ * a chart of the packets heard from it over time (core `PacketLogModel.nodeActivity`, an indexed
+ * scan of the packet log by source node). Channel senders, DM headers and path hops link here.
  */
 import { css, html, nothing } from 'lit';
-import { hasLocation } from '@meshcore-web/core/app';
+import { ACTIVITY_RANGES, hasLocation, type ActivityRange, type NodeActivity } from '@meshcore-web/core/app';
 import { AppElement } from '../../app-context.js';
 import { formatRelative, formatSnr, shortKey } from '../../format.js';
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
 import { avatar, listStyles, TYPE_LABEL } from './common.js';
-import { hopsLink } from '../../components/path-dialog.js';
+import { pathLabelView } from '../../components/node-link.js';
+import '../../components/activity-chart.js';
+
+const RANGES = Object.keys(ACTIVITY_RANGES) as ActivityRange[];
 
 export class McContactInfoPage extends AppElement {
   static override properties = { params: { attribute: false } };
@@ -47,11 +52,108 @@ export class McContactInfoPage extends AppElement {
         flex-wrap: wrap;
         gap: 8px;
       }
+      section.activity {
+        margin-block: var(--mc-gap);
+      }
+      .activity-head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        margin-block-end: 8px;
+      }
+      .activity-head h3 {
+        flex: 1;
+        margin: 0;
+        font-size: 1rem;
+      }
+      .seg {
+        display: inline-flex;
+        border: 1px solid var(--mc-border);
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      .seg button {
+        min-height: 0;
+        padding: 2px 10px;
+        border: 0;
+        border-radius: 0;
+        background: none;
+        font-size: 0.85rem;
+      }
+      .seg button[aria-pressed='true'] {
+        background: var(--mc-accent-soft);
+        color: var(--mc-accent);
+        font-weight: 600;
+      }
+      .activity p {
+        margin: 6px 0 0;
+        font-size: 0.85rem;
+      }
     `,
   ];
 
   get key(): string {
     return (this.params?.['key'] ?? '').toLowerCase();
+  }
+
+  #range: ActivityRange = '7d';
+  #activity: NodeActivity | null = null;
+  /** What #activity was loaded for ("key|range|logged packets"); reloads when it changes. */
+  #activityFor = '';
+  #activitySeq = 0;
+
+  #setRange(r: ActivityRange): void {
+    this.#range = r;
+    this.requestUpdate();
+  }
+
+  protected override updated(): void {
+    const log = this.app.packetLog;
+    // the packet log's total ticks as packets are logged, so the chart follows live traffic
+    const want = `${this.key}|${this.#range}|${log.packets.total.peek()}`;
+    if (!this.key || want === this.#activityFor) return;
+    this.#activityFor = want;
+    const seq = ++this.#activitySeq;
+    const keyNow = this.key;
+    log.nodeActivity(keyNow, this.#range).then(
+      (a) => {
+        if (seq !== this.#activitySeq) return;
+        this.#activity = a;
+        this.requestUpdate();
+      },
+      (err: unknown) => console.error('node activity:', err),
+    );
+  }
+
+  #activitySection(key: string) {
+    const a = this.#activity?.range === this.#range ? this.#activity : null;
+    // read the signal so a newly logged packet re-renders (and so reloads) the chart
+    void this.app.packetLog.packets.total.value;
+    return html`<section class="card activity" data-field="activity">
+      <div class="activity-head">
+        <h3 id="activity-h">Packets heard from this node</h3>
+        <span class="seg" role="group" aria-label="Time range">
+          ${RANGES.map(
+            (r) => html`<button data-range=${r} aria-pressed=${r === this.#range ? 'true' : 'false'} @click=${() => this.#setRange(r)}>${r}</button>`,
+          )}
+        </span>
+      </div>
+      ${!a
+        ? html`<p class="muted" role="status">Loading…</p>`
+        : a.total === 0
+          ? html`<p class="muted" data-field="activity-empty">No packets from this node in the last ${ACTIVITY_RANGES[a.range].label}.</p>`
+          : html`<mc-activity-chart aria-labelledby="activity-h" .activity=${a}></mc-activity-chart>
+              <p data-field="activity-summary">
+                ${a.total} packet${a.total === 1 ? '' : 's'} in the last ${ACTIVITY_RANGES[a.range].label}${a.last ? html` · last ${formatRelative(a.last)}` : nothing}
+                ${a.hashOnly
+                  ? html`<br /><span class="muted" data-field="activity-hash-note"
+                        >${a.hashOnly} matched only by the node's 1-byte hash <span class="mono">${key.slice(0, 2)}</span>; packets
+                        from another node with the same first key byte are counted too.</span
+                      >`
+                  : nothing}
+              </p>`}
+    </section>`;
   }
 
   override render() {
@@ -81,7 +183,7 @@ export class McContactInfoPage extends AppElement {
           <dt>Public key</dt>
           <dd class="mono" data-field="key">${v.key}</dd>
           <dt>Path</dt>
-          <dd data-field="path" title=${path.title || nothing}>${hopsLink(path.label, v.path.kind === 'hops' ? { kind: 'contact', key: v.key } : null)}</dd>
+          <dd data-field="path" title=${path.title || nothing}>${pathLabelView(path, v.path.kind === 'hops' ? { kind: 'contact', key: v.key } : null)}</dd>
           <dt>Direct signal</dt>
           <dd data-field="direct-signal">
             ${v.directSnr !== undefined
@@ -100,7 +202,9 @@ export class McContactInfoPage extends AppElement {
           : nothing}
         ${v.typeName !== 'chat' ? html`<a data-action="node" href=${hrefFor(`/node/${v.key}`)}>Manage node</a>` : nothing}
         ${located || this.app.map.hasMarker(v.key) ? html`<a data-action="show-on-map" href=${hrefFor(`/map/node/${v.key}`)}>Show on map</a>` : nothing}
+        <a data-action="node-packets" href=${hrefFor(`/packets/node/${v.key}`)}>Packets from this node</a>
       </div>
+      ${this.#activitySection(v.key)}
     `;
   }
 }

@@ -66,7 +66,7 @@ describe('schema', () => {
   it('a fresh open creates every store and index at the current version', async () => {
     const store = await RadioStore.open(key32(1), { factory: freshFactory() });
     expect(store.db.version).toBe(RADIO_DB_VERSION);
-    expect(RADIO_DB_VERSION).toBe(2);
+    expect(RADIO_DB_VERSION).toBe(3);
     expect(store.db.storeNames.sort()).toEqual(Object.values(STORE).sort());
     const raw = store.db.raw;
     expect(indexNames(raw, STORE.frames)).toEqual(Object.values(INDEX.frames).sort());
@@ -80,7 +80,7 @@ describe('schema', () => {
     const factory = freshFactory();
     await writeV1(factory, radioDbName(key32(1)));
     const store = await RadioStore.open(key32(1), { factory });
-    expect(store.db.version).toBe(2);
+    expect(store.db.version).toBe(3);
     expect(indexNames(store.db.raw, STORE.messages)).toContain('conv_received');
     expect(indexNames(store.db.raw, STORE.packets)).toContain('payloadType_ts');
 

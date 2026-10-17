@@ -62,10 +62,10 @@ describe('pathLabel', () => {
   const path = Uint8Array.of(0xa1, 0xd1);
   it('uses the count label unless names are on and the path bytes are known', () => {
     const o = { pathLen: encodePathLen(2), path, countLabel: '2 hops' };
-    expect(pathLabel(o, contacts, { names: false })).toMatchObject({ hops: 2, label: '2 hops', title: 'a1: Alice\nd1: Dee One, Dee Two (ambiguous)' });
-    expect(pathLabel(o, contacts, { names: true }).label).toBe('Alice > d1?');
+    expect(pathLabel(o, contacts, { names: false })).toMatchObject({ hops: 2, label: '2 hops', named: false, title: 'a1: Alice\nd1: Dee One, Dee Two (ambiguous)' });
+    expect(pathLabel(o, contacts, { names: true })).toMatchObject({ label: 'Alice > d1?', named: true });
     expect(pathLabel({ pathLen: encodePathLen(2), countLabel: '2 hops' }, contacts, { names: true }).label).toBe('2 hops');
-    expect(pathLabel({ pathLen: 0, path, countLabel: 'direct' }, contacts, { names: true })).toMatchObject({ hops: 0, label: 'direct', resolved: [] });
+    expect(pathLabel({ pathLen: 0, path, countLabel: 'direct' }, contacts, { names: true })).toMatchObject({ hops: 0, label: 'direct', resolved: [], named: false });
     expect(pathLabel({ pathLen: PATH_LEN_UNKNOWN, path, countLabel: 'flood' }, contacts, { names: true })).toMatchObject({ hops: null, label: 'flood' });
     // 2-byte hashes per path_len bits 6-7
     expect(pathLabel({ pathLen: encodePathLen(1, 2), path: fromHex('b0b0'), countLabel: '1 hop' }, contacts, { names: true }).label).toBe('Bob');

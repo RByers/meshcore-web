@@ -24,7 +24,7 @@ import { formatRelative, formatSnr, formatTime, shortKey } from '../../format.js
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
 import { avatar, listStyles, TYPE_LABEL } from '../messaging/common.js';
-import { hopsLink } from '../../components/path-dialog.js';
+import { nodeLink, pathLabelView } from '../../components/node-link.js';
 
 export const NODE_TABS = ['overview', 'telemetry', 'cli', 'tools', 'messages'] as const;
 export type NodeTab = (typeof NODE_TABS)[number];
@@ -48,7 +48,7 @@ function loginLabel(s: LoginState): string {
 }
 
 function hopLabel(h: HopRef): TemplateResult {
-  return html`<span class="mono">${h.hash}</span>${h.name ? html` <span>${h.name}${h.ambiguous ? '?' : ''}</span>` : nothing}`;
+  return html`<span class="mono">${h.hash}</span>${h.name ? html` ${nodeLink(`${h.name}${h.ambiguous ? '?' : ''}`, h.key)}` : nothing}`;
 }
 
 /** Swallows a model action's rejection (the model records it in `errors`). */
@@ -299,7 +299,7 @@ export class McNodeAdminPage extends AppElement {
           <h2 data-field="name">${v.name}</h2>
           <div class="muted">
             <span class="type-badge" data-field="type">${TYPE_LABEL[v.typeName]}</span>
-            <span data-field="path" title=${outPath.title || nothing}>${hopsLink(outPath.label, v.path.kind === 'hops' ? { kind: 'contact', key } : null)}</span>
+            <span data-field="path" title=${outPath.title || nothing}>${pathLabelView(outPath, v.path.kind === 'hops' ? { kind: 'contact', key } : null)}</span>
             ${v.directSnr !== undefined ? html` · <span data-field="direct-signal">direct SNR ${formatSnr(v.directSnr)}</span>` : nothing}
             · <a href=${hrefFor(`/contact/${v.key}`)} data-action="contact-info">info</a>
             · last seen ${v.lastSeen ? formatRelative(v.lastSeen) : 'never'}
@@ -661,8 +661,8 @@ export class McNodeAdminPage extends AppElement {
         <h3>Path</h3>
         <p>Current path: <strong data-field="current-path"
             >${node.contact.value
-              ? hopsLink(
-                  this.app.contacts.outPathLabel(node.contact.value, this.app.appSettings.pathNames.value).label,
+              ? pathLabelView(
+                  this.app.contacts.outPathLabel(node.contact.value, this.app.appSettings.pathNames.value),
                   node.contact.value.path.kind === 'hops' ? { kind: 'contact', key: this.#key } : null,
                 )
               : '—'}</strong
