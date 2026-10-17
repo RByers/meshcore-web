@@ -133,6 +133,52 @@ export interface PacketRecord {
   srcHash?: string;
   /** The originating node's full public key hex, when the packet carries it (ADVERT, ANON_REQ). */
   srcKey?: string;
+  /**
+   * `tx` rows logged from a host command (`source: 'sent'`): what the radio did with the request,
+   * correlated from the frames that followed it (store/send-correlator.ts). Optional: rows written
+   * before this field existed get it from the one-time frame backfill (store/send-backfill.ts) while
+   * their frames are still logged; no IndexedDB migration (not indexed).
+   */
+  send?: PacketSend;
+}
+
+/**
+ * Outcome of a requested transmission:
+ * - `pending`: the command was sent to the radio, no response seen (yet);
+ * - `sent`: the radio accepted it (RESP_SENT 0x06, or OK for commands that answer OK);
+ * - `failed`: the radio rejected it (RESP_ERR 0x01 / DISABLED 0x0F);
+ * - `confirmed`: a DM whose ACK came back (PUSH SEND_CONFIRMED 0x82 matching the SENT tag).
+ * No push is sent for an ACK timeout, so an unacknowledged DM stays `sent` (compare `ts +
+ * estTimeoutMs` with now to call it overdue).
+ */
+export type PacketSendStatus = 'pending' | 'sent' | 'failed' | 'confirmed';
+
+/** See {@link PacketRecord.send}. Layouts: companion-protocol.md §5.1 (SENT), §6 (0x82). */
+export interface PacketSend {
+  status: PacketSendStatus;
+  /** Destination contact: public key or key-prefix hex as given in the command (DMs, requests, login, share). */
+  peer?: string;
+  /** Device channel slot (channel text / data). */
+  channelIdx?: number;
+  /** SENT[1]: the radio sent it flood (true) or direct (false). */
+  flood?: boolean;
+  /**
+   * SENT[2..5] as u32 LE: the expected ACK code for DMs (0 for CLI text), the first 4 pubkey bytes
+   * for a login, the request tag for other requests and traces.
+   */
+  tag?: number;
+  /** SENT[6..9]: the radio's suggested timeout for the ACK / response, ms. */
+  estTimeoutMs?: number;
+  /** Error name ('NOT_FOUND', 'TABLE_FULL', 'DISABLED', …) when `failed`. */
+  error?: string;
+  /** Numeric RESP_ERR code when `failed` with an ERR frame. */
+  errCode?: number;
+  /** Epoch ms of the device's response (SENT / OK / ERR). */
+  respondedAt?: number;
+  /** Epoch ms the SEND_CONFIRMED push arrived. */
+  confirmedAt?: number;
+  /** SEND_CONFIRMED[5..8]: round trip measured by the radio, ms. */
+  rttMs?: number;
 }
 
 /** App-only contact fields (not on the device). */

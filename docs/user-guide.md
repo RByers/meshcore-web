@@ -168,6 +168,13 @@ frame exchanged with it). **Packets** shows them live:
   actually put on air, so for packets it builds and encrypts itself (DMs, channel messages,
   adverts, requests) the entry shows what was requested and has no bytes (size "—"); for
   traces, raw data and raw packets the bytes are the ones the app supplied.
+  Each sent entry also records what happened to it: pending (no answer from the radio yet),
+  sent (the radio accepted it; for DMs and requests also whether it went flood or direct, which
+  fills in the route, and the timeout it expects), failed (the radio refused it, with the
+  reason) or, for DMs, confirmed when the recipient's ACK came back (with the round-trip time).
+  Because the packet log is kept and frames are not, it is the lasting record of what you sent:
+  the first time a radio is connected with this version, sends found in its older frame log
+  are added to the packet log (with their outcome) in the background.
 - Messages the radio received while no app was connected (delivered later from its message
   queue) have no packet in the log: the radio only reports packets as it hears them.
 - Direct messages show as `TXT_MSG sender → recipient (encrypted)` unless the radio key is

@@ -5,6 +5,8 @@ export * from './time-log.js';
 export * from './frame-log.js';
 export * from './packet-log.js';
 export * from './packet-source.js';
+export * from './send-correlator.js';
+export * from './send-backfill.js';
 export * from './contacts.js';
 export * from './messages.js';
 export * from './channels.js';

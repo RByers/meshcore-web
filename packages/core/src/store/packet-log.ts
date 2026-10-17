@@ -15,6 +15,7 @@ import {
   type PacketBytesFormat,
   type PacketDirection,
   type PacketRecord,
+  type PacketSend,
   type PacketSource,
 } from './schema.js';
 import { safeEmit } from './events.js';
@@ -22,6 +23,7 @@ import { packetSourceOf, sourceMatches } from './packet-source.js';
 import { combine } from './frame-log.js';
 import {
   TimeLog,
+  isObject,
   optNumber,
   optString,
   reqNumber,
@@ -48,7 +50,12 @@ export interface PacketInput {
   pathLen?: number;
   /** Default: a short structural summary such as `GRP_TXT FLOOD 2 hops, 48 B`. */
   decodedSummary?: string;
+  /** Send outcome for `tx` rows logged from a host command (see {@link PacketRecord.send}). */
+  send?: PacketSend;
 }
+
+/** Fields a {@link PacketLog.update} may change. */
+export type PacketPatch = Partial<Pick<PacketRecord, 'send' | 'routeType' | 'pathLen' | 'decodedSummary'>>;
 
 export interface PacketQuery extends LogQueryBase {
   direction?: PacketDirection;
@@ -117,6 +124,7 @@ export async function packetRecordFromInput(input: PacketInput, now: number): Pr
   const decodedSummary = input.decodedSummary ?? summary;
   if (decodedSummary !== undefined) rec.decodedSummary = decodedSummary;
   if (parseError !== undefined) rec.parseError = parseError;
+  if (input.send !== undefined) rec.send = { ...input.send };
   withSource(rec);
   return rec;
 }
@@ -220,7 +228,11 @@ const hex6 = (b: Uint8Array): string => toHex(b.subarray(0, 6));
  * - Everything the firmware builds and encrypts itself (TXT_MSG, GRP_TXT, GRP_DATA, ADVERT,
  *   REQ, ANON_REQ): no bytes → `format: 'none'`, with the requested fields in `decodedSummary`.
  *   Route type is set only where the firmware fixes it (channel text / adverts: flood or zero-hop);
- *   DMs and requests go direct or flood depending on the contact's stored path, so -1.
+ *   DMs and requests go direct or flood depending on the contact's stored path, so -1 (filled in
+ *   from RESP_SENT's flood flag once the radio answers, see send-correlator.ts).
+ *
+ * Every result carries `send: { status: 'pending' }` plus the addressed `peer` (key / prefix hex)
+ * or `channelIdx`; the device's response and any SEND_CONFIRMED update it later.
  */
 export function packetInputFromCommand(
   cmd: Command,
@@ -231,6 +243,7 @@ export function packetInputFromCommand(
     source: 'sent' as const,
     ...(meta.ts !== undefined ? { ts: meta.ts } : {}),
     ...(meta.sourceFrameId !== undefined ? { sourceFrameId: meta.sourceFrameId } : {}),
+    send: pendingSend(cmd),
   };
   const peer = (key: Uint8Array): string => meta.names?.peer ?? hex6(key);
   const channel = (idx: number): string => meta.names?.channel ?? `slot ${idx}`;
@@ -305,6 +318,37 @@ export function packetInputFromCommand(
   }
 }
 
+/** The initial `send` of a command's tx row: pending, with the addressed contact / channel. */
+function pendingSend(cmd: Command): PacketSend {
+  if (cmd.kind === 'sendTxtMsg') return { status: 'pending', peer: toHex(cmd.recipient) };
+  if (cmd.kind === 'sendChannelTxtMsg' || cmd.kind === 'sendChannelData') return { status: 'pending', channelIdx: cmd.channelIdx };
+  if ('pubKey' in cmd && cmd.pubKey instanceof Uint8Array) return { status: 'pending', peer: toHex(cmd.pubKey) };
+  return { status: 'pending' };
+}
+
+const SEND_STATUSES = ['pending', 'sent', 'failed', 'confirmed'] as const;
+
+/** Validates an imported `send` object (absent → undefined). */
+function optSend(o: Record<string, unknown>): PacketSend | undefined {
+  const v = o['send'];
+  if (v === undefined || v === null) return undefined;
+  if (!isObject(v)) throw new Error('send must be an object');
+  const out: PacketSend = { status: reqOneOf(v, 'status', SEND_STATUSES) };
+  const peer = optString(v, 'peer');
+  if (peer !== undefined) out.peer = peer.toLowerCase();
+  if (v['flood'] !== undefined && v['flood'] !== null) {
+    if (typeof v['flood'] !== 'boolean') throw new Error('send.flood must be a boolean');
+    out.flood = v['flood'];
+  }
+  for (const k of ['channelIdx', 'tag', 'estTimeoutMs', 'errCode', 'respondedAt', 'confirmedAt', 'rttMs'] as const) {
+    const n = optNumber(v, k);
+    if (n !== undefined) out[k] = n;
+  }
+  const error = optString(v, 'error');
+  if (error !== undefined) out.error = error;
+  return out;
+}
+
 export class PacketLog extends TimeLog<PacketRecord, PacketQuery> {
   protected readonly storeName = STORE.packets;
   protected readonly tsIndex = INDEX.packets.ts;
@@ -331,6 +375,49 @@ export class PacketLog extends TimeLog<PacketRecord, PacketQuery> {
   async appendFromFrame(frame: DeviceFrame, meta: { ts?: number; sourceFrameId?: number } = {}): Promise<PacketRecord | null> {
     const input = packetInputFromFrame(frame, meta);
     return input ? this.append(input) : null;
+  }
+
+  /**
+   * Changes fields of one stored packet (read-modify-write in one transaction) and emits
+   * `packetUpdated` with the old and new record. Resolves null when the id is not stored.
+   */
+  async update(id: number, patch: PacketPatch): Promise<PacketRecord | null> {
+    const res = await this.db.transaction(this.storeName, 'readwrite', async (t) => {
+      const s = t.store<PacketRecord>(this.storeName);
+      const previous = await s.get(id);
+      if (!previous) return null;
+      const record: PacketRecord = { ...previous, ...patch };
+      await s.put(record);
+      return { record, previous };
+    });
+    if (!res) return null;
+    safeEmit(this.emitter, 'packetUpdated', res);
+    return res.record;
+  }
+
+  /**
+   * Bulk write for maintenance passes (backfill): adds `add` (returning their ids, in order) and
+   * replaces `put` in one transaction. Emits nothing; the caller emits one `logChanged`.
+   */
+  async writeBatch(add: readonly Omit<PacketRecord, 'id'>[], put: readonly PacketRecord[]): Promise<number[]> {
+    if (add.length === 0 && put.length === 0) return [];
+    return this.db.transaction(this.storeName, 'readwrite', async (t) => {
+      const s = t.store<Omit<PacketRecord, 'id'> & { id?: number }>(this.storeName);
+      const ids: number[] = [];
+      for (const rec of add) ids.push((await s.add(rec)) as number);
+      for (const rec of put) await s.put(rec);
+      return ids;
+    });
+  }
+
+  /** The most recent `limit` tx rows (newest first), via the `direction_ts` index. */
+  async recentSent(limit: number): Promise<PacketRecord[]> {
+    return this.db.iterate<PacketRecord>(this.storeName, {
+      index: INDEX.packets.directionTs,
+      query: this.tsRange(['tx'], {}),
+      direction: 'prev',
+      limit,
+    });
   }
 
   /** All stored copies of one packet (same hash), oldest first. */
@@ -416,6 +503,8 @@ export class PacketLog extends TimeLog<PacketRecord, PacketQuery> {
     if (sourceFrameId !== undefined) rec.sourceFrameId = sourceFrameId;
     if (decodedSummary !== undefined) rec.decodedSummary = decodedSummary;
     if (parseError !== undefined) rec.parseError = parseError;
+    const send = optSend(o);
+    if (send !== undefined) rec.send = send;
     // derived from the bytes, never trusted from the file
     return withSource(rec);
   }

@@ -15,6 +15,7 @@ import { ContactsRepo } from './contacts.js';
 import { MessagesRepo } from './messages.js';
 import { ChannelsRepo } from './channels.js';
 import { SettingsRepo } from './settings.js';
+import { SEND_CONFIRM_LOOKBACK, SendCorrelator, awaitsAck, confirmedSend, type SendUpdate } from './send-correlator.js';
 import type { StoreOpenOptions } from './devices.js';
 
 export interface RadioStoreOptions extends StoreOpenOptions {
@@ -41,6 +42,8 @@ export class RadioStore {
   readonly messages: MessagesRepo;
   readonly channels: ChannelsRepo;
   readonly settings: SettingsRepo;
+  /** Live send-outcome correlation for tx rows logged by {@link captureFrame} (handle = packet id). */
+  readonly #sends = new SendCorrelator<number>();
 
   private constructor(
     readonly pubKey: string,
@@ -79,8 +82,11 @@ export class RadioStore {
   /**
    * Capture pipeline step: logs a frame and, for packet-bearing pushes, the packet it carries
    * (linked via `sourceFrameId`). For command frames that make the radio transmit, logs a `tx`
-   * packet record of what was requested (the device never echoes sent packets). Pass `decoded`
-   * if the caller already decoded the frame.
+   * packet record of what was requested (the device never echoes sent packets), starting
+   * `send.status: 'pending'`; the device's response (SENT / OK / ERR) and SEND_CONFIRMED pushes
+   * update it via {@link PacketLog.update} (send-correlator.ts). Pass `decoded` if the caller
+   * already decoded the frame. Calls must be serialised in frame order (the capture pipeline
+   * does) for that correlation to be right.
    */
   async captureFrame(
     direction: FrameDirection,
@@ -102,15 +108,29 @@ export class RadioStore {
     else if (direction === 'out') {
       const res = tryDecodeCommand(bytes);
       if (res.ok) {
-        const input = packetInputFromCommand(res.command, { ts, sourceFrameId: frame.id, names: await this.#commandNames(res.command) });
+        const input = packetInputFromCommand(res.command, { ts, sourceFrameId: frame.id, names: await this.commandNames(res.command) });
         if (input) packet = await this.packets.append(input);
       }
     }
+    if (direction === 'out') this.#sends.command(packet ? packet.id : null, packet ?? undefined);
+    else await this.#applySendUpdates(this.#sends.device(bytes[0] ?? -1, decoded, ts), decoded, ts);
     return { frame, packet, decoded };
   }
 
+  async #applySendUpdates(updates: SendUpdate<number>[], decoded: DeviceFrame | null, ts: number): Promise<void> {
+    if (updates.length === 0 && decoded?.kind === 'sendConfirmed') {
+      // not sent in this session (e.g. before a reconnect): look back through the latest tx rows
+      const recent = await this.packets.recentSent(SEND_CONFIRM_LOOKBACK);
+      const row = recent.find((r) => awaitsAck(r) && r.send!.tag === decoded.ackCode);
+      if (row) updates = [{ handle: row.id, send: confirmedSend(row.send!, decoded.roundTripMs, ts) }];
+    }
+    for (const u of updates) {
+      await this.packets.update(u.handle, u.routeType !== undefined ? { send: u.send, routeType: u.routeType } : { send: u.send });
+    }
+  }
+
   /** Contact / channel names for a sent-packet summary (best effort). */
-  async #commandNames(cmd: Command): Promise<CommandPacketNames> {
+  async commandNames(cmd: Command): Promise<CommandPacketNames> {
     try {
       if (cmd.kind === 'sendChannelTxtMsg' || cmd.kind === 'sendChannelData') {
         const ch = await this.channels.byDeviceIndex(cmd.channelIdx);

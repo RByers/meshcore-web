@@ -9,6 +9,9 @@
  * - `contactsChanged` → `ContactsRepo.syncFromDevice` (with the sync cursor) / `markRemovedFromDevice`;
  * - `selfInfo` updates → `DevicesRepo.update`;
  * - SEND_CONFIRMED pushes → `MessagesRepo.markDeliveredByAck` (outgoing DMs expecting that ACK).
+ *   (Send outcomes on the packet log's tx rows are correlated inside `RadioStore.captureFrame`.)
+ * - once per radio, in the background: `runSendBackfillOnce` rebuilds sent-packet rows and their
+ *   outcomes from frames logged before this session (store/send-backfill.ts).
  *
  * The pipeline is attached to the client *before* `connect()` so the handshake is captured too.
  * The radio's public key is only known once the handshake has finished, so events are buffered
@@ -25,6 +28,7 @@ import type { Unsubscribe } from '../util/events.js';
 import type { DevicesRepo } from '../store/devices.js';
 import { messageInputFromChannelFrame, messageInputFromContactFrame, type MessageInput } from '../store/messages.js';
 import type { RadioStore } from '../store/radio-store.js';
+import { SEND_BACKFILL_SETTING, runSendBackfillOnce, type SendBackfillResult } from '../store/send-backfill.js';
 import { TxtType } from '../protocol/constants.js';
 import { parseReaction, reactionMatches, type ParsedReaction } from './reactions.js';
 import { RxPathCorrelator, type DirectHearing } from './rx-path-correlator.js';
@@ -40,6 +44,8 @@ export interface CapturePipelineOptions {
   smazAutoEnable?: () => boolean;
   /** Called for each failed step (the pipeline keeps going). */
   onError?: (err: unknown, step: string) => void;
+  /** Run the one-time sent-packet backfill when a store is attached (default true). */
+  backfillSends?: boolean;
 }
 
 /** Fallback conversation key for a channel message whose slot is unknown to the store. */
@@ -61,6 +67,11 @@ export class CapturePipeline {
   /** Counters, mostly for tests and the status bar. */
   framesCaptured = 0;
   messagesCaptured = 0;
+  /**
+   * The background sent-packet backfill started by `attachStore` (resolves null when it was not
+   * needed or failed; failures go to `onError` as step 'sent-packet history').
+   */
+  sendBackfill: Promise<SendBackfillResult | null> = Promise.resolve(null);
 
   constructor(
     readonly client: CompanionClient,
@@ -95,6 +106,9 @@ export class CapturePipeline {
   attachStore(store: RadioStore, setup?: Task): void {
     if (this.#stopped) return;
     this.#store = store;
+    if (this.opts.backfillSends ?? true) {
+      this.sendBackfill = new Promise((resolve) => this.#chainTask('sent-packet history', (s) => this.#startBackfill(s, resolve)));
+    }
     if (setup) this.#chainTask('setup', setup);
     for (const { step, task } of this.#buffer.splice(0)) this.#chainTask(step, task);
   }
@@ -114,6 +128,26 @@ export class CapturePipeline {
     for (const off of this.#unsubs) off();
     this.#unsubs = [];
     this.#buffer = [];
+  }
+
+  /**
+   * Snapshots the frame log's end on the serial queue (before any frame of this session is
+   * captured), then backfills up to it without holding up the queue: later frames are correlated live.
+   */
+  async #startBackfill(store: RadioStore, started: (run: Promise<SendBackfillResult | null>) => void): Promise<void> {
+    try {
+      if ((await store.settings.get<unknown>(SEND_BACKFILL_SETTING)) !== undefined) return started(Promise.resolve(null));
+      const upToFrameId = await store.frames.lastId();
+      started(
+        runSendBackfillOnce(store, { upToFrameId, now: this.client.clock.now() }).catch((err: unknown) => {
+          if (!this.#stopped) this.opts.onError?.(err, 'sent-packet history');
+          return null;
+        }),
+      );
+    } catch (err) {
+      started(Promise.resolve(null));
+      throw err; // reported by the queue
+    }
   }
 
   #enqueue(step: string, task: Task): void {

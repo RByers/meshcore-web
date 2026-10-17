@@ -137,6 +137,19 @@ export abstract class TimeLog<R extends LogRecordBase, Q extends LogQueryBase> {
     return this.db.get<R>(this.storeName, id);
   }
 
+  /** The highest stored id (ids grow with insertion order), or 0 when the log is empty. */
+  async lastId(): Promise<number> {
+    const keys = await this.db.transaction(this.storeName, 'readonly', async (t) => {
+      const out: number[] = [];
+      await t.store<R>(this.storeName).each({ direction: 'prev' }, (_v, cursor) => {
+        out.push(cursor.primaryKey as number);
+        return false;
+      });
+      return out;
+    });
+    return keys[0] ?? 0;
+  }
+
   async query(q: Q = {} as Q): Promise<LogPage<R>> {
     const plan = this.plan(q);
     const limit = q.limit ?? 100;

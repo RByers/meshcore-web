@@ -290,6 +290,28 @@ export class LogView<R extends { id: number }, F extends object, Row extends { i
       .catch((err: unknown) => console.error('LogView:', err));
   }
 
+  /**
+   * A stored record changed in place (same id): its row is rebuilt where it is shown; when the
+   * change flips whether it matches the filter, the page and counts are reloaded.
+   */
+  onUpdate(r: R, previous: R): void {
+    const f = this.#filter.peek();
+    const now = this.src.matches(r, f);
+    if (now !== this.src.matches(previous, f)) {
+      this.#chain = this.#chain.then(() => this.reload()).catch((err: unknown) => console.error('LogView:', err));
+      return;
+    }
+    if (!now || !this.#rows.peek().some((x) => x.id === r.id)) return;
+    const gen = this.#gen;
+    this.#chain = this.#chain
+      .then(async () => {
+        const row = await this.src.row(r);
+        if (gen !== this.#gen) return;
+        this.#rows.value = this.#rows.peek().map((x) => (x.id === row.id ? row : x));
+      })
+      .catch((err: unknown) => console.error('LogView:', err));
+  }
+
   /** Resolves when live-tail updates queued so far have been applied. */
   settled(): Promise<void> {
     return this.#chain;
@@ -396,6 +418,10 @@ export class PacketLogModel extends StoreBoundModel {
   protected override bind(store: RadioStore) {
     const offs = [
       store.events.on('packet', (r) => this.packets.onRecord(r)),
+      store.events.on('packetUpdated', (e) => {
+        this.#summaries.delete(e.record.id);
+        this.packets.onUpdate(e.record, e.previous);
+      }),
       store.events.on('frame', (r) => this.frames.onRecord(r)),
       store.events.on('logChanged', (e) => {
         if (e.store === 'packets') void this.packets.reload();

@@ -18,8 +18,13 @@ export interface RadioStoreEvents {
   frame: FrameRecord;
   /** A packet was appended to the packet log. */
   packet: PacketRecord;
-  /** Bulk change to a log (clear / prune / import); re-query rather than patch. */
-  logChanged: { store: LogStoreName; reason: 'clear' | 'prune' | 'import'; removed: number; added: number };
+  /** A stored packet changed in place (e.g. a sent packet's `send` outcome); same id. */
+  packetUpdated: { record: PacketRecord; previous: PacketRecord };
+  /**
+   * Bulk change to a log (clear / prune / import / backfill); re-query rather than patch. For
+   * 'backfill', `added` counts new rows and `updated` rows changed in place.
+   */
+  logChanged: { store: LogStoreName; reason: 'clear' | 'prune' | 'import' | 'backfill'; removed: number; added: number; updated?: number };
   contact: { type: 'put'; record: ContactRecord } | { type: 'delete'; key: string };
   message:
     | { type: 'add'; record: MessageRecord }

@@ -8,6 +8,7 @@ import type { AppModel } from './app-model.js';
 import { effect } from './signal.js';
 import { testApp, connectedApp } from './testing.js';
 import type { PacketLogModel } from './packet-log-model.js';
+import { SEND_BACKFILL_SETTING } from '../store/send-backfill.js';
 
 /** Leaves (ignoring bit fields and decrypted overlays) must tile the node exactly. */
 function checkTiling(n: AnnotationNode): void {
@@ -352,6 +353,37 @@ describe('PacketLogModel — packets from other nodes (#10)', () => {
 });
 
 describe('PacketLogModel — sent packets (#9)', () => {
+  it('rebuilds sent rows from frames once per radio, in the background on connect', async () => {
+    const { app } = await connected();
+    expect(await app.connection.capture!.sendBackfill).toEqual({ framesScanned: 0, added: 0, updated: 0 }); // fresh radio
+    const client = app.connection.client.value!;
+    await client.sendSelfAdvert('flood');
+    await app.connection.capture!.idle();
+    const store = app.connection.store.value!;
+    expect(await store.packets.count({ direction: 'tx' })).toBe(1);
+    // simulate history from before sends were logged: tx rows gone, backfill flag cleared
+    await store.packets.clear();
+    await store.settings.delete(SEND_BACKFILL_SETTING);
+    await app.connection.disconnect();
+
+    expect(await app.connection.connect('emulator')).toBe(true);
+    const r = await app.connection.capture!.sendBackfill;
+    expect(r).toMatchObject({ added: 1, updated: 0 });
+    const s2 = app.connection.store.value!;
+    const [row] = (await s2.packets.query({ direction: 'tx' })).items;
+    expect(row).toMatchObject({ decodedSummary: 'ADVERT self (flood)', send: { status: 'sent' } });
+    expect((await s2.frames.get(row!.sourceFrameId!))?.kind).toBe('sendSelfAdvert');
+    expect(await s2.settings.get(SEND_BACKFILL_SETTING)).toMatchObject({ added: 1 });
+    await app.connection.capture!.idle();
+    await app.connection.disconnect();
+
+    // the flag prevents another run
+    expect(await app.connection.connect('emulator')).toBe(true);
+    expect(await app.connection.capture!.sendBackfill).toBeNull();
+    await app.connection.capture!.idle();
+    expect(await app.connection.store.value!.packets.count({ direction: 'tx' })).toBe(1);
+  });
+
   it('logs DMs, channel messages, adverts and traces the app asked the radio to send as tx', async () => {
     const { app, log, scenario } = await connected();
     const alice = toHex(scenario.keys.alice);
@@ -373,13 +405,18 @@ describe('PacketLogModel — sent packets (#9)', () => {
     expect(rows.every((r) => r.record.direction === 'tx' && r.record.source === 'sent')).toBe(true);
     const by = (t: string) => rows.find((r) => r.typeName === t)!;
     expect(by('TXT_MSG').summary).toBe('TXT_MSG → Alice: "ping from me"');
-    expect(by('TXT_MSG').record).toMatchObject({ format: 'none', hash: '', routeType: -1 });
+    // the route comes from RESP_SENT's flood flag (Alice has a direct path); the ACK confirmed it
+    expect(by('TXT_MSG').record).toMatchObject({ format: 'none', hash: '', routeType: RouteType.DIRECT });
+    expect(by('TXT_MSG').record.send).toMatchObject({ status: 'confirmed', flood: false, peer: alice.slice(0, 12) });
+    expect(by('TXT_MSG').record.send!.rttMs).toBeGreaterThanOrEqual(0);
     expect(by('TXT_MSG').record.bytes.length).toBe(0);
-    expect(by('TXT_MSG').routeName).toBe('');
+    expect(by('TXT_MSG').routeName).toBe('DIRECT');
     expect(by('GRP_TXT').summary).toBe('GRP_TXT Public: "hello all"');
     expect(by('GRP_TXT').routeName).toBe('FLOOD');
+    expect(by('GRP_TXT').record.send).toMatchObject({ status: 'sent' }); // channel text answers OK
     expect(by('ADVERT').summary).toBe('ADVERT self (flood)');
     const trace = by('TRACE');
+    expect(trace.record.send).toMatchObject({ status: 'sent', flood: false });
     expect(trace.record.format).toBe('payload');
     expect(trace.record.bytes.length).toBe(10); // tag(4) auth(4) flags(1) + one 1-byte hop hash
     expect(trace.record.bytes[9]).toBe(scenario.keys.repeater[0]);
@@ -410,6 +447,10 @@ describe('PacketLogModel — sent packets (#9)', () => {
     await log.settled();
     expect(log.packets.rows.value[0]!.summary).toBe('ADVERT self (zero-hop)');
     expect(log.packets.rows.value[0]!.routeName).toBe('DIRECT');
+    // the device's OK updated the shown row in place (packetUpdated), without counting it twice
+    expect(log.packets.rows.value[0]!.record.send?.status).toBe('sent');
+    expect(log.packets.matching.value).toBe(await app.connection.store.value!.packets.count({ direction: 'tx' }));
+    expect(new Set(log.packets.rows.value.map((r) => r.id)).size).toBe(log.packets.rows.value.length);
 
     // export / import keep tx entries
     const exp = await log.exportPackets({ filtered: true });
