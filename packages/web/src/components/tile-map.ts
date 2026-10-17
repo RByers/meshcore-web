@@ -7,7 +7,7 @@
  *
  * - Children with `lat` / `lon` attributes are positioned over the map (any element works;
  *   `<mc-map-marker>` below is a labelled, focusable pin; `approximate` draws it dashed with "?").
- * - `.lines` draws polylines (SVG, under the markers): `[{ points: [{lat, lon}, …], dashed? }]`.
+ * - `.lines` draws polylines (SVG, under the markers): `[{ points: [{lat, lon}, …], dashed?, color?, width? }]`.
  * - Drag / touch pan, wheel / pinch zoom (fractional zoom; tiles from the nearest integer level,
  *   scaled), zoom buttons, arrow / +/- keys. Emits `mc-view-change` ({lat, lon, zoom}) after user
  *   interaction. `fitBounds()`, `setView()`, `project()` for callers.
@@ -53,6 +53,8 @@ export interface MapLine {
   dashed?: boolean;
   /** Stroke colour (default the accent colour). */
   color?: string;
+  /** Stroke width in px (default 4, 3 when dashed). */
+  width?: number;
   /** Exposed as `data-line` on the SVG path (tests, styling). */
   id?: string;
 }
@@ -417,7 +419,7 @@ export class McTileMap extends LitElement {
         })
         .join(' ');
     return svg`<svg class="lines" aria-hidden="true">${this.lines.map(
-      (l) => svg`<path d=${d(l.points)} stroke=${l.color ?? 'var(--mc-accent)'} ?data-dashed=${!!l.dashed} data-line=${l.id ?? nothing}></path>`,
+      (l) => svg`<path d=${d(l.points)} stroke=${l.color ?? 'var(--mc-accent)'} style=${l.width ? `stroke-width:${l.width}px` : nothing} ?data-dashed=${!!l.dashed} data-line=${l.id ?? nothing}></path>`,
     )}</svg>`;
   }
 

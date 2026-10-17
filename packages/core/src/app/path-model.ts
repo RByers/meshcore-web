@@ -23,6 +23,7 @@ import { toHex } from '../util/bytes.js';
 import type { ContactView } from './contacts-model.js';
 import { hasLocation } from './geo.js';
 import { buildPathGeometry, type PathEndpoint, type PathGeoNode, type PathGeometry, type PathSpec } from './path-geometry.js';
+import { buildPathUsageMap, type PathUsageInput, type PathUsageMap } from './path-usage.js';
 import { viewPacket } from './packet-summary.js';
 import { computed, type ReadonlySignal } from './signal.js';
 
@@ -218,6 +219,15 @@ export class PathModel {
   geometry(spec: PathSpec, opts: { estimate?: boolean } = {}): PathGeometry {
     const estimate = opts.estimate ?? this.src.approximatePositions?.value ?? false;
     return buildPathGeometry(spec, this.nodes.value, this.self.value, { estimate });
+  }
+
+  /**
+   * Merges the paths packets from `contactKey` arrived over into weighted hop segments (reactive
+   * in a render). Estimated positions follow the same setting / override as {@link geometry}.
+   */
+  usage(paths: readonly PathUsageInput[], contactKey: string, opts: { estimate?: boolean } = {}): PathUsageMap {
+    const estimate = opts.estimate ?? this.src.approximatePositions?.value ?? false;
+    return buildPathUsageMap(paths, contactKey, this.nodes.value, this.self.value, { estimate });
   }
 
   contactSpec(key: string): PathSpec | null {

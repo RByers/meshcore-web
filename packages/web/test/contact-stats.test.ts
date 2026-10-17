@@ -80,6 +80,39 @@ describe('contact Stats tab', () => {
     expect(rows.some((r) => r.includes(' > '))).toBe(true);
     expect(within(pathsChart, '[data-label] a')[0]?.getAttribute('href')).toBe(`#/path/${alice}`);
 
+    // paths map: one line per hop segment, as thick as the packets that crossed it. With the
+    // "approximate positions" setting off, hop 55 (unknown) is left off: Alice–Hilltop 3 (one of
+    // them skipping 55, but the hop is firm), Hilltop–me 3, Alice–me 1
+    expect(t.app.appSettings.approximatePositions.peek()).toBe(false);
+    await t.click('[data-section="paths"] [data-action="paths-map"]');
+    await el.updateComplete;
+    expect(t.query('[data-section="paths"] mc-bar-chart')).toBeNull();
+    const map = t.query('[data-section="paths"] mc-tile-map');
+    expect(map).not.toBeNull();
+    const lineWidths = () => within(map, 'path[data-line]').map((p) => parseFloat((p as SVGPathElement).style.strokeWidth));
+    await t.until(() => within(map, 'path[data-line]').length === 3, 3000, 'paths map lines');
+    expect(lineWidths().map((w) => w.toFixed(2)).sort()).toEqual(['14.00', '14.00', '4.67']);
+    expect(within(map, 'path[data-dashed]')).toHaveLength(0);
+    expect(t.query('[data-field="paths-map-note"]')!.textContent).toMatch(/1 packet came over hops with no known location/);
+
+    // with estimates on, 55 is placed between Alice and Hilltop: Hilltop–me 3 (busiest), Alice–
+    // Hilltop 2, Alice–me 1, Alice–55 and 55–Hilltop 1 each (dashed)
+    const box = t.query<HTMLInputElement>('[data-section="paths"] [data-approximate]')!;
+    box.click();
+    await el.updateComplete;
+    expect(t.app.appSettings.approximatePositions.peek()).toBe(true);
+    await t.until(() => within(map, 'path[data-line]').length === 5, 3000, 'estimated paths map lines');
+    const widths = lineWidths();
+    expect(Math.max(...widths)).toBe(14);
+    const busiest = within(map, 'path[data-line]').find((p) => (p as SVGPathElement).style.strokeWidth === '14px')!;
+    expect(busiest.getAttribute('data-line')).toContain(toHex(s.keys.repeater));
+    expect(widths.filter((w) => Math.abs(w - 14 / 3) < 0.01)).toHaveLength(3);
+    expect(within(map, 'path[data-dashed]')).toHaveLength(2);
+    expect(t.query('[data-field="paths-map-note"]')!.textContent).toMatch(/4 packets.*busiest: 3/s);
+    await t.click('[data-section="paths"] [data-action="paths-map"]');
+    await el.updateComplete;
+    expect(t.query('[data-section="paths"] mc-bar-chart')).not.toBeNull();
+
     // timeline
     const line = t.query('[data-section="timeline"] mc-line-chart');
     await t.until(() => within(line, '[data-mark="line"]').length > 0, 3000, 'timeline line');

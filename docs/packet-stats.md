@@ -299,7 +299,14 @@ The tab shows: stat tiles (packets from the contact, via the contact as a forwar
 paths, share heard directly, mean SNR); *Heard over time* (`mc-line-chart`, series by category);
 *Paths heard via* (`mc-bar-chart`: label = resolved hop names joined with " > ", or *direct*;
 value = count; footer "last heard" via tooltip; the label links to the path page `/path/:key`
-only for the contact's current out_path row, otherwise plain text); *Signal over time*
+only for the contact's current out_path row, otherwise plain text; a *Map* button swaps the chart
+for `mc-tile-map` showing every path at once: `app.paths.usage()` (core `path-usage.ts`) lays
+each path out like the path dialog (contact → hops → this radio), merges stops by node (or hash +
+estimated position) and sums packets per hop segment, and each line's width is proportional to
+its count, the busiest hop 14 px, minimum 2 px. Hops without a location are only estimated while
+the "approximate positions" setting is on (a checkbox under the map, as in the path dialog);
+otherwise the segment skips them. A segment is dashed only when every packet over it had an
+estimated end or skipped a hop); *Signal over time*
 (`mc-dot-plot`: x time, y SNR (selector SNR / RSSI / Hops), colour = path (top 8 paths, rest
 Other), dot size = bytes); *Hop count* distribution. Browser test in
 `packages/web/test/contact-stats.test.ts`: the tab appears, the paths chart lists the direct row

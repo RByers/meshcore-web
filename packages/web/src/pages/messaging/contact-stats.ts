@@ -1,21 +1,36 @@
 /**
  * `<mc-contact-stats>`: the *Stats* tab of `/contact/:key` (docs/packet-stats.md §5). Maps
  * `app.packetStats.forContact(key)` onto the chart elements: tiles, packets heard over time, the
- * paths they arrived over, signal over time (coloured by path), and the hop count distribution.
+ * paths they arrived over (bar chart, or a map with each hop's line as thick as its packet count), signal over time (coloured by path), and the hop count distribution.
  * Uses the same global date range as the packet log Stats tab (`<mc-stats-range>`).
  */
 import { css, html, nothing, type TemplateResult } from 'lit';
-import type { ContactPathStats, HopCount, NodeRef, StatPacket, Timeline } from '@meshcore-web/core/app';
+import type { ContactPathStats, HopCount, NodeRef, PathUsageMap, StatPacket, Timeline } from '@meshcore-web/core/app';
 import { AppElement } from '../../app-context.js';
 import { formatRelative, formatSnr } from '../../format.js';
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
 import { assignSlots, type BarItem, type DotPoint, type DotSelectDetail, type LineSeries, type SeriesPalette } from '../../charts/index.js';
 import { timelinePalette, timelineSeries } from '../packets/packet-stats.js';
+import type { MapLine, McTileMap } from '../../components/tile-map.js';
 import '../../components/stats-range.js';
+import '../../components/tile-map.js';
 
 /** Paths that get their own colour in the signal plot (the rest are "Other"). */
 const TOP_PATHS = 8;
+/** Line widths (px) on the paths map: the busiest hop gets MAX, others scale linearly down to MIN. */
+const MIN_LINE = 2;
+const MAX_LINE = 14;
+
+/** Map lines for a paths-usage map: width proportional to how many packets crossed each hop. */
+export function usageLines(m: PathUsageMap): MapLine[] {
+  return m.edges.map((e) => ({
+    points: [e.a, e.b],
+    width: m.maxCount ? Math.max(MIN_LINE, (MAX_LINE * e.count) / m.maxCount) : MIN_LINE,
+    dashed: e.approximate,
+    id: e.id,
+  }));
+}
 
 export type YField = 'snr' | 'rssi' | 'hops';
 
@@ -40,9 +55,10 @@ interface Derived {
 }
 
 export class McContactStats extends AppElement {
-  static override properties = { key: { type: String }, yField: { state: true } };
+  static override properties = { key: { type: String }, yField: { state: true }, pathView: { state: true } };
   declare key: string;
   declare yField: YField;
+  declare pathView: 'chart' | 'map';
 
   static override styles = [
     shared,
@@ -74,6 +90,19 @@ export class McContactStats extends AppElement {
         color: var(--mc-text-muted);
         font-size: 13px;
       }
+      mc-tile-map {
+        height: clamp(260px, 50dvh, 460px);
+      }
+      .map-note {
+        margin: 8px 0 0;
+        font-size: 0.85rem;
+      }
+      label.estimate {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-block-start: 6px;
+      }
       select {
         font: inherit;
         color: var(--mc-text);
@@ -94,7 +123,10 @@ export class McContactStats extends AppElement {
     super();
     this.key = '';
     this.yField = 'snr';
+    this.pathView = 'chart';
   }
+
+  #fitPending = false;
 
   /** pathKey of the contact's current out_path ('' = direct), null when flood / unknown. */
   #currentPathKey(): string | null {
@@ -181,8 +213,21 @@ export class McContactStats extends AppElement {
               <mc-line-chart .series=${d.timeline} .palette=${d.timelinePalette} .xDomain=${xDomain} stacked y-label="Packets"></mc-line-chart>
             </section>
             <section class="card" data-section="paths">
-              <h3>Paths heard via</h3>
-              <mc-bar-chart .items=${d.paths}></mc-bar-chart>
+              <div class="head">
+                <h3>Paths heard via</h3>
+                <button
+                  class="small"
+                  data-action="paths-map"
+                  aria-pressed=${this.pathView === 'map' ? 'true' : 'false'}
+                  @click=${() => {
+                    this.pathView = this.pathView === 'map' ? 'chart' : 'map';
+                    this.#fitPending = this.pathView === 'map';
+                  }}
+                >
+                  ${this.pathView === 'map' ? 'Chart' : 'Map'}
+                </button>
+              </div>
+              ${this.pathView === 'map' ? this.#pathsMap(s.paths) : html`<mc-bar-chart .items=${d.paths}></mc-bar-chart>`}
             </section>
             <section class="card" data-section="signal">
               <div class="head">
@@ -213,6 +258,67 @@ export class McContactStats extends AppElement {
             </section>
           `}
     `;
+  }
+  #usage(paths: readonly ContactPathStats[]): PathUsageMap {
+    return this.app.paths.usage(
+      paths.map((p) => ({ hashes: p.pathKey === '' ? [] : p.pathKey.split('>'), count: p.count })),
+      this.key,
+    );
+  }
+
+  #pathsMap(paths: readonly ContactPathStats[]): TemplateResult {
+    const m = this.#usage(paths);
+    const estimate = this.app.appSettings.approximatePositions.value;
+    const toggle =
+      estimate || m.incomplete > 0
+        ? html`<label class="estimate"
+            ><input
+              type="checkbox"
+              data-approximate
+              .checked=${estimate}
+              @change=${(e: Event) => {
+                this.app.appSettings.setApproximatePositions((e.target as HTMLInputElement).checked);
+                this.#fitPending = true;
+              }}
+            />
+            Approximate positions of nodes without a location</label
+          >`
+        : nothing;
+    if (m.edges.length === 0) {
+      return html`<p class="muted" data-field="no-map">None of these paths can be drawn: the nodes on them have no known location.</p>
+        ${toggle}`;
+    }
+    return html`
+      <mc-tile-map .tileUrl=${this.app.map.tileUrl.value} .lines=${usageLines(m)} label="Paths heard via" data-field="paths-map">
+        ${m.stops.map(
+          (st) => html`<mc-map-marker
+            data-stop=${st.id}
+            kind=${st.role === 'to' ? 'self' : (st.node?.kind ?? '')}
+            lat=${st.lat}
+            lon=${st.lon}
+            label=${st.label}
+            description=${`${st.count} packet${st.count === 1 ? '' : 's'}${st.approximate ? ', approximate location' : ''}`}
+            ?approximate=${st.approximate}
+          ></mc-map-marker>`,
+        )}
+      </mc-tile-map>
+      <p class="muted map-note" data-field="paths-map-note">
+        Line thickness shows how many of the ${m.total} packets crossed each hop (busiest: ${m.maxCount}). Dashed lines lead to
+        estimated positions or skip hops with no known location.${m.incomplete
+          ? ` ${m.incomplete} packet${m.incomplete === 1 ? '' : 's'} came over hops with no known location.`
+          : ''}
+      </p>
+      ${toggle}
+    `;
+  }
+
+  protected override updated(): void {
+    if (!this.#fitPending) return;
+    const map = this.renderRoot.querySelector<McTileMap>('mc-tile-map');
+    if (!map) return;
+    const b = this.#usage(this.app.packetStats.forContact(this.key).peek().paths).bounds;
+    if (b) map.fitBounds(b, { maxZoom: 15, padding: 40 });
+    this.#fitPending = false;
   }
 }
 
