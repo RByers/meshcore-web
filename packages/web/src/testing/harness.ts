@@ -18,11 +18,11 @@
  *   ...
  *   afterEach(() => h.cleanup());
  */
-import { AppModel, createEmulatorTransportFactory, type AppModelOptions } from '@meshcore-web/core/app';
+import { AppModel, createEmulatorTransportFactory, memoryPreferences, type AppModelOptions } from '@meshcore-web/core/app';
 import { FAST_TIMING, basicScenario, type BasicScenario, type BasicScenarioOptions } from '@meshcore-web/core/emulator';
 import { DB_PREFIX } from '@meshcore-web/core/store';
 import { SkippableClock } from '@meshcore-web/core/util/clock';
-import { WebBluetoothTransport, WebSerialTransport } from '@meshcore-web/core/transport';
+import { bleTransportFactory, serialTransportFactory } from '../app-context.js';
 import type { McApp } from '../mc-app.js';
 import { createMockBluetooth, type MockBluetoothHandle } from './mock-bluetooth.js';
 import { createMockSerial, type MockSerialHandle } from './mock-serial.js';
@@ -159,23 +159,16 @@ export function createHarness(opts: HarnessOptions = {}): Harness {
   bleScenario.emulator.onFrame((f) => ble.pushFrameToHost(f));
 
   const emulatorFactory = createEmulatorTransportFactory(scenarioOptions);
+  // shared across reload() like localStorage
+  const preferences = memoryPreferences();
   const makeApp = (): AppModel => new AppModel({
-    ...(opts.serial === false
-      ? {}
-      : {
-          createSerialTransport: async (req) => {
-            if (req.reconnect) {
-              const [port] = await serial.serial.getPorts();
-              if (port) return new WebSerialTransport({ port });
-            }
-            return new WebSerialTransport({ serial: serial.serial });
-          },
-        }),
-    ...(opts.ble === false ? {} : { createBleTransport: () => new WebBluetoothTransport({ bluetooth: ble.bluetooth }) }),
+    ...(opts.serial === false ? {} : { createSerialTransport: serialTransportFactory(serial.serial) }),
+    ...(opts.ble === false ? {} : { createBleTransport: bleTransportFactory(ble.bluetooth, clock) }),
     createEmulatorTransport: emulatorFactory,
-    reconnectableKinds: ['emulator', 'serial'],
+    reconnectableKinds: ['emulator', 'serial', 'ble'],
     indexedDB: idb,
     clock,
+    preferences,
     ...opts.app,
   });
   const app = makeApp();

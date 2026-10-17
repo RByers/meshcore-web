@@ -30,6 +30,7 @@ export interface DeviceConnectInput {
   pubKey: Uint8Array | string;
   name?: string;
   transport?: StoredTransportKind;
+  bleDeviceId?: string;
   deviceInfo?: DeviceInfo;
   selfInfo?: SelfInfo;
 }
@@ -77,6 +78,8 @@ export class DevicesRepo {
       };
       const deviceInfo = input.deviceInfo ?? prev?.deviceInfo;
       const selfInfo = input.selfInfo ?? prev?.selfInfo;
+      const bleDeviceId = input.bleDeviceId ?? prev?.bleDeviceId;
+      if (bleDeviceId !== undefined) next.bleDeviceId = bleDeviceId;
       if (deviceInfo) next.deviceInfo = deviceInfo;
       if (selfInfo) next.selfInfo = selfInfo;
       await s.put(next);

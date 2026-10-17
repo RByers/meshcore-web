@@ -209,6 +209,32 @@ describe('connect flows', () => {
     await t.until(() => location.hash === '#/messages' && t.app.connection.connected.value, 10000, 'reconnected');
   });
 
+  it('reconnects to the Bluetooth radio on reload without the chooser, until the user disconnects', async () => {
+    const t = harness({ app: { autoReconnect: true } });
+    await t.mount();
+    await t.click('[data-connect="ble"]');
+    await t.until(() => t.app.connection.phase.value === 'connected', 5000, 'connected');
+    expect(t.ble.bluetooth.requestCount).toBe(1);
+    await t.app.connection.capture!.idle();
+    await t.until(() => t.app.devices.value[0]?.bleDeviceId === t.ble.device.id, 3000, 'ble device id recorded');
+
+    await t.reload();
+    await t.until(() => t.app.connection.phase.value === 'connected', 5000, 'resumed after reload');
+    expect(t.app.connection.kind.value).toBe('ble');
+    expect(t.ble.bluetooth.requestCount).toBe(1); // no chooser
+
+    await t.click('[data-action="disconnect"]');
+    await t.until(() => t.app.connection.phase.value === 'disconnected', 3000, 'disconnected');
+    await t.reload();
+    await t.until(() => t.query('[data-reconnect]'), 3000, 'connect page with known radio');
+    expect(t.app.connection.phase.value).toBe('idle');
+
+    // the Reconnect button also skips the chooser for Bluetooth now
+    await t.click('[data-reconnect]');
+    await t.until(() => t.app.connection.phase.value === 'connected', 5000, 'reconnected');
+    expect(t.ble.bluetooth.requestCount).toBe(1);
+  });
+
   it('keeps the nav visible on a narrow viewport', async () => {
     const t = harness();
     await page.viewport(375, 700);

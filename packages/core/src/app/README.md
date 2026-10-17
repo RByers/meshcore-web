@@ -85,5 +85,12 @@ that talk to the device go through `connection.client.peek()` (a `CompanionClien
 - `ConnectionModel.connect()` never rejects: it resolves `false` and surfaces the error via
   `connection.error` and a toast. A dismissed browser chooser (`NotFoundError`) is not an error.
 - Reconnect: `connection.reconnect(deviceRecord)` reuses a granted device where the API allows
-  (`reconnectableKinds`: the emulator always; Web Serial via `getPorts()` in the browser).
-  Automatic reconnect after link loss is not implemented yet.
+  (`reconnectableKinds`: the emulator always; Web Serial via `getPorts()`; Web Bluetooth via
+  `getDevices()` when the browser has persistent permissions, matched by `DeviceRecord.bleDeviceId`
+  and waiting for the radio to advertise first).
+- Resume on load: with `autoReconnect` (on in the browser) `AppModel.init()` calls
+  `connection.resume(mostRecentDevice)`, which reconnects without a chooser (`TransportRequest.auto`:
+  factories must not open one) if the previous page was connected or lost its link. A user
+  `disconnect()` turns that off until the next successful connect (`PREF_RESUME`); `dispose()` keeps it.
+  A failed resume goes back to `idle` with a warning toast. Automatic reconnect after link loss
+  (without a reload) is not implemented yet.

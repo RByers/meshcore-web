@@ -12,6 +12,9 @@
  * - `disconnectDevice()` (out of range / device reboot) and `gatt.disconnect()` fire
  *   `gattserverdisconnected` on the device.
  * - Notifications are dispatched one per task with `value` set to a fresh DataView.
+ * - `getDevices()` returns the device once `requestDevice()` picked it (or `granted: true`), as
+ *   persistent permissions do; `watchAdvertisements()` fires `advertisementreceived` while the
+ *   device is `advertising` (in range; see `setAdvertising`).
  */
 import {
   NUS_RX_CHARACTERISTIC_UUID,
@@ -46,6 +49,12 @@ export interface MockBluetoothOptions {
   writeLatencyMs?: number;
   /** Whether the device advertises the NUS service UUID (affects `requestDevice` filters). */
   advertisesService?: boolean;
+  /** Start out granted (as if picked on an earlier visit); default false. */
+  granted?: boolean;
+  /** Provide `getDevices()` (persistent permissions); default true. */
+  getDevices?: boolean;
+  /** Initially in range and advertising; default true. */
+  advertising?: boolean;
 }
 
 /**
@@ -208,6 +217,8 @@ export class MockGattServer implements BluetoothRemoteGATTServerLike {
 
 export class MockBluetoothDevice extends EventTarget implements BluetoothDeviceLike {
   readonly gatt: MockGattServer;
+  watchingAdvertisements = false;
+  advertising = true;
   constructor(
     readonly id: string,
     readonly name: string | undefined,
@@ -215,19 +226,47 @@ export class MockBluetoothDevice extends EventTarget implements BluetoothDeviceL
     super();
     this.gatt = new MockGattServer(this);
   }
+
+  async watchAdvertisements(options: { signal?: AbortSignal } = {}): Promise<void> {
+    await tick();
+    if (options.signal?.aborted) throw new DOMException('aborted', 'AbortError');
+    this.watchingAdvertisements = true;
+    options.signal?.addEventListener('abort', () => (this.watchingAdvertisements = false), { once: true });
+    if (this.advertising) this.#advertise();
+  }
+
+  /** Device comes into / goes out of range. */
+  setAdvertising(on: boolean): void {
+    this.advertising = on;
+    if (on && this.watchingAdvertisements) this.#advertise();
+  }
+
+  #advertise(): void {
+    setTimeout(() => {
+      if (this.watchingAdvertisements) this.dispatchEvent(new Event('advertisementreceived'));
+    });
+  }
 }
 
 export class MockBluetooth implements BluetoothLike {
   lastRequestOptions: BluetoothRequestDeviceOptions | undefined;
   cancelChooser = false;
+  requestCount = 0;
+  /** Whether this origin holds a permission for `device` (what `getDevices()` returns). */
+  granted = false;
+  getDevices?: () => Promise<MockBluetoothDevice[]>;
 
   constructor(
     readonly device: MockBluetoothDevice,
     private readonly advertisesService: boolean,
-  ) {}
+    withGetDevices = true,
+  ) {
+    if (withGetDevices) this.getDevices = async () => (this.granted ? [this.device] : []);
+  }
 
   async requestDevice(options: BluetoothRequestDeviceOptions): Promise<MockBluetoothDevice> {
     this.lastRequestOptions = options;
+    this.requestCount++;
     if (this.cancelChooser) throw new DOMException('User cancelled the requestDevice() chooser.', 'NotFoundError');
     const name = this.device.name ?? '';
     const matches =
@@ -241,6 +280,7 @@ export class MockBluetooth implements BluetoothLike {
           (f.services !== undefined || f.name !== undefined || f.namePrefix !== undefined),
       );
     if (!matches) throw new DOMException('User cancelled the requestDevice() chooser.', 'NotFoundError');
+    this.granted = true;
     return this.device;
   }
 }
@@ -305,7 +345,9 @@ export function createMockBluetooth(options: MockBluetoothOptions = {}): MockBlu
     0,
   );
   server.service = new MockGattService(server, rx, tx);
-  const bluetooth = new MockBluetooth(device, options.advertisesService ?? true);
+  const bluetooth = new MockBluetooth(device, options.advertisesService ?? true, options.getDevices ?? true);
+  bluetooth.granted = options.granted ?? false;
+  device.advertising = options.advertising ?? true;
 
   return {
     ...ble,

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { IDBFactory } from 'fake-indexeddb';
 import { toHex } from '../util/bytes.js';
 import { TypedEmitter } from '../util/events.js';
 import { channelKeyForPsk } from '../store/channels.js';
@@ -6,7 +7,7 @@ import type { FrameTransport, TransportEvents } from '../transport/transport.js'
 import { FAST_TIMING, publicChannelSecret } from '../emulator/scenarios.js';
 import { createEmulatorTransportFactory, type AppModelOptions } from './app-model.js';
 import { testApp } from './testing.js';
-import { PREF_LAST_KIND, memoryPreferences, type ConnectionPhase } from './connection.js';
+import { NoGrantedDeviceError, PREF_LAST_KIND, PREF_RESUME, memoryPreferences, type ConnectionPhase } from './connection.js';
 import { NotificationsModel } from './notifications.js';
 import { ManualClock } from '../util/clock.js';
 import { effect } from './signal.js';
@@ -243,6 +244,75 @@ describe('ConnectionModel errors', () => {
     expect(await connecting).toBe(false);
     expect(app.connection.phase.value).toBe('error');
     expect(app.connection.error.value?.name).toBe('RequestTimeoutError');
+  });
+
+  it('resumes the last connection on load unless the user disconnected', async () => {
+    // three page loads sharing storage, preferences and the emulated radio
+    const base = testApp();
+    const shared: AppModelOptions = {
+      indexedDB: new IDBFactory(),
+      createEmulatorTransport: base.emulator,
+      preferences: base.prefs,
+      autoReconnect: true,
+    };
+    const prefs = base.prefs;
+    const load = () => testApp({ app: shared }).app;
+
+    const first = load();
+    await first.init();
+    expect(first.connection.phase.value).toBe('idle'); // nothing to resume yet
+    expect(await first.connection.connect('emulator')).toBe(true);
+    const pubKey = first.connection.pubKey.value;
+    await first.connection.capture!.idle();
+    expect(prefs.getItem(PREF_RESUME)).toBe('1');
+    await first.dispose(); // page unload: still resumable
+
+    const second = load();
+    await second.init();
+    await vi.waitFor(() => expect(second.connection.phase.value).toBe('connected'));
+    expect(second.connection.pubKey.value).toBe(pubKey);
+    await second.connection.disconnect(); // user choice: do not resume
+    expect(prefs.getItem(PREF_RESUME)).toBe('0');
+    await second.dispose();
+
+    const third = load();
+    await third.init();
+    expect(third.connection.phase.value).toBe('idle');
+  });
+
+  it('does not resume on load without autoReconnect or for a kind that needs a chooser', async () => {
+    const prefs = memoryPreferences({ [PREF_RESUME]: '1', [PREF_LAST_KIND]: 'emulator' });
+    const off = makeApp({ preferences: prefs }).app;
+    await off.init();
+    expect(off.connection.phase.value).toBe('idle');
+
+    const serial = vi.fn(() => brokenTransport(new Error('unused')));
+    const chooser = makeApp({
+      preferences: memoryPreferences({ [PREF_RESUME]: '1', [PREF_LAST_KIND]: 'serial' }),
+      createSerialTransport: serial,
+      autoReconnect: true,
+    }).app;
+    await chooser.init();
+    expect(serial).not.toHaveBeenCalled(); // serial is not in reconnectableKinds here
+    expect(chooser.connection.phase.value).toBe('idle');
+  });
+
+  it('a failed resume goes back to idle with a warning, not an error', async () => {
+    const factory = vi.fn((req: { auto?: boolean; reconnect: boolean }) => {
+      expect(req).toMatchObject({ auto: true, reconnect: true });
+      throw new NoGrantedDeviceError();
+    });
+    const { app, phases } = makeApp({
+      preferences: memoryPreferences({ [PREF_RESUME]: '1', [PREF_LAST_KIND]: 'serial' }),
+      createSerialTransport: factory,
+      reconnectableKinds: ['serial'],
+    });
+    expect(await app.connection.resume()).toBe(false);
+    expect(factory).toHaveBeenCalledOnce();
+    expect(phases).toEqual(['idle', 'connecting', 'idle']);
+    expect(app.connection.error.value).toBeNull();
+    const toast = app.notifications.toasts.value.at(-1);
+    expect(toast).toMatchObject({ kind: 'warning', message: 'Could not reconnect to USB Serial automatically' });
   });
 
   it('restores the last used kind from preferences', () => {

@@ -97,8 +97,18 @@ export interface BluetoothDeviceLike extends EventTargetLike {
   readonly id: string;
   readonly name?: string | undefined;
   readonly gatt?: BluetoothRemoteGATTServerLike | undefined;
+  /**
+   * Starts delivering `advertisementreceived` events (Chrome; may be missing or behind a flag).
+   * Used to wait until a remembered device is in range before `gatt.connect()`.
+   */
+  watchAdvertisements?(options?: { signal?: AbortSignal }): Promise<void>;
 }
 
 export interface BluetoothLike {
   requestDevice(options: BluetoothRequestDeviceOptions): Promise<BluetoothDeviceLike>;
+  /**
+   * Devices this origin was granted before (no chooser, no user gesture). Missing in browsers
+   * without persistent Web Bluetooth permissions.
+   */
+  getDevices?(): Promise<BluetoothDeviceLike[]>;
 }

@@ -297,6 +297,8 @@ export interface DeviceRecord {
   firstConnected: number;
   lastConnected: number;
   transport: StoredTransportKind;
+  /** Web Bluetooth `BluetoothDevice.id` of the last BLE connection (per-origin, stable). */
+  bleDeviceId?: string;
   deviceInfo?: DeviceInfo;
   selfInfo?: SelfInfo;
 }

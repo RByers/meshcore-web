@@ -1,4 +1,5 @@
 import { MAX_FRAME_SIZE } from '../framing/serial-framer.js';
+import { systemClock, type Clock } from '../util/clock.js';
 import { BaseTransport, checkFrameSize } from './base.js';
 import type { FrameTransport, TransportInfo } from './transport.js';
 import { TransportError, toError } from './transport.js';
@@ -37,6 +38,16 @@ export interface WebBluetoothTransportOptions {
    * write-without-response.
    */
   preferWriteWithResponse?: boolean;
+  /**
+   * Before connecting, wait up to this many ms for an advertisement from `device` (when the
+   * browser has `watchAdvertisements`). Use for a remembered device from `getDevices()`: Chrome
+   * only connects to a device it has seen recently. On timeout (or if watching fails) the connect
+   * is attempted anyway. Default 0: connect straight away (right for a device just picked in the
+   * chooser).
+   */
+  advertisementTimeoutMs?: number;
+  /** Timer source for `advertisementTimeoutMs`; default the system clock. */
+  clock?: Clock;
 }
 
 export interface RequestBleDeviceOptions {
@@ -66,6 +77,8 @@ export class WebBluetoothTransport extends BaseTransport implements FrameTranspo
   #device: BluetoothDeviceLike | undefined;
   readonly #max: number;
   readonly #preferWithResponse: boolean;
+  readonly #advertisementTimeoutMs: number;
+  readonly #clock: Clock;
   #server: BluetoothRemoteGATTServerLike | undefined;
   #rx: BluetoothRemoteGATTCharacteristicLike | undefined;
   #tx: BluetoothRemoteGATTCharacteristicLike | undefined;
@@ -95,6 +108,18 @@ export class WebBluetoothTransport extends BaseTransport implements FrameTranspo
     this.#device = options.device;
     this.#max = options.maxFrameLength ?? MAX_FRAME_SIZE;
     this.#preferWithResponse = options.preferWriteWithResponse ?? true;
+    this.#advertisementTimeoutMs = options.advertisementTimeoutMs ?? 0;
+    this.#clock = options.clock ?? systemClock;
+  }
+
+  /**
+   * A device this origin was granted before (`getDevices()`, no chooser): the one with `id` if
+   * given, else the first one. Undefined if the browser has no `getDevices()` or nothing matches.
+   */
+  static async getGrantedDevice(bluetooth: BluetoothLike, id?: string): Promise<BluetoothDeviceLike | undefined> {
+    if (!bluetooth.getDevices) return undefined;
+    const devices = await bluetooth.getDevices();
+    return id === undefined ? devices[0] : devices.find((d) => d.id === id);
   }
 
   /** Shows the browser's device picker (user gesture required). */
@@ -129,6 +154,7 @@ export class WebBluetoothTransport extends BaseTransport implements FrameTranspo
       if (!device.gatt) throw new TransportError('BLE device has no GATT server');
       device.addEventListener('gattserverdisconnected', this.#onGattDisconnected);
       this.#intentionalDisconnect = false;
+      if (this.#advertisementTimeoutMs > 0) await waitForAdvertisement(device, this.#advertisementTimeoutMs, this.#clock);
       this.#server = await device.gatt.connect();
       const service = await this.#server.getPrimaryService(NUS_SERVICE_UUID);
       this.#rx = await service.getCharacteristic(NUS_RX_CHARACTERISTIC_UUID);
@@ -201,5 +227,31 @@ export class WebBluetoothTransport extends BaseTransport implements FrameTranspo
     this.#tx = undefined;
     this.#rx = undefined;
     this.#server = undefined;
+  }
+}
+
+/**
+ * Resolves on the first `advertisementreceived` from `device`, after `timeoutMs`, or at once if
+ * the browser cannot watch advertisements. Never rejects: connecting is attempted either way.
+ */
+async function waitForAdvertisement(device: BluetoothDeviceLike, timeoutMs: number, clock: Clock): Promise<void> {
+  if (!device.watchAdvertisements) return;
+  const abort = new AbortController();
+  let onAdvert: (() => void) | undefined;
+  let timer: unknown;
+  const seen = new Promise<void>((resolve) => {
+    onAdvert = () => resolve();
+    timer = clock.setTimeout(onAdvert, timeoutMs);
+    device.addEventListener('advertisementreceived', onAdvert);
+  });
+  try {
+    await device.watchAdvertisements({ signal: abort.signal });
+    await seen;
+  } catch {
+    // not supported / not permitted: just try to connect
+  } finally {
+    if (timer !== undefined) clock.clearTimeout(timer);
+    if (onAdvert) device.removeEventListener('advertisementreceived', onAdvert);
+    abort.abort();
   }
 }

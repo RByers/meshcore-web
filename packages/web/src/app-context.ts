@@ -10,9 +10,11 @@
 import { LitElement } from 'lit';
 import {
   AppModel,
+  NoGrantedDeviceError,
   type AppModelOptions,
   type ConnectionKind,
   type PreferencesStore,
+  type TransportFactory,
 } from '@meshcore-web/core/app';
 import {
   WebBluetoothTransport,
@@ -20,6 +22,7 @@ import {
   type BluetoothLike,
   type SerialLike,
 } from '@meshcore-web/core/transport';
+import type { Clock } from '@meshcore-web/core/util/clock';
 import { detectFeatures } from './features.js';
 import { SignalController } from './signal-controller.js';
 
@@ -57,6 +60,42 @@ export function browserPreferences(): PreferencesStore | undefined {
   }
 }
 
+/** How long a remembered Bluetooth radio may take to show up (advertise) before we try anyway. */
+export const BLE_RECONNECT_ADVERTISEMENT_TIMEOUT_MS = 10000;
+
+/** USB Serial: a reconnect reopens a port granted before (`getPorts()`), else shows the chooser. */
+export function serialTransportFactory(serial: SerialLike): TransportFactory {
+  return async (req) => {
+    if (req.reconnect) {
+      const [port] = await serial.getPorts();
+      if (port) return new WebSerialTransport({ port });
+    }
+    if (req.auto) throw new NoGrantedDeviceError('No previously allowed serial port');
+    return new WebSerialTransport({ serial });
+  };
+}
+
+/**
+ * Bluetooth: a reconnect reuses the radio's granted device (`getDevices()`, matched by the stored
+ * `bleDeviceId`) and waits for it to advertise; otherwise it shows the chooser.
+ */
+export function bleTransportFactory(bluetooth: BluetoothLike, clock?: Clock): TransportFactory {
+  return async (req) => {
+    if (req.reconnect) {
+      const device = await WebBluetoothTransport.getGrantedDevice(bluetooth, req.device?.bleDeviceId);
+      if (device) {
+        return new WebBluetoothTransport({
+          device,
+          advertisementTimeoutMs: BLE_RECONNECT_ADVERTISEMENT_TIMEOUT_MS,
+          ...(clock ? { clock } : {}),
+        });
+      }
+    }
+    if (req.auto) throw new NoGrantedDeviceError('No previously allowed Bluetooth device');
+    return new WebBluetoothTransport({ bluetooth });
+  };
+}
+
 /** Options for the real browser AppModel; transports only for the APIs this browser has. */
 export function browserAppOptions(g: typeof globalThis = globalThis): AppModelOptions {
   const features = detectFeatures(g);
@@ -66,20 +105,16 @@ export function browserAppOptions(g: typeof globalThis = globalThis): AppModelOp
   if (features.webSerial) {
     const serial = nav.serial as SerialLike;
     reconnectable.push('serial');
-    opts.createSerialTransport = async (req) => {
-      if (req.reconnect) {
-        // a port the user granted before can be reopened without the chooser
-        const [port] = await serial.getPorts();
-        if (port) return new WebSerialTransport({ port });
-      }
-      return new WebSerialTransport({ serial });
-    };
+    opts.createSerialTransport = serialTransportFactory(serial);
   }
   if (features.webBluetooth) {
     const bluetooth = nav.bluetooth as BluetoothLike;
-    opts.createBleTransport = () => new WebBluetoothTransport({ bluetooth });
+    // getDevices() needs persistent Bluetooth permissions (missing in some browsers / behind a flag)
+    if (typeof bluetooth.getDevices === 'function') reconnectable.push('ble');
+    opts.createBleTransport = bleTransportFactory(bluetooth);
   }
   opts.reconnectableKinds = reconnectable;
+  opts.autoReconnect = true;
   const geo = (nav as Navigator & { geolocation?: Geolocation }).geolocation;
   if (geo) {
     opts.geolocation = () =>

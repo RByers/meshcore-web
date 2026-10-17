@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { fromHex, toHex } from '@meshcore-web/core/util/bytes';
 import {
   NUS_SERVICE_UUID,
@@ -23,6 +23,32 @@ describe('WebBluetoothTransport + mock bluetooth', () => {
     // A device that does not advertise NUS is still found by name.
     const quiet = createMockBluetooth({ advertisesService: false });
     await expect(WebBluetoothTransport.requestDevice(quiet.bluetooth)).resolves.toBe(quiet.device);
+  });
+
+  it('getGrantedDevice returns a device granted before, by id, without a chooser', async () => {
+    const mock = createMockBluetooth({ id: 'radio-1' });
+    expect(await WebBluetoothTransport.getGrantedDevice(mock.bluetooth)).toBeUndefined();
+    await WebBluetoothTransport.requestDevice(mock.bluetooth); // the user picks it once
+    expect(await WebBluetoothTransport.getGrantedDevice(mock.bluetooth)).toBe(mock.device);
+    expect(await WebBluetoothTransport.getGrantedDevice(mock.bluetooth, 'radio-1')).toBe(mock.device);
+    expect(await WebBluetoothTransport.getGrantedDevice(mock.bluetooth, 'other')).toBeUndefined();
+    expect(mock.bluetooth.requestCount).toBe(1);
+    const old = createMockBluetooth({ granted: true, getDevices: false });
+    expect(await WebBluetoothTransport.getGrantedDevice(old.bluetooth)).toBeUndefined();
+  });
+
+  it('with advertisementTimeoutMs, waits for the remembered device to advertise before connecting', async () => {
+    const mock = createMockBluetooth({ granted: true, advertising: false });
+    const t = new WebBluetoothTransport({ device: mock.device, advertisementTimeoutMs: 60000 });
+    const connected = t.connect();
+    await vi.waitFor(() => expect(mock.device.watchingAdvertisements).toBe(true));
+    expect(mock.device.gatt.connectCount).toBe(0);
+    mock.device.setAdvertising(true); // comes into range
+    await connected;
+    expect(t.state).toBe('connected');
+    expect(mock.device.gatt.connectCount).toBe(1);
+    expect(mock.device.watchingAdvertisements).toBe(false); // watch stopped
+    await t.disconnect();
   });
 
   it('connects, writes one frame per GATT write, and receives one frame per notification', async () => {

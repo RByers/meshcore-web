@@ -40,6 +40,11 @@ export interface AppModelOptions {
   createEmulatorTransport?: TransportFactory;
   /** Kinds that can reconnect without a chooser. Default ['emulator']. */
   reconnectableKinds?: readonly ConnectionKind[];
+  /**
+   * `init()` reconnects to the most recent radio if the previous page was connected and the user
+   * had not disconnected (see `ConnectionModel.resume`). Default false; on in the browser.
+   */
+  autoReconnect?: boolean;
   /** IndexedDB factory (default `globalThis.indexedDB`); null disables persistence of the device list. */
   indexedDB?: IDBFactory;
   keyRange?: typeof IDBKeyRange;
@@ -139,9 +144,13 @@ export class AppModel {
     };
   }
 
-  /** Loads the known-radios list. Call once at startup. */
+  /**
+   * Loads the known-radios list and (with `autoReconnect`) starts resuming the last connection;
+   * that runs in the background (watch `connection.phase`). Call once at startup.
+   */
   async init(): Promise<void> {
-    await this.refreshDevices();
+    const devices = await this.refreshDevices();
+    if (this.#opts.autoReconnect) void this.connection.resume(devices[0]);
   }
 
   /** The global DevicesRepo, or null when IndexedDB cannot be opened. */
@@ -237,9 +246,9 @@ export class AppModel {
     return m;
   }
 
-  /** Disconnects and releases everything (tests; page unload). */
+  /** Disconnects and releases everything (tests; page unload). The next load may still resume. */
   async dispose(): Promise<void> {
-    await this.connection.disconnect();
+    await this.connection.disconnect({ keepResume: true });
     for (const off of this.#offs.splice(0)) off();
     for (const m of [this.#contacts, this.#channels, this.#unread, this.#conversations, this.#packetLog, this.#contactPaths, this.#positions, ...this.#chats.values()]) m?.dispose();
     this.#remoteAdmin?.dispose();

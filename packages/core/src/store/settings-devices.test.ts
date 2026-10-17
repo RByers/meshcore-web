@@ -39,11 +39,12 @@ describe('DevicesRepo', () => {
     d.events.on('device', (e) => ev.push(e.type));
     const a = await d.recordConnection({ pubKey: key32(1), name: 'A', transport: 'serial', deviceInfo }, 100);
     expect(a).toMatchObject({ pubKey: hexKey(1), name: 'A', firstConnected: 100, lastConnected: 100, transport: 'serial', deviceInfo });
-    await d.recordConnection({ pubKey: key32(2), selfInfo: { name: 'B-self' } as SelfInfo, transport: 'ble' }, 200);
+    await d.recordConnection({ pubKey: key32(2), selfInfo: { name: 'B-self' } as SelfInfo, transport: 'ble', bleDeviceId: 'ble-1' }, 200);
     const again = await d.recordConnection({ pubKey: hexKey(1) }, 300);
     expect(again).toMatchObject({ name: 'A', firstConnected: 100, lastConnected: 300, transport: 'serial', deviceInfo });
     expect((await d.list()).map((r) => r.name)).toEqual(['A', 'B-self']);
-    expect(await d.update(key32(2), { name: 'Bee' })).toMatchObject({ name: 'Bee', lastConnected: 200 });
+    expect(await d.update(key32(2), { name: 'Bee' })).toMatchObject({ name: 'Bee', lastConnected: 200, bleDeviceId: 'ble-1' });
+    expect((await d.get(key32(1)))?.bleDeviceId).toBeUndefined();
     expect(await d.update(key32(9), { name: 'x' })).toBeUndefined();
 
     const store = await RadioStore.open(key32(2), { factory });

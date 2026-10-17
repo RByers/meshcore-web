@@ -44,8 +44,21 @@ export interface TransportRequest {
    * emulator). Factories that cannot do so should fall back to (or reject in favour of) a chooser.
    */
   reconnect: boolean;
+  /**
+   * True when there was no user gesture (resuming on page load): the factory must not open a
+   * chooser, and should reject if it has no granted device to reuse.
+   */
+  auto?: boolean;
   /** The known radio being reconnected, if any. */
   device?: DeviceRecord;
+}
+
+/** Thrown by a factory asked for an `auto` connect that has no granted device. */
+export class NoGrantedDeviceError extends Error {
+  constructor(message = 'No previously allowed device') {
+    super(message);
+    this.name = 'NoGrantedDeviceError';
+  }
 }
 
 /** Builds a (not yet connected) transport. May show a browser chooser (needs a user gesture). */
@@ -63,6 +76,8 @@ export function memoryPreferences(init: Record<string, string> = {}): Preference
 }
 
 export const PREF_LAST_KIND = 'meshcore-web.lastTransportKind';
+/** '1' while a session is up or was lost; '0' after the user disconnects (see {@link ConnectionModel.resume}). */
+export const PREF_RESUME = 'meshcore-web.resumeOnLoad';
 
 export interface ConnectionModelDeps {
   factories: Partial<Record<ConnectionKind, TransportFactory>>;
@@ -179,7 +194,7 @@ export class ConnectionModel {
    * Connects with the given transport kind. Resolves true once connected, false on failure or
    * cancellation (the error is in `error` and a toast is shown). Never rejects.
    */
-  async connect(kind: ConnectionKind, opts: { reconnect?: boolean; device?: DeviceRecord } = {}): Promise<boolean> {
+  async connect(kind: ConnectionKind, opts: { reconnect?: boolean; auto?: boolean; device?: DeviceRecord } = {}): Promise<boolean> {
     const p = this.#phase.peek();
     if (p === 'connecting' || p === 'handshaking' || p === 'connected' || p === 'disconnecting') {
       this.deps.notifications.warning(`Already ${p}`);
@@ -198,13 +213,19 @@ export class ConnectionModel {
       await this.#teardown; // a previous session may still be closing its store
       const factory = this.deps.factories[kind];
       if (!factory) throw new Error(`${CONNECTION_KIND_LABEL[kind]} is not available in this browser`);
-      const req: TransportRequest = { kind, reconnect: opts.reconnect ?? false, ...(opts.device ? { device: opts.device } : {}) };
+      const req: TransportRequest = {
+        kind,
+        reconnect: opts.reconnect ?? false,
+        ...(opts.auto ? { auto: true } : {}),
+        ...(opts.device ? { device: opts.device } : {}),
+      };
       const transport = await factory(req);
       s.transport = transport;
       if (!live()) throw new CancelledError();
       if (transport.state !== 'connected') await transport.connect();
       if (!live()) throw new CancelledError();
       this.#transportInfo.value = transport.info;
+      const bleDeviceId = kind === 'ble' ? transport.info.detail : undefined;
 
       this.#phase.value = 'handshaking';
       const client = new CompanionClient({ clock: this.clock, ...this.deps.clientOptions });
@@ -224,7 +245,13 @@ export class ConnectionModel {
       if (!live()) throw new CancelledError();
       s.pipeline.attachStore(store, async (st) => {
         await devices?.recordConnection(
-          { pubKey: st.pubKey, transport: kind, selfInfo: info.selfInfo, ...(info.deviceInfo ? { deviceInfo: info.deviceInfo } : {}) },
+          {
+            pubKey: st.pubKey,
+            transport: kind,
+            selfInfo: info.selfInfo,
+            ...(info.deviceInfo ? { deviceInfo: info.deviceInfo } : {}),
+            ...(bleDeviceId !== undefined ? { bleDeviceId } : {}),
+          },
           client.clock.now(),
         );
         if (client.connected) await st.channels.syncFromDevice(await client.getChannels(), client.clock.now());
@@ -247,6 +274,7 @@ export class ConnectionModel {
         this.#lastKind.value = kind;
       });
       this.deps.preferences?.setItem(PREF_LAST_KIND, kind);
+      this.deps.preferences?.setItem(PREF_RESUME, '1');
       void this.refreshBattery();
       this.events.emit('connected', { pubKey: store.pubKey, selfInfo: info.selfInfo, kind });
       return true;
@@ -258,6 +286,16 @@ export class ConnectionModel {
       this.#session = null;
       await this.#cleanup(s);
       const e = toErr(err);
+      if (opts.auto) {
+        // resuming on load is best effort: no error state, just say why and offer the buttons
+        batch(() => {
+          this.#phase.value = 'idle';
+          this.#transportInfo.value = null;
+        });
+        const name = opts.device?.name || CONNECTION_KIND_LABEL[kind];
+        this.deps.notifications.warning(`Could not reconnect to ${name} automatically`, e.message || e.name);
+        return false;
+      }
       if (isChooserCancelled(e)) {
         batch(() => {
           this.#phase.value = 'idle';
@@ -287,8 +325,24 @@ export class ConnectionModel {
     return this.connect(kind, { reconnect: this.canReconnect(kind), ...(device ? { device } : {}) });
   }
 
-  /** Closes the session (also cancels a connect in progress). */
-  async disconnect(): Promise<void> {
+  /**
+   * On page load: reconnects without a chooser if the previous page was connected (or lost its
+   * link) and the user had not disconnected. `device` is the radio to resume (normally the most
+   * recently connected one). Resolves false without a toast when there is nothing to resume.
+   */
+  resume(device?: DeviceRecord): Promise<boolean> {
+    if (this.deps.preferences?.getItem(PREF_RESUME) !== '1') return Promise.resolve(false);
+    const kind = device ? (isConnectionKind(device.transport) ? device.transport : null) : this.#lastKind.peek();
+    if (!kind || !this.canReconnect(kind)) return Promise.resolve(false);
+    return this.connect(kind, { reconnect: true, auto: true, ...(device ? { device } : {}) });
+  }
+
+  /**
+   * Closes the session (also cancels a connect in progress). Unless `keepResume`, the next page
+   * load will not reconnect by itself ({@link resume}).
+   */
+  async disconnect(opts: { keepResume?: boolean } = {}): Promise<void> {
+    if (!opts.keepResume) this.deps.preferences?.setItem(PREF_RESUME, '0');
     const s = this.#session;
     if (!s) return;
     this.#session = null;
