@@ -48,11 +48,18 @@ export interface WebBluetoothTransportOptions {
   advertisementTimeoutMs?: number;
   /** Timer source for `advertisementTimeoutMs`; default the system clock. */
   clock?: Clock;
+  /** Chooser filters when `connect()` has to call `requestDevice()`. */
+  requestOptions?: RequestBleDeviceOptions;
 }
 
 export interface RequestBleDeviceOptions {
   /** Also match devices by advertised name prefix (default "MeshCore"); `null` disables. */
   namePrefix?: string | null;
+  /**
+   * Only list the device with exactly this advertised name (a known radio being reconnected
+   * where `getDevices()` is unavailable). Replaces the service and prefix filters.
+   */
+  name?: string;
 }
 
 /**
@@ -79,6 +86,7 @@ export class WebBluetoothTransport extends BaseTransport implements FrameTranspo
   readonly #preferWithResponse: boolean;
   readonly #advertisementTimeoutMs: number;
   readonly #clock: Clock;
+  readonly #requestOptions: RequestBleDeviceOptions;
   #server: BluetoothRemoteGATTServerLike | undefined;
   #rx: BluetoothRemoteGATTCharacteristicLike | undefined;
   #tx: BluetoothRemoteGATTCharacteristicLike | undefined;
@@ -110,6 +118,7 @@ export class WebBluetoothTransport extends BaseTransport implements FrameTranspo
     this.#preferWithResponse = options.preferWriteWithResponse ?? true;
     this.#advertisementTimeoutMs = options.advertisementTimeoutMs ?? 0;
     this.#clock = options.clock ?? systemClock;
+    this.#requestOptions = options.requestOptions ?? {};
   }
 
   /**
@@ -124,6 +133,9 @@ export class WebBluetoothTransport extends BaseTransport implements FrameTranspo
 
   /** Shows the browser's device picker (user gesture required). */
   static requestDevice(bluetooth: BluetoothLike, options: RequestBleDeviceOptions = {}): Promise<BluetoothDeviceLike> {
+    if (options.name) {
+      return bluetooth.requestDevice({ filters: [{ name: options.name }], optionalServices: [NUS_SERVICE_UUID] });
+    }
     const prefix = options.namePrefix === undefined ? MESHCORE_BLE_NAME_PREFIX : options.namePrefix;
     // Filters are OR-ed: match either the advertised NUS service or the name prefix. The
     // service must also be in optionalServices for name-matched devices to grant access.
@@ -138,7 +150,12 @@ export class WebBluetoothTransport extends BaseTransport implements FrameTranspo
 
   get info(): TransportInfo {
     const d = this.#device;
-    return { kind: 'ble', name: d?.name || 'Bluetooth device', ...(d ? { detail: d.id } : {}) };
+    return {
+      kind: 'ble',
+      name: d?.name || 'Bluetooth device',
+      ...(d ? { detail: d.id } : {}),
+      ...(d?.name ? { advertisedName: d.name } : {}),
+    };
   }
 
   async connect(): Promise<void> {
@@ -148,7 +165,7 @@ export class WebBluetoothTransport extends BaseTransport implements FrameTranspo
     try {
       if (!this.#device) {
         if (!this.#bluetooth) throw new TransportError('no BLE device and no Bluetooth object to request one');
-        this.#device = await WebBluetoothTransport.requestDevice(this.#bluetooth);
+        this.#device = await WebBluetoothTransport.requestDevice(this.#bluetooth, this.#requestOptions);
       }
       const device = this.#device;
       if (!device.gatt) throw new TransportError('BLE device has no GATT server');

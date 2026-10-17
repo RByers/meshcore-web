@@ -33,6 +33,8 @@ export interface HarnessOptions {
   /** Drop the serial / BLE kinds (as in a browser without the APIs). */
   serial?: boolean;
   ble?: boolean;
+  /** Give the mock Bluetooth `getDevices()` (persistent permissions); default true. */
+  bleGetDevices?: boolean;
   /** Extra AppModel options (override the defaults below). */
   app?: AppModelOptions;
   /** The clock to use (default: a fresh SkippableClock); pass one to derive scenario options from it. */
@@ -154,6 +156,7 @@ export function createHarness(opts: HarnessOptions = {}): Harness {
   const bleScenario = basicScenario(scenarioOptions);
   const ble = createMockBluetooth({
     name: 'MeshCore-Emulator',
+    getDevices: opts.bleGetDevices ?? true,
     onFrameFromHost: (frame) => bleScenario.emulator.handleFrame(frame),
   });
   bleScenario.emulator.onFrame((f) => ble.pushFrameToHost(f));

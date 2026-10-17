@@ -89,7 +89,9 @@ that talk to the device go through `connection.client.peek()` (a `CompanionClien
 - Reconnect: `connection.reconnect(deviceRecord)` reuses a granted device where the API allows
   (`reconnectableKinds`: the emulator always; Web Serial via `getPorts()`; Web Bluetooth via
   `getDevices()` when the browser has persistent permissions, matched by `DeviceRecord.bleDeviceId`
-  and waiting for the radio to advertise first).
+  and waiting for the radio to advertise first). Where Bluetooth can't skip the chooser (no
+  `getDevices()`, e.g. Chrome without the persistent-permissions flag), the chooser is filtered to
+  the radio's advertised name (`DeviceRecord.bleName`) so it lists only that radio.
 - Resume on load: with `autoReconnect` (on in the browser) `AppModel.init()` calls
   `connection.resume(mostRecentDevice)`, which reconnects without a chooser (`TransportRequest.auto`:
   factories must not open one) if the previous page was connected or lost its link. A user

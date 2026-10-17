@@ -299,6 +299,11 @@ export interface DeviceRecord {
   transport: StoredTransportKind;
   /** Web Bluetooth `BluetoothDevice.id` of the last BLE connection (per-origin, stable). */
   bleDeviceId?: string;
+  /**
+   * Advertised Bluetooth name of the last BLE connection ("MeshCore-<node name>"): narrows the
+   * chooser to this radio when the browser can't reuse `bleDeviceId` (no `getDevices()`).
+   */
+  bleName?: string;
   deviceInfo?: DeviceInfo;
   selfInfo?: SelfInfo;
 }

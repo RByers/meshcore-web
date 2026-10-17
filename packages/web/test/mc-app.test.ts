@@ -235,6 +235,24 @@ describe('connect flows', () => {
     expect(t.ble.bluetooth.requestCount).toBe(1);
   });
 
+  it('without getDevices(), Reconnect shows a chooser that lists only the known Bluetooth radio', async () => {
+    const t = harness({ bleGetDevices: false, app: { reconnectableKinds: ['emulator', 'serial'] } });
+    await t.mount();
+    await t.click('[data-connect="ble"]');
+    await t.until(() => t.app.connection.phase.value === 'connected', 5000, 'connected');
+    expect(t.ble.bluetooth.lastRequestOptions?.filters).toContainEqual({ namePrefix: 'MeshCore' });
+    await t.app.connection.capture!.idle();
+    await t.until(() => t.app.devices.value[0]?.bleName === 'MeshCore-Emulator', 3000, 'ble name recorded');
+
+    await t.click('[data-action="disconnect"]');
+    await t.until(() => t.app.connection.phase.value === 'disconnected', 3000, 'disconnected');
+    await t.until(() => t.query('[data-reconnect]'), 3000, 'connect page with known radio');
+    await t.click('[data-reconnect]');
+    await t.until(() => t.app.connection.phase.value === 'connected', 5000, 'reconnected');
+    expect(t.ble.bluetooth.requestCount).toBe(2);
+    expect(t.ble.bluetooth.lastRequestOptions?.filters).toEqual([{ name: 'MeshCore-Emulator' }]);
+  });
+
   it('keeps the nav visible on a narrow viewport', async () => {
     const t = harness();
     await page.viewport(375, 700);

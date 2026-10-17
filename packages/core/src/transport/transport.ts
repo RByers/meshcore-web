@@ -10,6 +10,8 @@ export interface TransportInfo {
   name: string;
   /** Optional extra detail (BLE device id, USB vendor/product ids, …). */
   detail?: string;
+  /** BLE only: the device's advertised name, if it has one (e.g. "MeshCore-alice"). */
+  advertisedName?: string;
 }
 
 export interface TransportEvents {

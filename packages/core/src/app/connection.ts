@@ -319,6 +319,7 @@ export class ConnectionModel {
       if (!live()) throw new CancelledError();
       this.#transportInfo.value = transport.info;
       const bleDeviceId = kind === 'ble' ? transport.info.detail : undefined;
+      const bleName = kind === 'ble' ? transport.info.advertisedName : undefined;
 
       this.#phase.value = 'handshaking';
       const client = new CompanionClient({ clock: this.clock, ...this.deps.clientOptions });
@@ -369,6 +370,7 @@ export class ConnectionModel {
             selfInfo: info.selfInfo,
             ...(info.deviceInfo ? { deviceInfo: info.deviceInfo } : {}),
             ...(bleDeviceId !== undefined ? { bleDeviceId } : {}),
+            ...(bleName !== undefined ? { bleName } : {}),
           },
           client.clock.now(),
         );
@@ -436,7 +438,10 @@ export class ConnectionModel {
     }
   }
 
-  /** Reconnects to a known radio (or the last used kind) without a chooser where possible. */
+  /**
+   * Reconnects to a known radio (or the last used kind) without a chooser where possible; a
+   * Bluetooth chooser that can't be avoided lists only that radio (`DeviceRecord.bleName`).
+   */
   reconnect(device?: DeviceRecord): Promise<boolean> {
     const kind = device && isConnectionKind(device.transport) ? device.transport : this.#lastKind.peek();
     if (!kind) {

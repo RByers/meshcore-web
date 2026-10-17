@@ -77,7 +77,8 @@ export function serialTransportFactory(serial: SerialLike): TransportFactory {
 
 /**
  * Bluetooth: a reconnect reuses the radio's granted device (`getDevices()`, matched by the stored
- * `bleDeviceId`) and waits for it to advertise; otherwise it shows the chooser.
+ * `bleDeviceId`) and waits for it to advertise; otherwise it shows the chooser, narrowed to the
+ * known radio's advertised name (`bleName`) when there is one.
  */
 export function bleTransportFactory(bluetooth: BluetoothLike, clock?: Clock): TransportFactory {
   return async (req) => {
@@ -92,7 +93,8 @@ export function bleTransportFactory(bluetooth: BluetoothLike, clock?: Clock): Tr
       }
     }
     if (req.auto) throw new NoGrantedDeviceError('No previously allowed Bluetooth device');
-    return new WebBluetoothTransport({ bluetooth });
+    const name = req.device?.bleName;
+    return new WebBluetoothTransport({ bluetooth, ...(name ? { requestOptions: { name } } : {}) });
   };
 }
 

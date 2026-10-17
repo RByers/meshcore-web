@@ -25,6 +25,25 @@ describe('WebBluetoothTransport + mock bluetooth', () => {
     await expect(WebBluetoothTransport.requestDevice(quiet.bluetooth)).resolves.toBe(quiet.device);
   });
 
+  it('requestDevice with a name lists only that radio', async () => {
+    const mock = createMockBluetooth({ name: 'MeshCore-alice' });
+    await expect(WebBluetoothTransport.requestDevice(mock.bluetooth, { name: 'MeshCore-alice' })).resolves.toBe(mock.device);
+    expect(mock.bluetooth.lastRequestOptions).toEqual({
+      filters: [{ name: 'MeshCore-alice' }],
+      optionalServices: [NUS_SERVICE_UUID],
+    });
+    await expect(WebBluetoothTransport.requestDevice(mock.bluetooth, { name: 'MeshCore-bob' })).rejects.toThrow(/cancelled/);
+  });
+
+  it('reports the advertised name in info, and uses requestOptions for its chooser', async () => {
+    const mock = createMockBluetooth({ name: 'MeshCore-alice' });
+    const t = new WebBluetoothTransport({ bluetooth: mock.bluetooth, requestOptions: { name: 'MeshCore-alice' } });
+    await t.connect();
+    expect(mock.bluetooth.lastRequestOptions?.filters).toEqual([{ name: 'MeshCore-alice' }]);
+    expect(t.info).toEqual({ kind: 'ble', name: 'MeshCore-alice', detail: mock.device.id, advertisedName: 'MeshCore-alice' });
+    await t.disconnect();
+  });
+
   it('getGrantedDevice returns a device granted before, by id, without a chooser', async () => {
     const mock = createMockBluetooth({ id: 'radio-1' });
     expect(await WebBluetoothTransport.getGrantedDevice(mock.bluetooth)).toBeUndefined();
@@ -60,7 +79,7 @@ describe('WebBluetoothTransport + mock bluetooth', () => {
     t.events.on('state', (s) => states.push(s));
     const frames = collectFrames(t);
     await t.connect();
-    expect(t.info).toEqual({ kind: 'ble', name: 'MeshCore-mock', detail: 'mock-ble-device-id' });
+    expect(t.info).toEqual({ kind: 'ble', name: 'MeshCore-mock', detail: 'mock-ble-device-id', advertisedName: 'MeshCore-mock' });
     expect(mock.tx.notifying).toBe(true);
     await t.send(fromHex('1603'));
     await t.send(fromHex('0a'));
