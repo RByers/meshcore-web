@@ -144,7 +144,9 @@ export function messagePathSpec(m: MessageRecord, packet: PacketRecord | undefin
     spec.note = `Hops from the packet log (packet #${packet.id}).`;
   } else if (hops > 0) {
     spec.hopCount = hops;
-    spec.note = 'The radio reports only the hop count for messages. The hops are listed when the packet that carried the message is in the packet log.';
+    spec.note =
+      'The radio reports only the hop count for messages; the repeaters are read from the packet that carried it. ' +
+      'That packet is not in the packet log (most likely the message arrived while the app was not connected), so they were not recorded.';
   }
   return spec;
 }

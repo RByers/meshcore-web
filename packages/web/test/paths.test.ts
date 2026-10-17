@@ -88,7 +88,7 @@ describe('path view (issue #2)', () => {
     location.hash = `#/channel/${pub}`;
     const link = '.msg[data-dir="in"] [data-field="route"] mc-hops-link';
     await openedPath(t, link);
-    expect(t.query('[data-path-list]')!.textContent).toContain('2 unknown');
+    expect(t.query('[data-path-list]')!.textContent).toContain('2 repeaters, not recorded');
     expect(t.query('[data-field="path-note"]')!.textContent).toContain('only the hop count');
     expect(stops(t).map((s) => s.label)).toEqual(['Dave', 'Emulator (you)']);
     await t.click('[data-action="close-path"]');

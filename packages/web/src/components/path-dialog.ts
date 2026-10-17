@@ -277,7 +277,7 @@ export class McPathDialog extends AppElement {
       <ol data-path-list aria-label="Stops">
         ${g.stops.map((s, i) =>
           s.role === 'to' && !hopsKnown && spec.hopCount
-            ? html`<li data-unknown-hops><span class="role">Hops</span><span class="who">${spec.hopCount} unknown</span></li>${this.#stop(s, i)}`
+            ? html`<li data-unknown-hops><span class="role">Hops</span><span class="who">${spec.hopCount === 1 ? '1 repeater' : `${spec.hopCount} repeaters`}, not recorded</span></li>${this.#stop(s, i)}`
             : this.#stop(s, i),
         )}
       </ol>
