@@ -290,6 +290,7 @@ export class McNodeAdminPage extends AppElement {
       </section>`;
     }
     const tab = this.#tab;
+    const outPath = this.app.contacts.outPathLabel(v, this.app.appSettings.pathNames.value);
     return html`
       <header class="card" data-field="header">
         <a href=${hrefFor('/contacts')} aria-label="Back to contacts">←</a>
@@ -298,7 +299,7 @@ export class McNodeAdminPage extends AppElement {
           <h2 data-field="name">${v.name}</h2>
           <div class="muted">
             <span class="type-badge" data-field="type">${TYPE_LABEL[v.typeName]}</span>
-            <span data-field="path">${hopsLink(v.path.label, v.path.kind === 'hops' ? { kind: 'contact', key } : null)}</span>
+            <span data-field="path" title=${outPath.title || nothing}>${hopsLink(outPath.label, v.path.kind === 'hops' ? { kind: 'contact', key } : null)}</span>
             ${v.directSnr !== undefined ? html` · <span data-field="direct-signal">direct SNR ${formatSnr(v.directSnr)}</span>` : nothing}
             · <a href=${hrefFor(`/contact/${v.key}`)} data-action="contact-info">info</a>
             · last seen ${v.lastSeen ? formatRelative(v.lastSeen) : 'never'}
@@ -660,7 +661,10 @@ export class McNodeAdminPage extends AppElement {
         <h3>Path</h3>
         <p>Current path: <strong data-field="current-path"
             >${node.contact.value
-              ? hopsLink(node.contact.value.path.label, node.contact.value.path.kind === 'hops' ? { kind: 'contact', key: this.#key } : null)
+              ? hopsLink(
+                  this.app.contacts.outPathLabel(node.contact.value, this.app.appSettings.pathNames.value).label,
+                  node.contact.value.path.kind === 'hops' ? { kind: 'contact', key: this.#key } : null,
+                )
               : '—'}</strong
           ></p>
         <div class="row">

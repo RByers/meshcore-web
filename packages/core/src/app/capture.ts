@@ -17,7 +17,8 @@
 import type { CompanionClient } from '../client/companion-client.js';
 import type { ChannelMessageEvent, ContactMessageEvent, ContactsChangedEvent, FrameLogEntry } from '../client/types.js';
 import type { SelfInfo } from '../protocol/types.js';
-import { toHex } from '../util/bytes.js';
+import { fromHex, toHex } from '../util/bytes.js';
+import { channelHash } from '../packet/payloads.js';
 import { decodePathLen, PATH_LEN_UNKNOWN } from '../protocol/constants.js';
 import type { Unsubscribe } from '../util/events.js';
 import type { DevicesRepo } from '../store/devices.js';
@@ -48,8 +49,9 @@ export class CapturePipeline {
   #stopped = false;
   /** id of the most recently captured incoming frame (messages link to it). */
   #lastInFrameId: number | undefined;
-  /** Spots zero-hop adverts in the logged packets (direct SNR). */
+  /** Matches message frames to the logged packets that carried them (paths, direct SNR). */
   readonly #rx = new RxPathCorrelator();
+  readonly #channelHashes = new Map<string, number>();
   /** Counters, mostly for tests and the status bar. */
   framesCaptured = 0;
   messagesCaptured = 0;
@@ -170,6 +172,13 @@ export class CapturePipeline {
     key ??= toHex(f.senderPrefix);
     const meta = this.#meta();
     const input = messageInputFromContactFrame(f, key, meta);
+    const path = this.#rx.claimContactMessage({
+      pathLen: f.route.pathLen,
+      senderHash: f.senderPrefix[0] ?? -1,
+      selfHash: fromHex(store.pubKey)[0] ?? -1,
+      now: meta.receivedAt,
+    });
+    if (path) input.path = path;
     if (!(await this.#append(store, input))) return;
     if (key.length === 64) {
       await store.contacts.touch(key, meta.receivedAt);
@@ -189,7 +198,18 @@ export class CapturePipeline {
       }
     }
     const key = ch?.key ?? unknownChannelKey(f.channelIdx);
-    await this.#append(store, messageInputFromChannelFrame(f, key, this.#meta()));
+    const meta = this.#meta();
+    const input = messageInputFromChannelFrame(f, key, meta);
+    if (ch) {
+      let hash = this.#channelHashes.get(ch.key);
+      if (hash === undefined) {
+        hash = await channelHash(ch.psk).catch(() => -1);
+        this.#channelHashes.set(ch.key, hash);
+      }
+      const path = this.#rx.claimChannelMessage({ pathLen: f.route.pathLen, channelHash: hash, now: meta.receivedAt });
+      if (path) input.path = path;
+    }
+    await this.#append(store, input);
   }
 
   #meta(): { receivedAt: number; rawFrameId?: number } {

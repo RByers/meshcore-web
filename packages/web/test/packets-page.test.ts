@@ -195,6 +195,9 @@ describe('/packets page', () => {
   it('clear asks for confirmation and empties the log', async () => {
     const t = await openLog();
     await traffic(t);
+    // the repeater re-broadcasts both packets; let those copies land first so none arrive after the clear
+    await t.until(() => t.queryAll('tr[data-packet-id]').length >= 4, 5000, 'repeated copies');
+    await t.app.connection.capture!.idle();
     await t.click('[data-action="clear"]');
     await t.click('[data-action="confirm-clear"]');
     await t.until(() => t.queryAll('tr[data-packet-id]').length === 0 && t.query('[data-field="counts"]')!.textContent === '0 packets', 3000, 'cleared');

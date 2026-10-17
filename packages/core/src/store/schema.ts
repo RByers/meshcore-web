@@ -227,6 +227,12 @@ export interface MessageRecord {
   senderPrefix?: string;
   /** `frames.id` of the frame this message came from / was sent in. */
   rawFrameId?: number;
+  /**
+   * Incoming flood messages: the path bytes (hop hashes, size per `pathLen`) of the packet that
+   * carried it. The message frames only report path_len, so the capture pipeline fills this from
+   * the matching LOG_RX_DATA packet when it can (best effort; absent otherwise).
+   */
+  path?: Uint8Array;
   /** Epoch ms of the status change to delivered (for outgoing DMs). */
   deliveredAt?: number;
   roundTripMs?: number;

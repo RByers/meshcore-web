@@ -31,6 +31,10 @@ describe('matchPathHash', () => {
   it('restricts hops to repeaters when any repeater matches', () => {
     expect(matchPathHash('ee', NODES, { preferRepeaters: true }).map((n) => n.name)).toEqual(['Echo One', 'Echo Two']);
     expect(matchPathHash('dd', NODES, { preferRepeaters: true }).map((n) => n.name)).toEqual(['Delta']);
+    // room servers forward too (same rule as path-resolver.ts)
+    const room = node('ee08'.padEnd(64, '0'), 'Echo Room', 'room');
+    expect(matchPathHash('ee', [NODES[6]!, room], { preferRepeaters: true }).map((n) => n.name)).toEqual(['Echo Room']);
+    expect(matchPathHash('e', NODES)).toEqual([]); // not whole bytes
   });
 });
 

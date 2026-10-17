@@ -4,6 +4,7 @@ export * from './capture.js';
 export * from './connection.js';
 export * from './store-bound.js';
 export * from './messaging.js';
+export * from './path-resolver.js';
 export * from './contacts-model.js';
 export * from './conversations-model.js';
 export * from './channels-model.js';

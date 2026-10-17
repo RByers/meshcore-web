@@ -160,6 +160,15 @@ describe('messagePathSpec', () => {
     expect(messagePathSpec(msg({}), p)).toMatchObject({ hashes: ['7e', '22'], from: { kind: 'contact', key: ALICE.key }, to: { kind: 'self' } });
   });
 
+  it('prefers the path stored on the message by the capture pipeline (issue #3)', () => {
+    const p = rec(txtPacket(0xa1, 0x01, [0x7e, 0x22]), T - 100);
+    const s = messagePathSpec(msg({ path: Uint8Array.of(0x33, 0x44) }), p);
+    expect(s).toMatchObject({ hashes: ['33', '44'], from: { kind: 'contact', key: ALICE.key }, to: { kind: 'self' } });
+    expect(s.note).toContain('recorded');
+    // a stored path shorter than path_len says is ignored
+    expect(messagePathSpec(msg({ path: Uint8Array.of(0x33) }), p).hashes).toEqual(['7e', '22']);
+  });
+
   it('falls back to the hop count, and names channel senders', () => {
     const s = messagePathSpec(msg({ convType: 'channel', convKey: 'c4'.padEnd(64, '0'), senderName: 'Dave' }), undefined);
     expect(s).toMatchObject({ hashes: [], hopCount: 2, from: { kind: 'name', name: 'Dave' } });

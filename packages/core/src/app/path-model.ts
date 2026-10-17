@@ -7,7 +7,9 @@
  * hop hashes (companion-protocol.md §6). The hashes are recovered from the packet log: the
  * LOG_RX_DATA capture of the TXT_MSG (src hash = the contact's first key byte) or GRP_TXT
  * (channel hash = first byte of the channel key, sha256(psk)) with the same path_len, heard
- * closest to the message's arrival. Without such a packet only the hop count is shown.
+ * closest to the message's arrival. Without such a packet only the hop count is shown. When the
+ * capture pipeline already matched the message to its packet (`MessageRecord.path`, issue #3)
+ * those bytes are used directly and the packet log is not searched.
  */
 
 import { PATH_LEN_UNKNOWN, decodePathLen } from '../protocol/constants.js';
@@ -111,7 +113,15 @@ export function findMessagePacket(
   return copies.reduce((a, b) => (b.ts < a.ts || (b.ts === a.ts && b.id < a.id) ? b : a));
 }
 
-/** The route a received message took (hashes from `packet` when found). */
+/** The hop hashes stored on a message by the capture pipeline (`MessageRecord.path`), or undefined. */
+export function storedMessageHashes(m: MessageRecord): string[] | undefined {
+  if (!m.path || (m.pathLen & 0xff) === PATH_LEN_UNKNOWN) return undefined;
+  const info = decodePathLen(m.pathLen);
+  if (info.hops === 0 || m.path.length < info.byteLength) return undefined;
+  return splitPath(m.path.subarray(0, info.byteLength), info.hashSize).map(toHex);
+}
+
+/** The route a received message took (hashes from `m.path`, else from `packet` when found). */
 export function messagePathSpec(m: MessageRecord, packet: PacketRecord | undefined): PathSpec {
   const from: PathEndpoint =
     m.convType === 'channel'
@@ -125,7 +135,11 @@ export function messagePathSpec(m: MessageRecord, packet: PacketRecord | undefin
     spec.note = 'The radio did not report a flood path for this message.';
     return spec;
   }
-  if (packet) {
+  const stored = storedMessageHashes(m);
+  if (stored) {
+    spec.hashes = stored;
+    spec.note = 'Hops recorded when the message arrived.';
+  } else if (packet) {
     spec.hashes = viewPacket(packet).path;
     spec.note = `Hops from the packet log (packet #${packet.id}).`;
   } else if (hops > 0) {
@@ -206,7 +220,7 @@ export class PathModel {
   async messageSpec(m: MessageRecord): Promise<PathSpec> {
     const store = this.src.store.peek();
     let packet: PacketRecord | undefined;
-    if (store && m.direction === 'in' && hopsOfPathLen(m.pathLen)) {
+    if (store && m.direction === 'in' && hopsOfPathLen(m.pathLen) && !storedMessageHashes(m)) {
       const page = await store.packets
         .query({
           direction: 'rx',

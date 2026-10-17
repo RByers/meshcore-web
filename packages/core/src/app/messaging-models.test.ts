@@ -577,7 +577,28 @@ describe('emoji reactions (MeshCore Open compatible)', () => {
   });
 });
 
-describe('direct signal (issue #11)', () => {
+describe('message paths and direct signal (issues #3, #11)', () => {
+  it('stores the flood path of a relayed channel message and resolves it to the repeater', async () => {
+    const { app, s, store } = await connected();
+    const pub = (await store.channels.byDeviceIndex(0))!.key;
+    // Carol only reaches the repeater, so her message arrives with a 1-hop path
+    s.nodes.carol.sendChannelMessage('Public', 'via the hill');
+    let msg: MessageRecord | undefined;
+    await vi.waitFor(async () => {
+      await app.connection.capture!.idle();
+      msg = (await store.messages.list(pub)).items.find((m) => m.text === 'via the hill');
+      expect(msg).toBeDefined();
+    });
+    expect(msg!.senderName).toBe('Carol');
+    expect([...msg!.path!]).toEqual([s.keys.repeater[0]]);
+    await app.contacts.settled();
+    const countLabel = '1 hop';
+    expect(app.contacts.pathLabel({ pathLen: msg!.pathLen, path: msg!.path, countLabel }, false).label).toBe('1 hop');
+    expect(app.contacts.pathLabel({ pathLen: msg!.pathLen, path: msg!.path, countLabel }, true).label).toBe('Hilltop Repeater');
+    // Alice's stored out path goes via the repeater too
+    expect(app.contacts.outPathLabel(app.contacts.view(toHex(s.keys.alice))!, true).label).toBe('Hilltop Repeater');
+  });
+
   it('records the SNR of zero-hop adverts and messages on the contact, ignoring relayed ones', async () => {
     const { app, s, hex, store } = await connected();
     s.nodes.bob.advertise({ flood: false });

@@ -147,8 +147,9 @@ export class McContactsPage extends AppElement {
 
   #row(v: ContactView) {
     const now = Date.now();
+    const path = this.app.contacts.outPathLabel(v, this.app.appSettings.pathNames.value);
     const meta = [
-      v.path.label,
+      path.label,
       v.directSnr !== undefined ? `direct SNR ${formatSnr(v.directSnr)}` : '',
       v.lastSeen ? `seen ${formatRelative(v.lastSeen, now)}` : 'never seen',
     ].filter(Boolean);
@@ -163,7 +164,7 @@ export class McContactsPage extends AppElement {
             ${!v.onDevice ? html`<span class="flags muted" title="Not on the radio">(not on radio)</span>` : nothing}
             <span class="when">${v.lastActivity ? formatRelative(v.lastActivity, now) : ''}</span>
           </span>
-          <span class="row-sub" data-field="meta">${meta.join(' · ')}</span>
+          <span class="row-sub" data-field="meta" title=${path.title || nothing}>${meta.join(' · ')}</span>
           ${v.lastMessage ? html`<span class="preview">${messagePreview(v.lastMessage)}</span>` : nothing}
         </span>
         ${unreadBadge(v.unread)}

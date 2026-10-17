@@ -12,7 +12,10 @@
  * interpolated points sit on the straight segments the map draws.
  */
 
+import { ContactType } from '../protocol/constants.js';
+import { fromHex } from '../util/bytes.js';
 import type { ContactKind } from './messaging.js';
+import { resolveHop, type PathContact } from './path-resolver.js';
 import { boundsOf, haversineMeters, hasLocation, latLonToWorld, worldToLatLon, type Bounds, type LatLon } from './geo.js';
 
 /** A node that can appear on a path (a contact, or this radio). */
@@ -96,17 +99,43 @@ export function isApproximate(kind: PathPositionKind): boolean {
 
 const KIND_RANK: Record<PathGeoNode['kind'], number> = { repeater: 0, room: 1, chat: 2, sensor: 3, self: 4 };
 
+const KIND_TYPE: Record<PathGeoNode['kind'], number> = {
+  chat: ContactType.CHAT,
+  repeater: ContactType.REPEATER,
+  room: ContactType.ROOM,
+  sensor: ContactType.SENSOR,
+  self: ContactType.NONE,
+};
+
+const HEX_BYTES = /^(?:[0-9a-f]{2})+$/i;
+
+/** A {@link PathGeoNode} in the shape path-resolver.ts matches on. */
+interface ResolvableNode extends PathContact {
+  node: PathGeoNode;
+}
+
+/** Per node list (lists are recomputed, not mutated, when contacts change). */
+const resolvable = new WeakMap<readonly PathGeoNode[], ResolvableNode[]>();
+
+function resolvableNodes(nodes: readonly PathGeoNode[]): ResolvableNode[] {
+  let out = resolvable.get(nodes);
+  if (!out) {
+    out = nodes.flatMap((n) => (HEX_BYTES.test(n.key) ? [{ pubKey: fromHex(n.key), name: n.name, type: KIND_TYPE[n.kind], node: n }] : []));
+    resolvable.set(nodes, out);
+  }
+  return out;
+}
+
 /**
- * Known nodes whose public key starts with `hash` (hex, case-insensitive). With `preferRepeaters`
- * (path hops: only repeaters forward floods), repeater matches win when there are any.
- * Results are ordered repeaters first, then by name.
+ * Known nodes whose public key starts with `hash` (hex, case-insensitive), matched by
+ * path-resolver.ts's {@link resolveHop} (the resolver behind "Show path as node names"). With
+ * `preferRepeaters` (path hops: only repeaters and room servers forward floods), their matches
+ * win when there are any. Results are ordered repeaters first, then by name.
  */
 export function matchPathHash(hash: string, nodes: readonly PathGeoNode[], opts: { preferRepeaters?: boolean } = {}): PathGeoNode[] {
-  const h = hash.toLowerCase();
-  if (!h) return [];
-  let out = nodes.filter((n) => n.key.toLowerCase().startsWith(h));
-  if (opts.preferRepeaters && out.some((n) => n.kind === 'repeater')) out = out.filter((n) => n.kind === 'repeater');
-  return out.sort((a, b) => KIND_RANK[a.kind] - KIND_RANK[b.kind] || a.name.localeCompare(b.name));
+  if (!HEX_BYTES.test(hash)) return [];
+  const hop = resolveHop(fromHex(hash), resolvableNodes(nodes), { preferForwarders: opts.preferRepeaters === true });
+  return hop.candidates.map((c) => c.node).sort((a, b) => KIND_RANK[a.kind] - KIND_RANK[b.kind] || a.name.localeCompare(b.name));
 }
 
 function located(n: PathGeoNode | undefined): n is PathGeoNode & LatLon {

@@ -1,7 +1,7 @@
 /**
- * `/contact/:key`: what we know about one contact — type, key, path, direct (zero-hop) signal,
- * last seen, location — with links to the chat / node pages. Channel senders and DM headers
- * link here (issue #12).
+ * `/contact/:key`: what we know about one contact — type, key, path (as names when the setting
+ * is on), direct (zero-hop) signal, last seen, location — with links to the chat / node pages.
+ * Channel senders and DM headers link here (issue #12).
  */
 import { css, html, nothing } from 'lit';
 import { hasLocation } from '@meshcore-web/core/app';
@@ -65,6 +65,7 @@ export class McContactInfoPage extends AppElement {
       </section>`;
     }
     const c = v.record;
+    const path = contacts.outPathLabel(v, this.app.appSettings.pathNames.value);
     const located = hasLocation(c);
     return html`
       <header class="card" data-field="header">
@@ -80,7 +81,7 @@ export class McContactInfoPage extends AppElement {
           <dt>Public key</dt>
           <dd class="mono" data-field="key">${v.key}</dd>
           <dt>Path</dt>
-          <dd data-field="path">${hopsLink(v.path.label, v.path.kind === 'hops' ? { kind: 'contact', key: v.key } : null)}</dd>
+          <dd data-field="path" title=${path.title || nothing}>${hopsLink(path.label, v.path.kind === 'hops' ? { kind: 'contact', key: v.key } : null)}</dd>
           <dt>Direct signal</dt>
           <dd data-field="direct-signal">
             ${v.directSnr !== undefined

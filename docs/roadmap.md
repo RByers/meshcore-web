@@ -179,8 +179,17 @@ take the candidate nearest the estimate; no map when nothing is located) and `pa
 (`app.contactPaths`: contact out_path, logged packets, messages). Messages only carry path_len, so their
 hashes are recovered from the packet log (the TXT_MSG from the contact / GRP_TXT with the channel
 hash and the same path_len heard nearest the arrival); otherwise only the hop count is shown.
-Not linked: the contacts list row (the row is itself a link). The path hash resolver will be
-unified with issue #3's resolver.
+Not linked: the contacts list row (the row is itself a link). Hop hashes are matched by issue #3's
+`path-resolver.ts` (`resolveHop`); a message's stored `MessageRecord.path` is used before the
+packet-log search.
+
+**Path as node names (issue #3).** App setting `AppSettingsModel.pathNames` ("Show path as node
+names", Settings page): paths render as "Alice > Bob > a3" (hop hash → contact via
+`path-resolver.ts`, repeaters / rooms preferred, unknown → hex, shared hash → "a3?" with the
+candidates in the tooltip) in message meta, the chat header, contacts list, contact info, node
+page and packet log; still wrapped in the hops link. The capture pipeline matches each incoming
+flood message to its LOG_RX_DATA packet (`rx-path-correlator.ts`) and stores the path bytes in
+`MessageRecord.path` (optional, best effort).
 
 **Not done in Phase 12:** settings export/import (app preferences + per-radio local data as a
 file); a dedicated keyboard/accessibility audit beyond what earlier phases added; `REPO_URL`

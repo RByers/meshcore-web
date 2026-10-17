@@ -5,7 +5,7 @@
  * State and logic live in the core PacketLogModel; this component renders and forwards intents.
  */
 import { css, html, nothing, type TemplateResult } from 'lit';
-import type { FrameRow, LogView, PacketFilter, PacketRow } from '@meshcore-web/core/app';
+import { formatResolvedPath, resolvedPathTitle, type FrameRow, type LogView, type PacketFilter, type PacketRow } from '@meshcore-web/core/app';
 import { PayloadType, RouteType, payloadTypeName } from '@meshcore-web/core/packet';
 import { CMD, PUSH, RESP } from '@meshcore-web/core/protocol';
 import { AppElement } from '../../app-context.js';
@@ -541,6 +541,15 @@ export class McPacketsPage extends AppElement {
     </div>`;
   }
 
+  /** Path / hops: hex hashes, or node names with the "Show path as node names" setting (issue #3). */
+  #pathCell(r: PacketRow): TemplateResult {
+    if (r.hops === null) return html`<td class="mono" data-field="path">—</td>`;
+    if (!r.path.length) return html`<td class="mono" data-field="path">${r.hops}</td>`;
+    const hops = this.app.contacts.resolvePath(r.path);
+    const text = this.app.appSettings.pathNames.value ? formatResolvedPath(hops) : r.path.join('→');
+    return html`<td class="mono" data-field="path" title=${resolvedPathTitle(hops)}>${hopsLink(`${text} (${r.hops})`, { kind: 'packet', id: r.id })}</td>`;
+  }
+
   #packetTable(rows: readonly PacketRow[]): TemplateResult {
     const sel = this.selected?.tab === 'packets' ? this.selected.id : null;
     return html`<div class="tablewrap">
@@ -574,9 +583,7 @@ export class McPacketsPage extends AppElement {
               </td>
               <td>${r.typeName}</td>
               <td>${r.routeName || '—'}</td>
-              <td class="mono" title=${r.path.join(' → ')} data-field="path">
-                ${r.hops === null ? '—' : r.path.length ? hopsLink(`${r.path.join('→')} (${r.hops})`, { kind: 'packet', id: r.id }) : String(r.hops)}
-              </td>
+              ${this.#pathCell(r)}
               <td class="num">${rec.snr !== undefined ? `${rec.snr} dB` : '—'}${rec.rssi !== undefined ? ` / ${rec.rssi}` : ''}</td>
               ${rec.format === 'none'
                 ? html`<td class="num muted" title="On-air bytes unknown: logged from the command sent to the radio">—</td>`

@@ -998,6 +998,12 @@ export class McSettingsPage extends AppElement {
         </label>
         ${this.#err('retention')}
         <label class="check"
+          ><input type="checkbox" name="pathNames" .checked=${s.pathNames.value}
+            @change=${(e: Event) => s.setPathNames((e.target as HTMLInputElement).checked)} />
+          Show path as node names</label
+        >
+        <p class="hint">Shows paths as “Alice &gt; Bob &gt; a3” instead of “3 hops”. Unknown repeaters show their hash; “a3?” means several contacts share it.</p>
+        <label class="check"
           ><input type="checkbox" name="storePrivateKey" .checked=${s.storePrivateKey.value}
             @change=${(e: Event) => void s.setStorePrivateKey((e.target as HTMLInputElement).checked)} />
           Store an exported private key in this browser to decrypt direct messages in the packet inspector</label

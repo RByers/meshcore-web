@@ -55,7 +55,7 @@ export interface PathCandidate {
 }
 
 /** One hop of a path, with the candidates whose key starts with its hash. */
-export interface ResolvedHop {
+export interface ResolvedPathHop {
   hash: Uint8Array;
   hex: string;
   matches: readonly PathCandidate[];
@@ -67,7 +67,7 @@ export interface ResolvedPath {
   kind: 'flood' | 'direct' | 'hops';
   pathLen: number;
   hashSize: number;
-  hops: readonly ResolvedHop[];
+  hops: readonly ResolvedPathHop[];
   /** "flood", "direct", or "Hilltop → 7f → …". */
   label: string;
 }
@@ -125,7 +125,7 @@ function startsWith(key: Uint8Array, hash: Uint8Array): boolean {
 export function resolvePathHops(pathLen: number, path: Uint8Array, candidates: readonly PathCandidate[]): ResolvedPath {
   const info = decodePathLen(pathLen);
   if (info.isFlood) return { kind: 'flood', pathLen: info.raw, hashSize: 0, hops: [], label: 'flood' };
-  const hops = splitHops(path.subarray(0, info.byteLength), info.hashSize).map((hash): ResolvedHop => {
+  const hops = splitHops(path.subarray(0, info.byteLength), info.hashSize).map((hash): ResolvedPathHop => {
     const matches = candidates.filter((c) => startsWith(c.pubKey, hash));
     const hex = toHex(hash);
     return { hash, hex, matches, label: matches.length ? matches.map((m) => m.name).join(' | ') : hex };

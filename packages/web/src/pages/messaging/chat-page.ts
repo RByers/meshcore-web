@@ -4,13 +4,7 @@
  * composer with byte counter (Enter sends, Shift+Enter newline) and replies.
  */
 import { css, html, nothing, type PropertyValues, type TemplateResult } from 'lit';
-import {
-  hasLocation,
-  parseReply,
-  pathDisplay,
-  receivedSignal,
-  type ChatModel,
-} from '@meshcore-web/core/app';
+import { hasLocation, parseReply, receivedSignal, type ChatModel } from '@meshcore-web/core/app';
 import type { ConversationType, MessageRecord } from '@meshcore-web/core/store';
 import { AppElement } from '../../app-context.js';
 import { formatDuration, formatRelative, formatSnr, formatTime } from '../../format.js';
@@ -529,16 +523,20 @@ export class McChatPage extends AppElement {
   }
 
   /**
-   * How an incoming message arrived (issue #11): hop count (a link to the path view, issue #2)
+   * How an incoming message arrived (issue #11): hop count or the node-name chain (issue #3),
+   * a link to the path view (issue #2),
    * and, only when it was heard zero hop, its SNR. The last-hop SNR stays in the tooltip.
    */
   #signal(m: MessageRecord) {
     const sig = receivedSignal(m);
-    const title = sig.lastHopSnr !== undefined ? `SNR ${formatSnr(sig.lastHopSnr)}${sig.zeroHop ? '' : ' (last hop)'}` : '';
-    const path = hopsLink(sig.pathLabel, (sig.hops ?? 0) > 0 ? { kind: 'message', message: m } : null);
+    const path = this.app.contacts.pathLabel({ pathLen: m.pathLen, path: m.path, countLabel: sig.pathLabel }, this.app.appSettings.pathNames.value);
+    const title = [path.title, sig.lastHopSnr !== undefined ? `SNR ${formatSnr(sig.lastHopSnr)}${sig.zeroHop ? '' : ' (last hop)'}` : '']
+      .filter(Boolean)
+      .join('\n');
+    const link = hopsLink(path.label, (sig.hops ?? 0) > 0 ? { kind: 'message', message: m } : null);
     return html`<span data-field="route"
       ><span data-field="signal" title=${title || nothing}
-        ><span data-field="path">${path}</span>${sig.snr !== undefined ? html` · <span data-field="snr">SNR ${formatSnr(sig.snr)}</span>` : nothing}</span
+        ><span data-field="path">${link}</span>${sig.snr !== undefined ? html` · <span data-field="snr">SNR ${formatSnr(sig.snr)}</span>` : nothing}</span
       ></span
     >`;
   }
@@ -575,8 +573,8 @@ export class McChatPage extends AppElement {
     const v = this.app.contacts.view(this.key);
     const c = chat.contact.value;
     if (!c) return '';
-    const path = pathDisplay(c.outPathLen);
-    const parts: (string | TemplateResult)[] = [hopsLink(path.label, path.kind === 'hops' ? { kind: 'contact', key: this.key } : null)];
+    const path = v ? this.app.contacts.outPathLabel(v, this.app.appSettings.pathNames.value) : undefined;
+    const parts: (string | TemplateResult)[] = [path ? hopsLink(path.label, v?.path.kind === 'hops' ? { kind: 'contact', key: this.key } : null) : ''];
     if (v?.directSnr !== undefined) parts.push(`direct SNR ${formatSnr(v.directSnr)}`);
     if (c.lastSeen) parts.push(`seen ${formatRelative(c.lastSeen)}`);
     return dotJoin(parts);

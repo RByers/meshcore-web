@@ -1,6 +1,7 @@
 /**
  * App-level (local, not sent to the radio) settings: theme, time format, packet log retention
- * and whether an exported private key may be kept for decrypting DMs in the packet inspector.
+ * whether an exported private key may be kept for decrypting DMs in the packet inspector and
+ * whether paths are shown as node names.
  * Stored in the global PreferencesStore (localStorage in the browser).
  */
 
@@ -19,6 +20,7 @@ export const PREF_THEME = 'meshcore-web.theme';
 export const PREF_TIME_FORMAT = 'meshcore-web.timeFormat';
 export const PREF_PACKET_RETENTION_DAYS = 'meshcore-web.packetRetentionDays';
 export const PREF_STORE_PRIVATE_KEY = 'meshcore-web.storePrivateKey';
+export const PREF_PATH_NAMES = 'meshcore-web.pathNames';
 
 /** Store default (DEFAULT_RETENTION.packets, store/time-log.ts). */
 export const DEFAULT_PACKET_RETENTION_DAYS = 90;
@@ -39,6 +41,7 @@ export class AppSettingsModel {
   readonly #retentionDays: Signal<number>;
   #retentionSet: boolean;
   readonly #storeKey: Signal<boolean>;
+  readonly #pathNames: Signal<boolean>;
 
   readonly theme: ReadonlySignal<ThemePreference>;
   readonly timeFormat: ReadonlySignal<TimeFormatPreference>;
@@ -46,6 +49,11 @@ export class AppSettingsModel {
   readonly packetRetentionDays: ReadonlySignal<number>;
   /** Default off. */
   readonly storePrivateKey: ReadonlySignal<boolean>;
+  /**
+   * Show paths as "Alice > Bob > a3" (hop hashes resolved to known contacts) instead of "N hops"
+   * (issue #3). Default off.
+   */
+  readonly pathNames: ReadonlySignal<boolean>;
 
   #offs: Array<() => void> = [];
 
@@ -65,6 +73,8 @@ export class AppSettingsModel {
     this.timeFormat = this.#timeFormat.readonly;
     this.packetRetentionDays = this.#retentionDays.readonly;
     this.storePrivateKey = this.#storeKey.readonly;
+    this.#pathNames = signal(prefs.getItem(PREF_PATH_NAMES) === 'true');
+    this.pathNames = this.#pathNames.readonly;
 
     // apply a user-chosen retention whenever a radio's store opens (the default needs no prune)
     this.#offs.push(
@@ -112,6 +122,11 @@ export class AppSettingsModel {
     this.#storeKey.value = on;
     this.prefs.setItem(PREF_STORE_PRIVATE_KEY, on ? 'true' : 'false');
     if (!on) await this.connection.store.peek()?.settings.delete(PRIVATE_KEY_SETTING);
+  }
+
+  setPathNames(on: boolean): void {
+    this.#pathNames.value = on;
+    this.prefs.setItem(PREF_PATH_NAMES, on ? 'true' : 'false');
   }
 
   /** Formats epoch ms as a clock time following the time-format preference. */

@@ -25,6 +25,7 @@ import {
   resolveSenderName,
   type SenderTarget,
 } from './messaging.js';
+import { pathLabel, resolvePath, type PathLabel, type ResolvedHop, type ResolvePathOptions } from './path-resolver.js';
 
 export type ContactSort = 'recent' | 'name';
 export type ContactFilter = 'all' | ContactKind | 'favourites' | 'unread';
@@ -193,6 +194,24 @@ export class ContactsModel extends StoreBoundModel {
   showByName(name: string): void {
     this.#filter.value = 'all';
     this.#search.value = name;
+  }
+
+  /** Resolves path hop hashes to known contacts (tracked; see {@link resolvePath}). */
+  resolvePath(hashes: Uint8Array | readonly number[] | readonly (string | Uint8Array)[], opts: ResolvePathOptions = {}): ResolvedHop[] {
+    return resolvePath(hashes, this.#contacts.value, opts);
+  }
+
+  /**
+   * Label for a path: the hop-count `countLabel`, or with `names` the "Alice > Bob" chain when
+   * the path bytes are known (issue #3).
+   */
+  pathLabel(o: { pathLen: number; path?: Uint8Array | undefined; countLabel: string }, names: boolean): PathLabel {
+    return pathLabel(o, this.#contacts.value, { names });
+  }
+
+  /** Label for a contact's stored out path (flood / direct / N hops, or the name chain). */
+  outPathLabel(v: Pick<ContactView, 'record' | 'path'>, names: boolean): PathLabel {
+    return this.pathLabel({ pathLen: v.record.outPathLen, path: v.record.outPath, countLabel: v.path.label }, names);
   }
 
   protected override bind(store: RadioStore) {

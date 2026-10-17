@@ -46,6 +46,8 @@ export interface MessageInput {
   rawFrameId?: number;
   /** The text went over the air SMAZ-compressed ("s:" envelope); `text` is the plain text. */
   compressed?: boolean;
+  /** Flood path bytes, when the capture pipeline matched the message to its LOG_RX_DATA packet. */
+  path?: Uint8Array;
 }
 
 export interface AppendOptions {
@@ -157,7 +159,7 @@ export class MessagesRepo {
       status: input.status ?? (input.direction === 'in' ? 'delivered' : 'pending'),
       pathLen: input.pathLen ?? 0xff,
     };
-    for (const k of ['ackCode', 'attempt', 'snr', 'senderName', 'senderPrefix', 'rawFrameId', 'compressed'] as const) {
+    for (const k of ['ackCode', 'attempt', 'snr', 'senderName', 'senderPrefix', 'rawFrameId', 'compressed', 'path'] as const) {
       if (input[k] !== undefined) (base as Record<string, unknown>)[k] = input[k];
     }
     const wantUnread = base.direction === 'in' && opts.countUnread !== false && !isCli(base.txtType);
