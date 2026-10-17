@@ -167,7 +167,7 @@ describe('direct chat', () => {
     try {
       const t = await connected();
       const k = keys(t);
-      await go(t, `/chat/${k.alice}`, '[data-field="header-actions"] [data-action="reset-path"]');
+      await t.go(`/chat/${k.alice}`, '[data-field="header-actions"] [data-action="reset-path"]');
       const who = t.query('.who')!.getBoundingClientRect();
       const actions = t.query('[data-field="header-actions"]')!.getBoundingClientRect();
       const header = t.query('header.chat-head')!.getBoundingClientRect();
