@@ -6,3 +6,4 @@ export * from './dot-plot.js';
 export * from './line-chart.js';
 export * from './breakdown.js';
 export * from './stat-tile.js';
+export * from './time-series-chart.js';

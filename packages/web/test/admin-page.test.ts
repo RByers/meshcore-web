@@ -24,6 +24,11 @@ async function connected(): Promise<Harness> {
   return t;
 }
 
+/** Elements matching `selector` inside the `[data-history="chart"]` chart's shadow root. */
+function inChart(t: Harness, chart: 'battery' | 'temperature', selector: string): Element[] {
+  return [...(t.query(`[data-history="${chart}"]`)?.shadowRoot?.querySelectorAll(selector) ?? [])];
+}
+
 function key(t: Harness, name: 'repeater' | 'room' | 'sensor'): string {
   return toHex(t.emulatorScenario().keys[name]);
 }
@@ -95,6 +100,56 @@ describe('node admin page', () => {
       ['MCU temperature', '18.4 °C'],
       ['Temperature (ch 2)', '12.5 °C'],
     ]);
+  });
+
+  it('graphs the archived sensor telemetry: battery and one temperature line per channel', async () => {
+    const t = await connected();
+    const k = key(t, 'sensor');
+    await t.go(`/node/${k}/telemetry`, '[data-action="refresh-telemetry"]');
+    await t.until(() => t.query('[data-field="history-empty"]'), 5000, 'empty history');
+    expect(t.query('[data-field="history-empty"]')!.textContent).toContain('No saved telemetry');
+    expect(t.query('mc-time-series-chart')).toBeNull();
+
+    const points = (chart: 'battery' | 'temperature', series?: string): Element[] =>
+      inChart(t, chart, `[data-mark="point"]${series ? `[data-series="${series}"]` : ''}`);
+    await t.click('[data-action="refresh-telemetry"]');
+    // a single response: one point per series, no lines yet
+    await t.until(() => points('temperature').length === 2, 8000, 'first history points');
+    expect(points('battery')).toHaveLength(1);
+    expect(t.queryAll('[data-mark="line"]')).toHaveLength(0);
+
+    await t.elapse(10 * 60_000);
+    await t.click('[data-action="refresh-telemetry"]');
+    await t.until(() => points('temperature').length === 4, 8000, 'second history points');
+    expect(points('battery')).toHaveLength(2);
+    expect(points('battery').filter((p) => p.hasAttribute('data-hollow'))).toHaveLength(0);
+    expect(points('temperature', 'temp-1')).toHaveLength(2);
+    expect(points('temperature', 'temp-2')).toHaveLength(2);
+    expect(inChart(t, 'temperature', '[data-mark="line"]').map((l) => l.getAttribute('data-series'))).toEqual(['temp-1', 'temp-2']);
+    expect(inChart(t, 'temperature', '[data-legend-key]').map((l) => l.textContent!.trim())).toEqual(['MCU', 'Sensor (ch 2)']);
+    expect(points('temperature', 'temp-2')[0]!.querySelector('title')!.textContent).toMatch(/^Sensor \(ch 2\): 12\.5 · /);
+    expect(points('battery')[0]!.querySelector('title')!.textContent).toMatch(/^Battery: 3\.95 · /);
+    expect(t.query('[data-field="history-empty"]')).toBeNull();
+  });
+
+  it('graphs repeater battery from status reports (hollow) and telemetry (filled)', async () => {
+    const t = await connected();
+    const k = key(t, 'repeater');
+    await t.go(`/node/${k}`, '[data-field="password"]');
+    await login(t, 'password');
+    await t.until(() => t.query('[data-stat="battery"]'), 8000, 'status cards');
+    await t.go(`/node/${k}/telemetry`, '[data-action="refresh-telemetry"]');
+    const points = (): Element[] => inChart(t, 'battery', '[data-mark="point"]');
+    await t.until(() => points().length === 1, 5000, 'status point from the archive');
+    expect(points()[0]!.hasAttribute('data-hollow')).toBe(true);
+
+    await t.elapse(60_000);
+    await t.click('[data-action="refresh-telemetry"]');
+    await t.until(() => points().length === 2, 8000, 'telemetry point');
+    expect(points().map((p) => p.hasAttribute('data-hollow'))).toEqual([true, false]);
+    expect(inChart(t, 'battery', '[data-mark="line"]')).toHaveLength(1);
+    expect(inChart(t, 'battery', '[data-marker-legend]')[0]!.textContent).toMatch(/telemetry\s+status report/);
+    expect(t.query('[data-history="temperature"]')).toBeNull();
   });
 
   it('traces via the repeater and shows the hop SNR', async () => {

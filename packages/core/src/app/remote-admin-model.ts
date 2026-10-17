@@ -23,6 +23,7 @@ import { decodeAvgMinMax, type AvgMinMaxEntry, type LppDecodeResult, type LppRea
 import { parseAccessList, parseNeighbours, parseOwnerInfo } from '../packet/payloads.js';
 import { AclRole, ReqType, TELEM_CHANNEL_SELF } from '../protocol/constants.js';
 import type { NodeStats } from '../protocol/types.js';
+import type { RadioStore } from '../store/radio-store.js';
 import type { ContactRecord } from '../store/schema.js';
 import { concatBytes, fromHex, toHex, u16le, u32le } from '../util/bytes.js';
 import type { Clock } from '../util/clock.js';
@@ -31,8 +32,10 @@ import type { ContactsModel, ContactView } from './contacts-model.js';
 import { contactTypeName, type ContactKind } from './messaging.js';
 import type { CliNodeKind } from './remote-cli-commands.js';
 import { computed, effect, signal, type ReadonlySignal } from './signal.js';
+import { historyPoints, isHistoryFrameFor, loadTelemetryHistory, mergeInto, type TelemetryHistory } from './telemetry-history.js';
 
 export * from './remote-cli-commands.js';
+export * from './telemetry-history.js';
 
 // ---------------------------------------------------------------------------
 // State types
@@ -379,6 +382,9 @@ export class RemoteNodeModel {
   readonly #busy = signal<ReadonlySet<RemoteAction>>(new Set());
   readonly #errors = signal<Readonly<Partial<Record<RemoteAction, string>>>>({});
   readonly #savedPassword = signal<string | null>(null);
+  readonly #history = signal<TelemetryHistory | null>(null);
+  #historyWatch: (() => void) | undefined;
+  #historyLoad: Promise<TelemetryHistory | null> = Promise.resolve(null);
 
   /** The contact (from the contacts model), undefined while unknown / loading. */
   readonly contact: ReadonlySignal<ContactView | undefined>;
@@ -400,6 +406,12 @@ export class RemoteNodeModel {
   readonly errors: ReadonlySignal<Readonly<Partial<Record<RemoteAction, string>>>> = this.#errors.readonly;
   /** Remembered password (SettingsRepo, opt-in), null when none. */
   readonly savedPassword: ReadonlySignal<string | null> = this.#savedPassword.readonly;
+  /**
+   * Battery / temperature history from every archived status and telemetry response of this
+   * node (see telemetry-history.ts). Null until {@link loadTelemetryHistory} has been called and
+   * has loaded, and while no radio store is open.
+   */
+  readonly telemetryHistory: ReadonlySignal<TelemetryHistory | null> = this.#history.readonly;
   readonly loggedIn: ReadonlySignal<boolean>;
   readonly isAdmin: ReadonlySignal<boolean>;
 
@@ -709,6 +721,86 @@ export class RemoteNodeModel {
     });
   }
 
+  // ---- telemetry history ----
+
+  /**
+   * Starts tracking {@link telemetryHistory} (idempotent): loads it from the frame log now and
+   * whenever a radio store opens, appends points as new responses from the node are archived, and
+   * reloads after the frame log is cleared / pruned / imported. Resolves with the latest load
+   * (null when not connected); rejects if that load failed.
+   */
+  loadTelemetryHistory(): Promise<TelemetryHistory | null> {
+    this.#historyWatch ??= effect(() => {
+      const store = this.#deps.connection.store.value;
+      if (!store) {
+        this.#history.value = null;
+        this.#historyLoad = Promise.resolve(null);
+        return;
+      }
+      return this.#bindHistory(store);
+    });
+    return this.#historyLoad;
+  }
+
+  #bindHistory(store: RadioStore): () => void {
+    let stopped = false;
+    let loading = false;
+    let dirty = false;
+    const reload = async (): Promise<TelemetryHistory | null> => {
+      if (loading) {
+        dirty = true;
+        return this.#historyLoad;
+      }
+      loading = true;
+      try {
+        // a response archived while the query ran may or may not be in it: query again
+        for (;;) {
+          dirty = false;
+          const h = await loadTelemetryHistory(store.frames, this.pubKey);
+          if (stopped) return null;
+          if (!dirty) {
+            this.#history.value = h;
+            return h;
+          }
+        }
+      } finally {
+        loading = false;
+      }
+    };
+    const offs = [
+      store.events.on('frame', (r) => {
+        if (!isHistoryFrameFor(r, this.pubKey)) return;
+        if (loading) {
+          dirty = true;
+          return;
+        }
+        const cur = this.#history.peek();
+        if (!cur) return;
+        const add = historyPoints(r, this.pubKey);
+        if (add.battery.length || add.temperature.length) {
+          this.#history.value = mergeInto({ battery: [...cur.battery], temperature: [...cur.temperature] }, add);
+        }
+      }),
+      store.events.on('logChanged', (e) => {
+        if (e.store !== 'frames') return;
+        this.#historyLoad = reload();
+        this.#historyLoad.catch(() => undefined);
+      }),
+    ];
+    this.#historyLoad = reload();
+    this.#historyLoad.catch(() => undefined);
+    return () => {
+      stopped = true;
+      offs.forEach((off) => off());
+    };
+  }
+
+  /** Stops tracking the telemetry history. */
+  dispose(): void {
+    this.#historyWatch?.();
+    this.#historyWatch = undefined;
+  }
+
   /** Clears session state (the connection dropped). */
   reset(): void {
     this.#login.value = { state: 'loggedOut' };
@@ -790,6 +882,7 @@ export class RemoteAdminModel {
 
   dispose(): void {
     this.#dispose();
+    for (const n of this.#nodes.values()) n.dispose();
   }
 }
 

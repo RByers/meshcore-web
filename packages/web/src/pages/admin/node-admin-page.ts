@@ -17,6 +17,7 @@ import {
   type RemoteAction,
   type RemoteNodeModel,
   type StatusField,
+  type TelemetryHistory,
 } from '@meshcore-web/core/app';
 import { toHex } from '@meshcore-web/core/util/bytes';
 import { AppElement } from '../../app-context.js';
@@ -25,6 +26,7 @@ import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
 import { avatar, listStyles, TYPE_LABEL } from '../messaging/common.js';
 import { contactNote, nodeLink, pathLabelView, type NoteLookup } from '../../components/node-link.js';
+import { assignSlots, type TimeSeries } from '../../charts/index.js';
 
 export const NODE_TABS = ['overview', 'telemetry', 'cli', 'tools', 'messages'] as const;
 export type NodeTab = (typeof NODE_TABS)[number];
@@ -50,6 +52,11 @@ function loginLabel(s: LoginState): string {
 function hopLabel(h: HopRef, notes: NoteLookup): TemplateResult {
   return html`<span class="mono">${h.hash}</span>${h.name ? html` ${nodeLink(`${h.name}${h.ambiguous ? '?' : ''}`, h.key)}${contactNote(h.key ? notes(h.key) : '')}` : nothing}`;
 }
+
+const fmtVolts = (v: number): string => v.toFixed(2);
+const fmtCelsius = (v: number): string => v.toFixed(1);
+/** Battery points from TELEMETRY_RESPONSE are filled, from STATUS_RESPONSE hollow. */
+const BATTERY_MARKERS = { filled: 'telemetry', hollow: 'status report' } as const;
 
 /** Swallows a model action's rejection (the model records it in `errors`). */
 function quiet(p: Promise<unknown>): void {
@@ -275,6 +282,8 @@ export class McNodeAdminPage extends AppElement {
       this.#history = [];
       this.#historyPos = -1;
     }
+    // idempotent: starts tracking the archived battery / temperature history once
+    if (this.#key && this.#tab === 'telemetry') quiet(this.#node().loadTelemetryHistory());
   }
 
   #node(): RemoteNodeModel {
@@ -482,7 +491,63 @@ export class McNodeAdminPage extends AppElement {
               : nothing}
           </section>`
         : nothing}
+      ${this.#telemetryHistory(node.telemetryHistory.value)}
     </div>`;
+  }
+
+  #telemetryHistory(h: TelemetryHistory | null): TemplateResult {
+    let body: TemplateResult;
+    if (!h) {
+      body = this.app.connection.store.value
+        ? html`<p class="muted" data-field="history-loading">Loading…</p>`
+        : html`<p class="muted" data-field="history-offline">Connect to the radio to see saved telemetry.</p>`;
+    } else if (!h.battery.length && !h.temperature.length) {
+      body = html`<p class="muted" data-field="history-empty">No saved telemetry for this node yet.</p>`;
+    } else {
+      const channels = [...new Set(h.temperature.map((p) => p.channel))].sort((a, b) => a - b);
+      const tempKey = (c: number): string => `temp-${c}`;
+      const tempLabel = (c: number): string => (c === 1 ? 'MCU' : `Sensor (ch ${c})`);
+      // one palette over both charts, so a colour means one series throughout the card
+      const palette = assignSlots(
+        ['battery', ...channels.map(tempKey)],
+        new Map([['battery', 'Battery'], ...channels.map((c): [string, string] => [tempKey(c), tempLabel(c)])]),
+      );
+      const ts = [...h.battery, ...h.temperature].map((p) => p.ts);
+      const xDomain: [number, number] = [Math.min(...ts), Math.max(...ts)];
+      const battery: TimeSeries[] = [
+        { key: 'battery', label: 'Battery', points: h.battery.map((p) => ({ t: p.ts, v: p.volts, hollow: p.source === 'status' })) },
+      ];
+      const temperature: TimeSeries[] = channels.map((c) => ({
+        key: tempKey(c),
+        label: tempLabel(c),
+        points: h.temperature.filter((p) => p.channel === c).map((p) => ({ t: p.ts, v: p.celsius })),
+      }));
+      body = html`<div class="stack">${h.battery.length
+        ? html`<mc-time-series-chart
+            data-history="battery"
+            y-label="Battery (V)"
+            .series=${battery}
+            .palette=${palette}
+            .xDomain=${xDomain}
+            .yFormat=${fmtVolts}
+            .markerLegend=${BATTERY_MARKERS}
+          ></mc-time-series-chart>`
+        : nothing}
+      ${h.temperature.length
+        ? html`<mc-time-series-chart
+            data-history="temperature"
+            y-label="Temperature (°C)"
+            .series=${temperature}
+            .palette=${palette}
+            .xDomain=${xDomain}
+            .yFormat=${fmtCelsius}
+          ></mc-time-series-chart>`
+        : nothing}</div>`;
+    }
+    return html`<section class="card" data-card="telemetry-history">
+      <h3 style="margin: 0 0 8px">History</h3>
+      ${body}
+    </section>`;
   }
 
   // ---- CLI ----
