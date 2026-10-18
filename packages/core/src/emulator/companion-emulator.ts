@@ -1695,6 +1695,9 @@ export class CompanionEmulator {
         case 'discovery':
           body = node.config.type === 'chat' && !node.config.telemetry ? null : node.telemetryBody();
           break;
+        case 'anon':
+          body = node.anonBody(data, this.#rtcNow(), !flood, Math.floor(this.uptimeMs / 1000));
+          break;
         default:
           body = node.binaryBody(data, Math.floor(this.uptimeMs / 1000));
       }

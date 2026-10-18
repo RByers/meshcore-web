@@ -254,10 +254,10 @@ Plaintext variants (the repeater decides by `plaintext[4]`: 0x00 or ≥ 0x20 mea
 |---|---|
 | Repeater / sensor login | `[timestamp u32][password, ≤15 bytes]` |
 | Room server login | `[timestamp u32][sync_since u32][password ≤15]` (`BCM sendLogin` L603-636) |
-| Anon regions (0x01) / owner (0x02) / clock+status (0x03), direct-routed only | `[timestamp u32][type][reply_path_len (encoded)][reply_path]` |
+| Anon regions (0x01) / owner (0x02) / clock+status (0x03) — repeaters (`simple_repeater`) only, and only when the ANON_REQ arrived **direct-routed** (a flooded one is silently dropped; send zero-hop or along a known path) | `[timestamp u32][type][reply_path_len (encoded)][reply_path]` (reply path = the request's hops reversed; `0` = zero-hop) |
 | Companion `CMD_SEND_ANON_REQ` | `[tag u32 = timestamp][app data …]` |
 
-Anon replies (RESPONSE body): regions → `[tag][now u32][ASCII "name,name,…," ('*' = wildcard)]`; owner → `[tag][now][ "name\nowner_info"]`; clock → `[tag][now][features u8: 0x01 RS232 bridge, 0x03 ESP-NOW bridge, 0x80 repeat disabled]`.
+Anon replies (RESPONSE body): regions → `[tag][now u32][ASCII "*,name,name"]` (`RegionMap::exportNamesTo`: regions that allow flood, names **without** the leading '#' (private regions keep their '$'), '*' first when the wildcard allows flood, no trailing comma, truncated to fit; the companion's BINARY_RESPONSE data starts at `now`); owner → `[tag][now][ "name\nowner_info"]`; clock → `[tag][now][features u8: 0x01 RS232 bridge, 0x03 ESP-NOW bridge, 0x80 repeat disabled]`.
 
 ### 3.9 PATH (0x08) plaintext — `Mesh::createPathReturn` L448-486, `Mesh.cpp` L160-179
 

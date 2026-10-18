@@ -8,18 +8,19 @@
  * marks it delivered. Channel messages have no ACK: pending → sent (device accepted) or failed.
  */
 
-import type { CompanionClient } from '../client/companion-client.js';
+import { FLOOD_UNSCOPED_MIN_VER, type CompanionClient } from '../client/companion-client.js';
 import type { RetryOptions, SendProgress } from '../client/types.js';
 import type { RadioStore } from '../store/radio-store.js';
 import type { ChannelRecord, ContactRecord, ConversationType, MessageRecord, MessageStatus } from '../store/schema.js';
 import { fromHex } from '../util/bytes.js';
 import { StoreBoundModel } from './store-bound.js';
 import type { ConnectionModel } from './connection.js';
-import { batch, computed, signal, type ReadonlySignal } from './signal.js';
+import { batch, computed, signal, untracked, type ReadonlySignal } from './signal.js';
 import type { DmPathRecorder } from './path-history.js';
 import { messageByteLimit, outboundText, parseReply, replyPrefix, textByteLength, type ByteBudget } from './messaging.js';
 import { ContactType, TxtType } from '../protocol/constants.js';
 import { encodeReaction, ownReaction, reactionChips, reactionMessageHash, type ReactionChip } from './reactions.js';
+import { UNSCOPED_REGION, normalizeRegionName, regionKeySync, validateRegionName, type ChannelRegion, type RadioDefaultRegion } from './regions-model.js';
 
 /** Retry tuning for DMs (the model supplies timestamp and onProgress). */
 export type ChatRetryOptions = Omit<RetryOptions, 'onProgress' | 'timestamp'>;
@@ -29,6 +30,25 @@ export interface ChatModelOptions {
   retry?: ChatRetryOptions;
   /** Records per-path delivery statistics of DMs (AppModel passes `app.contactPaths`). */
   pathRecorder?: DmPathRecorder;
+  /** Region keys and the radio's default scope (AppModel passes `app.regions`). */
+  regions?: ChatRegionSource;
+}
+
+/** What a chat needs from `RegionsModel`. */
+export interface ChatRegionSource {
+  readonly radioDefault: ReadonlySignal<RadioDefaultRegion | null | undefined>;
+  keyFor(name: string): Uint8Array;
+}
+
+/** The scope a channel send goes out with: a region (`fromDefault`: the radio's default scope), or null for none. */
+export type EffectiveRegion = { name: string; fromDefault: boolean } | null;
+
+export interface ChatSendOptions {
+  /**
+   * Channels: send with this scope instead of the channel's (a region name or `UNSCOPED_REGION`),
+   * e.g. to reply in the region of the quoted message.
+   */
+  region?: string;
 }
 
 /** Default: 5 attempts, 30 s late-ACK grace (feature-inventory.md §3.3). */
@@ -111,9 +131,24 @@ export class ChatModel extends StoreBoundModel {
     return messageByteLimit(this.convType, this.selfName.value, prefix);
   });
 
+  /**
+   * The channel's scope choice (`ChannelRecord.region`): a region name, `UNSCOPED_REGION`, or
+   * undefined (the radio default applies). Always undefined for DMs (they are never scoped by the
+   * app; they flood with the radio default).
+   */
+  readonly region: ReadonlySignal<ChannelRegion> = computed(() => (this.convType === 'channel' ? this.#channel.value?.region : undefined));
+
+  /**
+   * The scope channel sends go out with: the channel's region, else the radio's default scope
+   * (`fromDefault`), or null for an unscoped flood. `UNSCOPED_REGION` on firmware before v12 is
+   * not supported, so the default applies.
+   */
+  readonly effectiveRegion: ReadonlySignal<EffectiveRegion> = computed(() => this.#effective(this.region.value));
+
   readonly pageSize: number;
   readonly #retry: ChatRetryOptions;
   readonly #paths: DmPathRecorder | undefined;
+  readonly #regions: ChatRegionSource | undefined;
 
   constructor(
     connection: ConnectionModel,
@@ -126,6 +161,7 @@ export class ChatModel extends StoreBoundModel {
     this.pageSize = o.pageSize ?? 50;
     this.#retry = o.retry ?? DEFAULT_CHAT_RETRY;
     this.#paths = o.pathRecorder;
+    this.#regions = o.regions;
     this.convKey = convKey.toLowerCase();
   }
 
@@ -263,6 +299,37 @@ export class ChatModel extends StoreBoundModel {
     else await store.channels.update(this.convKey, { smaz: on });
   }
 
+  /**
+   * Sets this channel's scope: a region name ('#' optional), `UNSCOPED_REGION`, or undefined for
+   * the radio default. Stored locally on the channel record.
+   */
+  async setRegion(region: ChannelRegion): Promise<void> {
+    const store = this.store;
+    if (!store) throw new Error('Not connected');
+    if (this.convType !== 'channel') throw new Error('Only channels have a region');
+    await store.channels.update(this.convKey, { region: region === undefined ? null : checkRegion(region) });
+  }
+
+  #unscopedSupported(): boolean {
+    return (this.connection.deviceInfo.value?.firmwareVerCode ?? 0) >= FLOOD_UNSCOPED_MIN_VER;
+  }
+
+  #effective(choice: ChannelRegion): EffectiveRegion {
+    if (choice !== undefined && choice !== UNSCOPED_REGION) return { name: choice, fromDefault: false };
+    if (choice === UNSCOPED_REGION && this.#unscopedSupported()) return null;
+    const def = this.#regions?.radioDefault.value;
+    return def && def.name ? { name: def.name, fromDefault: true } : null;
+  }
+
+  /** The flood scope for `withFloodScope` and the region name to record, for a channel send. */
+  #scopeFor(choice: ChannelRegion): { scope: Uint8Array | 'unscoped' | null; applied: string | undefined } {
+    if (this.convType !== 'channel') return { scope: null, applied: undefined };
+    const applied = untracked(() => this.#effective(choice))?.name;
+    if (choice === undefined) return { scope: null, applied };
+    if (choice === UNSCOPED_REGION) return { scope: 'unscoped', applied };
+    return { scope: this.#regions?.keyFor(choice) ?? regionKeySync(choice), applied };
+  }
+
   /** The display name a reply to `m` addresses. */
   replyName(m: MessageRecord): string {
     if (m.direction === 'out') return this.selfName.peek() || 'me';
@@ -312,11 +379,13 @@ export class ChatModel extends StoreBoundModel {
    * Sends `text` (prefixed "@[name] " when replying). Resolves once the outgoing record is
    * stored; `done` resolves when delivery is settled.
    */
-  async send(text: string): Promise<SendHandle> {
+  async send(text: string, opts: ChatSendOptions = {}): Promise<SendHandle> {
     const store = this.store;
     if (!store) throw new Error('Not connected');
     const client = this.#client();
     const full = this.#compose(text);
+    const choice = opts.region !== undefined ? checkRegion(opts.region) : this.region.peek();
+    const { scope, applied } = this.#scopeFor(choice);
     const compressed = this.#wire(full) !== full;
     const channelIdx = this.convType === 'channel' ? await this.#channelIndex(store) : -1;
     const now = client.clock.now();
@@ -329,13 +398,14 @@ export class ChatModel extends StoreBoundModel {
       receivedAt: now,
       status: 'pending',
       ...(compressed ? { compressed } : {}),
+      ...(applied !== undefined ? { region: applied } : {}),
       ...(this.convType === 'contact' ? { attempt: 0 } : { senderName: this.selfName.peek() }),
     });
     batch(() => {
       this.#replyTo.value = null;
       this.#firstUnreadId.value = null;
     });
-    const done = this.#track(this.#deliver(store, client, record, channelIdx));
+    const done = this.#track(this.#deliver(store, client, record, channelIdx, record.timestamp, scope));
     return { record, done };
   }
 
@@ -353,8 +423,10 @@ export class ChatModel extends StoreBoundModel {
     // the record keeps the timestamp that went on air: reactions to it hash over it. It must differ
     // from the failed attempt's (seconds granularity), or the mesh treats the packet as a repeat.
     const timestamp = Math.max(Math.floor(client.clock.now() / 1000), rec.timestamp + 1);
-    const record = (await store.messages.updateStatus(id, 'pending', { attempt: 0, compressed, timestamp })) ?? rec;
-    const done = this.#track(this.#deliver(store, client, record, channelIdx, timestamp));
+    // a retry goes out with the channel's current scope
+    const { scope, applied } = this.#scopeFor(this.region.peek());
+    const record = (await store.messages.updateStatus(id, 'pending', { attempt: 0, compressed, timestamp, region: applied ?? null })) ?? rec;
+    const done = this.#track(this.#deliver(store, client, record, channelIdx, timestamp, scope));
     return { record, done };
   }
 
@@ -416,7 +488,8 @@ export class ChatModel extends StoreBoundModel {
     };
     if (this.convType === 'channel') {
       try {
-        await client.sendChannelMessage(channelIdx, text, { timestamp });
+        const { scope } = this.#scopeFor(this.region.peek());
+        await client.withFloodScope(scope, () => client.sendChannelMessage(channelIdx, text, { timestamp }));
         return await set('sent');
       } catch {
         return await set('failed');
@@ -456,13 +529,20 @@ export class ChatModel extends StoreBoundModel {
     return ch.deviceIndex;
   }
 
-  async #deliver(store: RadioStore, client: CompanionClient, record: MessageRecord, channelIdx: number, timestamp = record.timestamp): Promise<MessageRecord> {
+  async #deliver(
+    store: RadioStore,
+    client: CompanionClient,
+    record: MessageRecord,
+    channelIdx: number,
+    timestamp = record.timestamp,
+    scope: Uint8Array | 'unscoped' | null = null,
+  ): Promise<MessageRecord> {
     const id = record.id;
     // compressed ("s:" envelope) when the record says so; the ACK code is computed over this text
     const wire = record.compressed ? outboundText(this.convType, record.text, true) : record.text;
     if (this.convType === 'channel') {
       try {
-        await client.sendChannelMessage(channelIdx, wire, { timestamp });
+        await client.withFloodScope(scope, () => client.sendChannelMessage(channelIdx, wire, { timestamp }));
         return (await store.messages.updateStatus(id, 'sent')) ?? record;
       } catch {
         return (await store.messages.markFailed(id)) ?? record;
@@ -509,6 +589,15 @@ export function firstUnreadId(messages: readonly MessageRecord[], unread: number
     if (m.direction === 'in' && m.txtType !== TxtType.CLI_DATA && m.txtType !== TxtType.CLI_COMMAND && ++n === unread) return m.id;
   }
   return messages[0]!.id;
+}
+
+/** A normalised, valid region name, or `UNSCOPED_REGION`; throws otherwise. */
+function checkRegion(region: string): string {
+  if (region === UNSCOPED_REGION) return region;
+  const n = normalizeRegionName(region);
+  const err = validateRegionName(n);
+  if (err) throw new Error(err);
+  return n;
 }
 
 /** A delivered message never goes back; a failed one only moves on a late ACK. */

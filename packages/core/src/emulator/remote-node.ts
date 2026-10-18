@@ -15,6 +15,9 @@ import type { CommonNodeStats } from '../protocol/types.js';
 import type { Rng } from './rng.js';
 import { randomBytes } from './rng.js';
 
+/** `ANON_REQ_TYPE_REGIONS` (simple_repeater/MyMesh.cpp). */
+const ANON_REQ_TYPE_REGIONS = 0x01;
+
 export type RemoteNodeType = 'chat' | 'repeater' | 'room' | 'sensor';
 
 /** How a chat peer acknowledges plain text messages sent to it. */
@@ -71,6 +74,12 @@ export interface RemoteNodeConfig {
   neighbours?: NeighbourEntry[];
   /** Owner info text for GET_OWNER_INFO. */
   ownerInfo?: string;
+  /**
+   * Repeaters: the region names the anon regions request (0x01) reports, in order, as
+   * `RegionMap::exportNamesTo` writes them ('*' = the wildcard allows flood; names without '#').
+   * Default `['*']` (no regions configured).
+   */
+  regions?: string[];
   firmwareVersion?: string;
   /**
    * Custom BINARY_REQ handler: return the response body (after the tag), `null` for no response,
@@ -221,6 +230,22 @@ export class RemoteNode {
 
   telemetryBody(): Uint8Array {
     return this.config.telemetry ?? lppVoltage(this.batteryMv);
+  }
+
+  /**
+   * Body for an ANON_REQ that is not a login (data[0] = anon req type). Repeaters answer the
+   * regions request (0x01) only when it arrived direct-routed (`simple_repeater onAnonDataRecv`):
+   * `[now u32][names joined by ',']` (mesh-packet-format.md §3.8). Other types fall back to
+   * {@link binaryBody}. A custom `onBinaryRequest` handler sees every type first.
+   */
+  anonBody(data: Uint8Array, nowSecs: number, direct: boolean, uptimeSecs: number): Uint8Array | null {
+    const custom = this.config.onBinaryRequest?.(data[0] ?? -1, data);
+    if (custom !== undefined) return custom;
+    if (this.config.type === 'repeater' && data[0] === ANON_REQ_TYPE_REGIONS) {
+      if (!direct) return null;
+      return concatBytes(u32le(nowSecs >>> 0), utf8Encode((this.config.regions ?? ['*']).join(',')));
+    }
+    return this.binaryBody(data, uptimeSecs);
   }
 
   /** Body for a BINARY_REQ / ANON_REQ (data[0] = req type), or null for no response. */

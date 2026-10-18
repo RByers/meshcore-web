@@ -31,6 +31,7 @@ import { PositionEstimatorModel } from './position-estimator.js';
 import { PathModel } from './path-model.js';
 import { PacketLogModel } from './packet-log-model.js';
 import { StorageModel } from './storage-model.js';
+import { RegionsModel } from './regions-model.js';
 import { PacketStatsModel } from './packet-stats-model.js';
 import { ContactPathsModel } from './path-history.js';
 import { RemoteAdminModel, type RemoteAdminOptions } from './remote-admin-model.js';
@@ -118,6 +119,7 @@ export class AppModel {
   #paths: PathModel | undefined;
   #contactPaths: ContactPathsModel | undefined;
   #storage: StorageModel | undefined;
+  #regions: RegionsModel | undefined;
   readonly #chats = new Map<string, ChatModel>();
   readonly #nodes = new Map<string, NodeModel>();
   #offs: Array<() => void> = [];
@@ -280,12 +282,30 @@ export class AppModel {
     return (this.#storage ??= new StorageModel({ devices: this.devices, storeOptions: () => this.#idbOpts() }));
   }
 
+  /** Saved region names, region keys, the radio's default scope, fetching regions from repeaters. */
+  get regions(): RegionsModel {
+    if (!this.#regions) {
+      const settings = this.deviceSettings;
+      this.#regions = new RegionsModel(this.connection, {
+        preferences: this.#prefs,
+        contacts: this.contacts.contacts,
+        defaultScope: settings.defaultFloodScope,
+        loadDefaultScope: () => settings.loadDefaultFloodScope(),
+      });
+    }
+    return this.#regions;
+  }
+
   /** The model of one conversation (cached per conversation). */
   chat(convType: ConversationType, convKey: string): ChatModel {
     const id = `${convType}:${convKey.toLowerCase()}`;
     let m = this.#chats.get(id);
     if (!m) {
-      m = new ChatModel(this.connection, convType, convKey, { pathRecorder: this.contactPaths, ...this.#opts.messaging }).start();
+      m = new ChatModel(this.connection, convType, convKey, {
+        pathRecorder: this.contactPaths,
+        ...(convType === 'channel' ? { regions: this.regions } : {}),
+        ...this.#opts.messaging,
+      }).start();
       this.#chats.set(id, m);
     }
     return m;
@@ -327,6 +347,7 @@ export class AppModel {
     this.#remoteAdmin?.dispose();
     this.#deviceSettings?.dispose();
     this.#appSettings?.dispose();
+    this.#regions?.dispose();
     this.#chats.clear();
     for (const m of this.#nodes.values()) m.dispose();
     this.#nodes.clear();

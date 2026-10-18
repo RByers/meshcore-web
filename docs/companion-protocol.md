@@ -203,7 +203,7 @@ DOC claims OK may carry an "optional 32-bit value". **The firmware never sends o
 | 51 | 33 | FACTORY_RESET | `[1..5]"reset"` | literal | interfaces disabled first, so OK is usually not received; reboot / ERR 5 |
 | 52 | 34 | SEND_PATH_DISCOVERY_REQ | `[1]=0 (reserved, must be 0), [2..33]pubkey` | len≥34 | SENT, then PATH_DISCOVERY_RESPONSE push. Sent as a **flood** REQ `GET_TELEMETRY_DATA` with mask = base only. |
 | 53 | 35 | (unassigned) | | | ERR 1 |
-| 54 | 36 | SET_FLOOD_SCOPE_KEY (v8+) | `[1]=0, [2..17]16-byte transport key` (len<18 → clear override) / `[1]=1` → force **unscoped** flood (v12+) | len≥2; `[1]` ∉ {0,1} → ERR 1 | OK. Session only, not persisted. |
+| 54 | 36 | SET_FLOOD_SCOPE_KEY (v8+) | `[1]=0, [2..17]16-byte transport key` (len<18 → clear override) / `[1]=1` → force **unscoped** flood (v12+) | len≥2; `[1]` ∉ {0,1} → ERR 1 | OK. Session only, not persisted, but **sticky**: stays until the next SET_FLOOD_SCOPE_KEY or reboot (`[1]=0` also clears unscoped). Applies to every flood send (channel / DM / requests / path discovery; `sendFloodScoped`, precedence unscoped > this key > the default scope of CMD 63); adverts use only the default scope. An app scoping one send must reset it (`[54,0]`) afterwards. |
 | 55 | 37 | SEND_CONTROL_DATA (v8+) | `[1..]control payload; [1]&0x80 must be set` | len≥2 | OK (sent zero-hop DIRECT, PAYLOAD_TYPE_CONTROL) / ERR 3 |
 | 56 | 38 | GET_STATS (v8+) | `[1]stats_type 0/1/2` | len≥2 | STATS (§5.6) / ERR 6 |
 | 57 | 39 | SEND_ANON_REQ | `[1..32]pubkey, [33..]data` | len>33. v13+: an unknown pubkey is accepted (a temporary anon contact is created, zero-hop) | SENT (tag = timestamp), reply as BINARY_RESPONSE / ERR 3 |

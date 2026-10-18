@@ -21,6 +21,7 @@ import { fromHex, toHex, utf8Encode } from '../util/bytes.js';
 import type { Clock } from '../util/clock.js';
 import type { ConnectionModel } from './connection.js';
 import { batch, computed, effect, signal, type ReadonlySignal } from './signal.js';
+import { normalizeRegionName, validateRegionName } from './regions-model.js';
 
 export interface RadioParamsView {
   freqMhz: number;
@@ -749,15 +750,29 @@ export class DeviceSettingsModel {
   }
 
   /**
+   * GET_DEFAULT_FLOOD_SCOPE into {@link defaultFloodScope} (also done by {@link loadAll}). Old
+   * firmware without the command leaves it undefined; never rejects.
+   */
+  async loadDefaultFloodScope(): Promise<void> {
+    const client = this.connection.client.peek();
+    if (!client?.connected) return;
+    try {
+      const scope = await client.getDefaultFloodScope();
+      if (this.connection.client.peek() === client) this.#floodScope.value = scope ? { name: scope.name, keyHex: toHex(scope.key) } : null;
+    } catch {
+      // ERR (unsupported) or link loss: unknown
+    }
+  }
+
+  /**
    * SET_DEFAULT_FLOOD_SCOPE (persisted). The key is the public hashtag region key
    * SHA256("#name")[0..16] (mesh-packet-format.md §1.2). Empty name / null clears it.
    */
   async setDefaultFloodScope(name: string | null): Promise<void> {
-    const n = (name ?? '').trim().replace(/^#/, '');
+    const n = normalizeRegionName(name ?? '');
     if (n) {
-      const len = utf8Encode(n).length;
-      if (len > 30) fail('floodScope', 'Region name must be at most 30 bytes');
-      if (!/^[a-z0-9-]+$/.test(n)) fail('floodScope', 'Region name may only use lowercase letters, digits and "-"');
+      const err = validateRegionName(n);
+      if (err) fail('floodScope', err);
     }
     const key = n ? await regionKey(n) : undefined;
     await this.#run('floodScope', async (client) => {

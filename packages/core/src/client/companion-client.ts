@@ -125,6 +125,8 @@ const RECENT_ACKS = 64;
 const WRITE_TIMEOUT_MS = 60_000;
 /** SIGN_DATA chunk size: frame = 1 code byte + chunk ≤ 176. */
 const DEFAULT_SIGN_CHUNK = 160;
+/** FIRMWARE_VER_CODE that added SET_FLOOD_SCOPE_KEY `[1]=1` (force an unscoped flood). companion-protocol.md §11 */
+export const FLOOD_UNSCOPED_MIN_VER = 12;
 
 function prefixMatches(key: Uint8Array, prefix: Uint8Array): boolean {
   if (prefix.length === 0 || prefix.length > key.length) return false;
@@ -174,6 +176,8 @@ export class CompanionClient {
 
   // remote requests (single outstanding) and traces
   #remoteChain: Promise<unknown> = Promise.resolve();
+  /** Serialises {@link withFloodScope} sections (the session scope is one sticky device setting). */
+  #scopeChain: Promise<unknown> = Promise.resolve();
   #remote: RemotePending | null = null;
   #traceWaiters = new Map<number, (p: TraceDataPush) => void>();
   #signChain: Promise<unknown> = Promise.resolve();
@@ -1302,6 +1306,32 @@ export class CompanionClient {
   setFloodScopeKey(key?: Uint8Array | 'unscoped'): Promise<void> {
     const cmd: Command = key === 'unscoped' ? { kind: 'setFloodScopeKey', unscoped: true } : key ? { kind: 'setFloodScopeKey', key } : { kind: 'setFloodScopeKey' };
     return this.#ok(cmd);
+  }
+
+  /**
+   * Runs `fn` (typically one channel send) with the session flood scope set to `scope`, then
+   * resets it (`SET_FLOOD_SCOPE_KEY [54,0]`) so the radio default applies again. The session
+   * scope is sticky and applies to every flood send (companion-protocol.md §4 CMD 54), so
+   * sections are serialised; `null` runs `fn` in turn without touching the scope (the radio
+   * default applies). `'unscoped'` needs firmware v12+ ({@link FLOOD_UNSCOPED_MIN_VER}); older
+   * firmware treats it as `null`. Flood sends outside these sections while one is running (e.g. a
+   * DM retry) go out with that section's scope.
+   */
+  withFloodScope<T>(scope: Uint8Array | 'unscoped' | null, fn: () => Promise<T>): Promise<T> {
+    const s = scope === 'unscoped' && (this.#deviceInfo?.firmwareVerCode ?? 0) < FLOOD_UNSCOPED_MIN_VER ? null : scope;
+    const run = async (): Promise<T> => {
+      if (s === null) return fn();
+      await this.setFloodScopeKey(s);
+      try {
+        return await fn();
+      } finally {
+        // best effort: a failed reset leaves the override until the next SET or reboot
+        if (this.connected) await this.setFloodScopeKey().catch(() => undefined);
+      }
+    };
+    const p = this.#scopeChain.then(run, run);
+    this.#scopeChain = p.catch(() => undefined);
+    return p;
   }
 
   setDefaultFloodScope(scope?: { name: string; key: Uint8Array }): Promise<void> {

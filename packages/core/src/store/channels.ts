@@ -27,6 +27,8 @@ export interface ChannelPatch {
   unread?: number;
   deviceIndex?: number | null;
   smaz?: boolean;
+  /** A region name or `UNSCOPED_REGION`; null clears it (the radio default applies). */
+  region?: string | null;
 }
 
 export class ChannelsRepo {
@@ -82,6 +84,7 @@ export class ChannelsRepo {
           muted: prev?.muted ?? false,
           unread: prev?.unread ?? 0,
           ...(prev?.smaz !== undefined ? { smaz: prev.smaz } : {}),
+          ...(prev?.region !== undefined ? { region: prev.region } : {}),
           updatedAt: now,
         };
         await s.put(next);
@@ -123,6 +126,7 @@ export class ChannelsRepo {
           muted: prev?.muted ?? false,
           unread: prev?.unread ?? 0,
           ...(prev?.smaz !== undefined ? { smaz: prev.smaz } : {}),
+          ...(prev?.region !== undefined ? { region: prev.region } : {}),
           updatedAt: now,
         };
         await s.put(next);
@@ -151,6 +155,7 @@ export class ChannelsRepo {
         muted: o.muted ?? prev?.muted ?? false,
         unread: prev?.unread ?? 0,
         ...(prev?.smaz !== undefined ? { smaz: prev.smaz } : {}),
+        ...(prev?.region !== undefined ? { region: prev.region } : {}),
         updatedAt: now,
       };
       await s.put(next);
@@ -173,6 +178,8 @@ export class ChannelsRepo {
       if (patch.unread !== undefined) next.unread = patch.unread;
       if (patch.deviceIndex !== undefined) next.deviceIndex = patch.deviceIndex;
       if (patch.smaz !== undefined) next.smaz = patch.smaz;
+      if (patch.region === null) delete next.region;
+      else if (patch.region !== undefined) next.region = patch.region;
       await s.put(next);
       return next;
     });

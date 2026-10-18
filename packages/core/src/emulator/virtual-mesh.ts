@@ -680,7 +680,7 @@ export class MeshNode implements MeshEndpoint {
     if (!room && kindByte > 0 && kindByte < 0x20) {
       // anonymous request ([tag][type][...]): answered with the binary handlers
       this.remote.requests.push({ kind: 'anon', data: pt.slice(4) });
-      const body = this.remote.binaryBody(pt.subarray(4), this.#uptimeSecs());
+      const body = this.remote.anonBody(pt.subarray(4), this.rtcSecs, isDirectRoute(p.routeType), this.#uptimeSecs());
       resp = body === null ? null : buildResponsePlaintext(readU32LE(pt, 0), body);
     } else {
       const password = parseLoginRequest(pt, room).password;

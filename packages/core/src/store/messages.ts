@@ -48,6 +48,8 @@ export interface MessageInput {
   compressed?: boolean;
   /** Flood path bytes, when the capture pipeline matched the message to its LOG_RX_DATA packet. */
   path?: Uint8Array;
+  /** Channel messages: the region (flood scope name, no '#') it was sent / received in. */
+  region?: string;
 }
 
 export interface AppendOptions {
@@ -161,7 +163,7 @@ export class MessagesRepo {
       status: input.status ?? (input.direction === 'in' ? 'delivered' : 'pending'),
       pathLen: input.pathLen ?? 0xff,
     };
-    for (const k of ['ackCode', 'attempt', 'snr', 'senderName', 'senderPrefix', 'rawFrameId', 'compressed', 'path'] as const) {
+    for (const k of ['ackCode', 'attempt', 'snr', 'senderName', 'senderPrefix', 'rawFrameId', 'compressed', 'path', 'region'] as const) {
       if (input[k] !== undefined) (base as Record<string, unknown>)[k] = input[k];
     }
     const wantUnread = base.direction === 'in' && opts.countUnread !== false && !isCli(base.txtType);
@@ -244,7 +246,7 @@ export class MessagesRepo {
   async updateStatus(
     id: number,
     status: MessageStatus,
-    patch: { ackCode?: number; attempt?: number; roundTripMs?: number; deliveredAt?: number; compressed?: boolean; timestamp?: number } = {},
+    patch: { ackCode?: number; attempt?: number; roundTripMs?: number; deliveredAt?: number; compressed?: boolean; timestamp?: number; region?: string | null } = {},
   ): Promise<MessageRecord | undefined> {
     const rec = await this.db.transaction(STORE.messages, 'readwrite', async (t) => {
       const s = t.store<MessageRecord>(STORE.messages);
@@ -257,6 +259,8 @@ export class MessagesRepo {
       if (patch.timestamp !== undefined) next.timestamp = patch.timestamp;
       if (patch.compressed === true) next.compressed = true;
       else if (patch.compressed === false) delete next.compressed;
+      if (patch.region === null) delete next.region;
+      else if (patch.region !== undefined) next.region = patch.region;
       if (patch.deliveredAt !== undefined) next.deliveredAt = patch.deliveredAt;
       else if (status === 'delivered' && prev.status !== 'delivered') next.deliveredAt = this.now();
       await s.put(next);

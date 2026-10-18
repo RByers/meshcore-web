@@ -299,6 +299,11 @@ export interface MessageRecord {
   /** Sent / received SMAZ-compressed ("s:" envelope, feature-inventory.md §2.4a); `text` is plain. */
   compressed?: boolean;
   /**
+   * Channel messages: the region (flood scope, name without '#') the message went out with, or
+   * was received in (TRANSPORT_FLOOD with a known region code). Absent: none / unknown.
+   */
+  region?: string;
+  /**
    * Emoji reactions to this message (MeshCore Open compatible, feature-inventory.md §2.4b), in
    * arrival order. Optional: records written before this field existed have none, so no migration.
    */
@@ -329,6 +334,11 @@ export interface ChannelRecord {
   unread: number;
   /** SMAZ-compress outgoing messages (MeshCore Open compatible). Optional; absent = off. */
   smaz?: boolean;
+  /**
+   * Flood scope for sends to this channel (local setting): a region name (no '#') or
+   * `UNSCOPED_REGION` ('!unscoped': plain flood, firmware v12+). Absent: the radio's default scope.
+   */
+  region?: string;
   updatedAt: number;
 }
 

@@ -21,6 +21,7 @@ export * from './device-settings-model.js';
 export * from './noise-floor.js';
 export * from './radio-presets.js';
 export * from './app-settings-model.js';
+export * from './regions-model.js';
 export * from './remote-admin-model.js';
 export * from './geo.js';
 export * from './map-model.js';
