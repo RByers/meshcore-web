@@ -368,7 +368,8 @@ describe('channels', () => {
     const pub = await channelKeyForPsk(publicChannelSecret());
     await t.go(`/channel/${pub}`, '[data-action="details"]');
     await t.click('[data-action="details"]');
-    await t.until(() => t.query<HTMLDialogElement>('#channel-details')?.open, 3000, 'details open');
+    // the dialog can open before its fields render: wait for both
+    await t.until(() => t.query<HTMLDialogElement>('#channel-details')?.open && t.query('[data-field="detail-id"]'), 3000, 'details open');
     const field = (f: string) => t.query(`[data-field="detail-${f}"]`)!.textContent;
     expect(field('kind')).toBe('Public channel');
     expect(field('slot')).toBe('0');
