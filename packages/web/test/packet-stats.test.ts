@@ -8,7 +8,8 @@ import '../src/pages/packets/index.js';
 import { smazEncodeIfSmaller } from '@meshcore-web/core/util/smaz';
 import { createHarness, type Harness } from '../src/testing/harness.js';
 import type { McTileMap } from '../src/components/tile-map.js';
-import { timelinePalette, timelineSeries, type McPacketStats } from '../src/pages/packets/packet-stats.js';
+import { timelineDescribe, timelinePalette, timelineSeries, type McPacketStats } from '../src/pages/packets/packet-stats.js';
+import { timelineSeriesDescription } from '@meshcore-web/core/app';
 import { toDatetimeLocal } from '../src/pages/packets/inspection.js';
 
 let h: Harness | undefined;
@@ -123,6 +124,15 @@ describe('/packets Stats tab', () => {
     expect(title('Direction', 'Received') ?? '').toBe('');
   });
 
+  it('packet rate legend explains which packets each line counts', async () => {
+    const { el } = await openStats();
+    const items = inChart(el, 'rate', 'mc-line-chart', '[data-legend] li');
+    const title = (key: string) => items.find((li) => li.dataset['legendKey'] === key)?.title;
+    expect(title('Adverts')).toBe(timelineSeriesDescription('Adverts'));
+    expect(title('Adverts')).toContain('ADVERT');
+    expect(title('Public')).toContain('GRP_TXT');
+  });
+
   it('a date preset narrows the packets counted', async () => {
     const { t, el } = await openStats();
     // one packet logged two hours ago: inside "All", outside "Last hour"
@@ -147,6 +157,17 @@ describe('/packets Stats tab', () => {
 });
 
 describe('packet rate series', () => {
+  it('describes a folded Other line by the series it sums', () => {
+    const keys = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'ACKs', 'Other'];
+    const describe = timelineDescribe({ binMs: 60_000, bins: [], series: keys });
+    expect(describe('ACKs')).toBe(timelineSeriesDescription('ACKs'));
+    const other = describe('Other')!;
+    expect(other).toContain(`ACKs (${timelineSeriesDescription('ACKs')})`);
+    expect(other).toContain(timelineSeriesDescription('Other'));
+    // Unfolded: Other is just its own types.
+    expect(timelineDescribe({ binMs: 60_000, bins: [], series: ['DMs', 'Other'] })('Other')).toBe(timelineSeriesDescription('Other'));
+  });
+
   it('keeps the 8 biggest series and sums the rest with Other', () => {
     const keys = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'Other'];
     const bins = [0, 1].map((i) => ({ t: i * 60_000, series: Object.fromEntries(keys.map((k, j) => [k, 20 - j + i])) }));

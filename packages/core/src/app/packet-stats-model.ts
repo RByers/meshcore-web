@@ -410,6 +410,27 @@ export const SERIES_CONTROL = 'Control';
 export const SERIES_UNKNOWN_CHANNELS = 'Unknown channels';
 /** MULTIPART, RAW_CUSTOM and unknown payload types. */
 export const SERIES_OTHER = 'Other';
+
+const SERIES_DESCRIPTIONS: Readonly<Record<string, string>> = {
+  [SERIES_DMS]: 'TXT_MSG: direct messages between two nodes, including CLI commands to repeaters and room server posts.',
+  [SERIES_ADVERTS]: 'ADVERT: nodes announcing their name, type, public key and location.',
+  [SERIES_ACKS]: 'ACK: delivery acknowledgements for direct messages and keep-alives.',
+  [SERIES_PATHS]: 'PATH: the route a flooded packet took, sent back to its sender so it can reply direct (often carrying an ACK or reply).',
+  [SERIES_TRACES]: 'TRACE: trace-route packets that collect the SNR at each hop.',
+  [SERIES_REQUESTS]:
+    'REQ, RESPONSE and ANON_REQ: requests to a node and their replies, e.g. logins to repeaters / room servers, status, telemetry, neighbours and access lists.',
+  [SERIES_CONTROL]: 'CONTROL: unencrypted control packets, e.g. node discovery requests and responses.',
+  [SERIES_UNKNOWN_CHANNELS]: 'GRP_TXT and GRP_DATA on channels this radio has no key for (the channel hash matches none of your channels).',
+  [SERIES_OTHER]: 'MULTIPART, RAW_CUSTOM and unknown payload types.',
+};
+
+/**
+ * What packets a timeline series counts (hover text). Any key that is not a fixed series is a
+ * known channel.
+ */
+export function timelineSeriesDescription(key: string): string {
+  return SERIES_DESCRIPTIONS[key] ?? `GRP_TXT and GRP_DATA: channel messages and data on ${key}.`;
+}
 /** Size of {@link SourceStats.top}. */
 export const TOP_SOURCES = 50;
 

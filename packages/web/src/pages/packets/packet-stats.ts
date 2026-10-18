@@ -15,6 +15,7 @@ import { css, html, nothing, type TemplateResult } from 'lit';
 import {
   formatDistance,
   nodeId,
+  timelineSeriesDescription,
   packetFilterChips,
   type PacketFilterChip,
   type Breakdown,
@@ -53,6 +54,7 @@ import {
   type BreakdownSegment,
   type SegmentSelectDetail,
   type DotPoint,
+  type Describe,
   type DotSelectDetail,
   type LineSeries,
   type SeriesPalette,
@@ -198,18 +200,36 @@ export function sourceFooter(s: SourceStats): string {
   return parts.join(', ');
 }
 
+/** Timeline series beyond the {@link MAX_SERIES} biggest (plus "Other" itself): summed into one "Other" line. */
+function foldedSeries(t: Timeline): string[] {
+  const own = new Set(t.series.filter((k) => k !== OTHER_KEY).slice(0, MAX_SERIES));
+  return t.series.filter((k) => !own.has(k));
+}
+
 /**
  * Line chart series from the model timeline (series order as given, biggest first): the first
  * {@link MAX_SERIES} get their own line, the rest are summed into "Other".
  */
 export function timelineSeries(t: Timeline): LineSeries[] {
-  const own = t.series.filter((k) => k !== OTHER_KEY).slice(0, MAX_SERIES);
-  const folded = t.series.filter((k) => !own.includes(k));
-  const out: LineSeries[] = own.map((key) => ({ key, label: key, points: t.bins.map((b) => ({ t: b.t, v: b.series[key] ?? 0 })) }));
+  const folded = foldedSeries(t);
+  const out: LineSeries[] = t.series
+    .filter((k) => !folded.includes(k))
+    .map((key) => ({ key, label: key, points: t.bins.map((b) => ({ t: b.t, v: b.series[key] ?? 0 })) }));
   if (folded.length > 0) {
     out.push({ key: OTHER_KEY, label: OTHER_KEY, points: t.bins.map((b) => ({ t: b.t, v: folded.reduce((n, k) => n + (b.series[k] ?? 0), 0) })) });
   }
   return out;
+}
+
+/** Legend hover text for {@link timelineSeries}: which packets each line counts. */
+export function timelineDescribe(t: Timeline): Describe {
+  const folded = foldedSeries(t);
+  return (key) => {
+    if (key !== OTHER_KEY) return timelineSeriesDescription(key);
+    const parts = folded.filter((k) => k !== OTHER_KEY).map((k) => `${k} (${timelineSeriesDescription(k)})`);
+    if (folded.includes(OTHER_KEY) || parts.length === 0) parts.push(timelineSeriesDescription(OTHER_KEY));
+    return parts.length === 1 ? parts[0] : `The smaller series, summed:\n${parts.map((p) => `• ${p}`).join('\n')}`;
+  };
 }
 
 /** Palette for {@link timelineSeries}. */
@@ -745,6 +765,7 @@ export class McPacketStats extends AppElement {
           data-chart-id="rate"
           .series=${rateSeries}
           .palette=${timelinePalette(rateSeries)}
+          .describe=${timelineDescribe(timeline)}
           .xDomain=${xDomain}
           ?stacked=${this.stacked}
           y-label="Packets"

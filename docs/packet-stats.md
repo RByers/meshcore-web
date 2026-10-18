@@ -279,7 +279,7 @@ filters of the list tabs are not shown; the inspector split is hidden). Layout, 
    the top 8 by count in the current points take slots in count order, rest "Other". *Compression*
    uses fixed slots (Compressed 1, Plain 2, Not decrypted / non-text packets "Other").
 5. **Packet rate** (`mc-line-chart`): the `timeline` series (per channel, unknown channels, DMs,
-   adverts, ACKs, paths, traces, requests, control); the 8 biggest get a line, the rest are summed into *Other*; toggle *stacked*.
+   adverts, ACKs, paths, traces, requests, control); the 8 biggest get a line, the rest are summed into *Other*; hovering a legend entry lists the payload types it counts (`timelineSeriesDescription`; a folded *Other* lists the series it sums); toggle *stacked*.
 6. **Network utilisation**: `mc-line-chart` of airtime fraction over time (single series, %), then
    `mc-breakdown` rows for payload type, route type, direction, channel / category — each showing
    airtime share (with packet count in the tooltip). When airtime is unknown, fall back to bytes

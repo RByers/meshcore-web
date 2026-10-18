@@ -10,8 +10,8 @@ import { AppElement } from '../../app-context.js';
 import { formatRelative, formatSnr } from '../../format.js';
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
-import { assignSlots, type BarItem, type DotPoint, type DotSelectDetail, type LineSeries, type SeriesPalette } from '../../charts/index.js';
-import { timelinePalette, timelineSeries } from '../packets/packet-stats.js';
+import { assignSlots, type BarItem, type Describe, type DotPoint, type DotSelectDetail, type LineSeries, type SeriesPalette } from '../../charts/index.js';
+import { timelineDescribe, timelinePalette, timelineSeries } from '../packets/packet-stats.js';
 import type { McTileMap } from '../../components/tile-map.js';
 import { usageLines } from '../../components/path-usage-lines.js';
 import '../../components/stats-range.js';
@@ -36,6 +36,7 @@ export function pathLabel(pathKey: string, hops: readonly NodeRef[]): string {
 interface Derived {
   timeline: LineSeries[];
   timelinePalette: SeriesPalette;
+  timelineDescribe: Describe;
   paths: BarItem[];
   pathPalette: SeriesPalette;
   dots: Record<YField, DotPoint[]>;
@@ -160,7 +161,7 @@ export class McContactStats extends AppElement {
       hops: from.map((p) => dot(p, p.hops)),
     };
     const hopItems: BarItem[] = hops.map((h) => ({ label: h.hops === 0 ? 'direct' : `${h.hops} hop${h.hops === 1 ? '' : 's'}`, value: h.count }));
-    this.#memo = { timeline: timeline_, timelinePalette: timelinePalette_, paths: paths_, pathPalette, dots, hops: hopItems };
+    this.#memo = { timeline: timeline_, timelinePalette: timelinePalette_, timelineDescribe: timelineDescribe(timeline), paths: paths_, pathPalette, dots, hops: hopItems };
     return this.#memo;
   }
 
@@ -198,7 +199,7 @@ export class McContactStats extends AppElement {
         : html`
             <section class="card" data-section="timeline">
               <h3>Heard over time</h3>
-              <mc-line-chart .series=${d.timeline} .palette=${d.timelinePalette} .xDomain=${xDomain} stacked y-label="Packets"></mc-line-chart>
+              <mc-line-chart .series=${d.timeline} .palette=${d.timelinePalette} .describe=${d.timelineDescribe} .xDomain=${xDomain} stacked y-label="Packets"></mc-line-chart>
             </section>
             <section class="card" data-section="paths">
               <div class="head">

@@ -7,7 +7,7 @@ import { css, html, nothing, svg, type SVGTemplateResult, type TemplateResult } 
 import { scaleLinear, scaleTime } from 'd3-scale';
 import { area, curveMonotoneX, line } from 'd3-shape';
 import { bisectCenter, extent, max, min } from 'd3-array';
-import { ChartBase, chartStyles, formatDateTime, formatNumber, legend, tickCount, tipKey, xTimeAxis, yAxis } from './chart-base.js';
+import { ChartBase, chartStyles, formatDateTime, formatNumber, legend, tickCount, tipKey, type Describe, xTimeAxis, yAxis } from './chart-base.js';
 import { assignSlots, colorOf, legendFor, type SeriesPalette } from './palette.js';
 
 export interface LinePoint {
@@ -42,6 +42,7 @@ export class McLineChart extends ChartBase {
     series: { attribute: false },
     xDomain: { attribute: false },
     stacked: { type: Boolean },
+    describe: { attribute: false },
     yLabel: { type: String, attribute: 'y-label' },
     yFormat: { attribute: false },
     palette: { attribute: false },
@@ -78,6 +79,8 @@ export class McLineChart extends ChartBase {
   declare series: readonly LineSeries[];
   declare xDomain: readonly [number, number] | undefined;
   declare stacked: boolean;
+  /** Legend hover text per series key. */
+  declare describe: Describe | undefined;
   declare yLabel: string;
   declare yFormat: ((v: number) => string) | undefined;
   /** Series key → colour + legend; default: slots in series order. */
@@ -229,7 +232,7 @@ export class McLineChart extends ChartBase {
         </svg>
         ${tip}
       </div>
-      ${rows.length >= 2 ? legend(shown, this.stacked ? 'rect' : 'line') : nothing}
+      ${rows.length >= 2 ? legend(shown, this.stacked ? 'rect' : 'line', this.describe) : nothing}
     </div>`;
   }
 }

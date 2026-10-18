@@ -33,6 +33,11 @@ import {
   SERIES_ACKS,
   SERIES_REQUESTS,
   SERIES_UNKNOWN_CHANNELS,
+  SERIES_OTHER,
+  SERIES_PATHS,
+  SERIES_TRACES,
+  SERIES_CONTROL,
+  timelineSeriesDescription,
   autoBinMs,
   channelMessageCounts,
   matchesFilter,
@@ -934,5 +939,23 @@ describe('PacketStatsModel — app wiring', () => {
     expect(p.source).toMatchObject({ label: 'Somebody', resolved: false });
     expect(stats.radio.value).not.toBeNull();
     expect(p.airtimeMs).toBeGreaterThan(0);
+  });
+});
+
+describe('timelineSeriesDescription', () => {
+  it('names the payload types each series counts', () => {
+    const fixed: [string, string[]][] = [
+      [SERIES_DMS, ['TXT_MSG']],
+      [SERIES_ADVERTS, ['ADVERT']],
+      [SERIES_ACKS, ['ACK']],
+      [SERIES_PATHS, ['PATH']],
+      [SERIES_TRACES, ['TRACE']],
+      [SERIES_REQUESTS, ['REQ', 'RESPONSE', 'ANON_REQ']],
+      [SERIES_CONTROL, ['CONTROL']],
+      [SERIES_UNKNOWN_CHANNELS, ['GRP_TXT', 'GRP_DATA']],
+      [SERIES_OTHER, ['MULTIPART', 'RAW_CUSTOM']],
+    ];
+    for (const [key, types] of fixed) for (const t of types) expect(timelineSeriesDescription(key), key).toContain(t);
+    expect(timelineSeriesDescription('Public')).toBe('GRP_TXT and GRP_DATA: channel messages and data on Public.');
   });
 });
