@@ -27,6 +27,9 @@ find a doc error, fix the doc in the same change).
   forward intents.
 - Git workflow: see "Git workflow" below.
 - When adding a feature, also add its row/notes to `docs/roadmap.md` status if asked.
+- Never put real radio names, user handles, public keys or locations anywhere in this repo: code, tests,
+  fixtures, docs, commit messages, issues or screenshots. Use made-up names (e.g. `Alice`, `Test Radio`)
+  and generated keys. When copying text from a live session or UI, scrub any identifiers first.
 
 ## Token efficiency: split complex work into steps with subagents
 Usage is mostly the context each turn re-reads (turns × context size), not the output. A single agent
