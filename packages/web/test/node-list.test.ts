@@ -100,3 +100,55 @@ describe('node listing by hash', () => {
     expect(candidates(t)).toEqual([c.key]);
   });
 });
+
+describe('packet log path column endpoints', () => {
+  const cell = (id: number) => `tr[data-packet-id="${id}"] [data-field="path"]`;
+  const text = (t: Harness, id: number) => t.query(cell(id))!.textContent!.replace(/\s+/g, ' ').trim();
+
+  it('a REQ flood reads source → relay hops → destination; the count is the relay hops only', async () => {
+    const t = await connected();
+    await t.go('/packets', '[data-tab="packets"]');
+    const c = uniqueContact(t);
+    const dst = c.key.slice(0, 2);
+    const src = dst === '5e' ? '5f' : '5e';
+    // REQ (§3.0): dest_hash ‖ src_hash ‖ MAC(2) ‖ ciphertext; flood path = the hops so far
+    const bytes = buildPacket({
+      routeType: RouteType.FLOOD,
+      payloadType: PayloadType.REQ,
+      path: Uint8Array.of(0x11, 0x22),
+      payload: concatBytes(Uint8Array.of(parseInt(dst, 16), parseInt(src, 16)), new Uint8Array(18)),
+    });
+    const rec = await t.app.connection.store.value!.packets.append({ direction: 'rx', source: 'logRxData', bytes, ts: t.clock.now() });
+    await t.until(() => t.query(`${cell(rec.id)} [data-endpoint="dst"]`), 5000, 'path cell');
+    expect(text(t, rec.id)).toBe(`${src}→11→22→${dst} (2)`);
+    const ends = t.queryAll<HTMLElement>(`${cell(rec.id)} [data-endpoint]`);
+    expect(ends.map((e) => e.dataset['endpoint'])).toEqual(['src', 'dst']);
+    expect(t.queryAll(`${cell(rec.id)} [data-hop]`).map((e) => e.getAttribute('data-hop'))).toEqual(['11', '22']); // endpoints aren't hops
+    const to = t.query<HTMLAnchorElement>(`${cell(rec.id)} [data-endpoint="dst"] a`)!;
+    expect(to.getAttribute('href')).toBe(`#/nodes/${dst}`);
+    expect(to.title).toBe(`Destination ${dst}: ${c.name}`);
+    expect(t.query<HTMLAnchorElement>(`${cell(rec.id)} [data-endpoint="src"] a`)!.title).toMatch(/^Source /);
+
+    // the endpoint link opens the listing, not the row's inspector
+    to.click();
+    await t.until(() => location.hash === `#/nodes/${dst}` && candidates(t).length, 5000, 'listing');
+    expect(t.query('mc-packet-inspector')).toBeNull();
+    expect(candidates(t)).toEqual([c.key]);
+  });
+
+  it('a zero-hop packet shows just its ends; ANON_REQ links its sender key to the node page', async () => {
+    const t = await connected();
+    await t.go('/packets', '[data-tab="packets"]');
+    const store = t.app.connection.store.value!;
+    const direct = buildPacket({ routeType: RouteType.DIRECT, payloadType: PayloadType.TXT_MSG, path: new Uint8Array(0), payload: concatBytes(Uint8Array.of(0x0c, 0x5e), new Uint8Array(18)) });
+    const a = await store.packets.append({ direction: 'rx', source: 'logRxData', bytes: direct, ts: t.clock.now() });
+    const sender = scenarioKey('erin');
+    // ANON_REQ (§3.8): dest_hash ‖ sender pubkey(32) ‖ MAC(2) ‖ ciphertext
+    const anon = buildPacket({ routeType: RouteType.FLOOD, payloadType: PayloadType.ANON_REQ, path: Uint8Array.of(0x33), payload: concatBytes(Uint8Array.of(0x0c), sender, new Uint8Array(18)) });
+    const b = await store.packets.append({ direction: 'rx', source: 'logRxData', bytes: anon, ts: t.clock.now() });
+    await t.until(() => t.query(`${cell(a.id)} [data-endpoint]`) && t.query(`${cell(b.id)} [data-endpoint]`), 5000, 'path cells');
+    expect(text(t, a.id)).toBe('5e→0c (0)');
+    expect(text(t, b.id)).toBe(`${toHex(sender).slice(0, 2)}→33→0c (1)`);
+    expect(t.query<HTMLAnchorElement>(`${cell(b.id)} [data-endpoint="src"] a`)!.getAttribute('href')).toBe(`#/node/${toHex(sender)}`);
+  });
+});

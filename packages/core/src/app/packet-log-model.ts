@@ -35,6 +35,7 @@ import {
   summarizePacket,
   viewPacket,
   type DmKeys,
+  type PacketEndpoints,
   type PacketView,
   type SummaryContext,
 } from './packet-summary.js';
@@ -104,8 +105,11 @@ export interface PacketRow {
   record: PacketRecord;
   typeName: string;
   routeName: string;
+  /** Relay hops only: the count and path entries never include the payload's endpoints. */
   hops: number | null;
   path: readonly string[];
+  /** Source / destination named by the payload ({@link PacketEndpoints}): the path column's ends. */
+  endpoints: PacketEndpoints;
   /** Decoded one-line summary (with decrypted channel text when a PSK is known). */
   summary: string;
 }
@@ -766,7 +770,7 @@ export class PacketLogModel extends StoreBoundModel {
       if (this.#summaries.size > 20_000) this.#summaries.clear();
       this.#summaries.set(r.id, summary);
     }
-    return { id: r.id, record: r, typeName: view.typeName, routeName: view.routeName, hops: view.hops, path: view.path, summary };
+    return { id: r.id, record: r, typeName: view.typeName, routeName: view.routeName, hops: view.hops, path: view.path, endpoints: view.endpoints, summary };
   }
 
   /** DM decryption keys for summaries, when the radio's private key is stored (opt-in). */

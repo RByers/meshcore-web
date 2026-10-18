@@ -104,7 +104,7 @@ describe('path nodes link to node pages', () => {
     const rec = await store.packets.append({ direction: 'rx', bytes, source: 'logRxData' });
     const sel = `tr[data-packet-id="${rec.id}"] [data-field="path"] a[data-node-link="${repeater}"]`;
     await t.until(() => t.query(sel), 5000, 'hop link');
-    expect(t.query(`tr[data-packet-id="${rec.id}"] [data-field="path"]`)!.textContent!.replace(/\s+/g, ' ').trim()).toBe(`${repeater.slice(0, 2)} (1)`);
+    expect(t.query(`tr[data-packet-id="${rec.id}"] [data-field="path"]`)!.textContent!.replace(/\s+/g, ' ').trim()).toBe(`ee→${repeater.slice(0, 2)}→01 (1)`);
     t.query<HTMLAnchorElement>(sel)!.click();
     await t.until(() => location.hash === `#/node/${repeater}`, 5000, 'node page');
     expect(t.query('mc-packet-inspector')).toBeNull();

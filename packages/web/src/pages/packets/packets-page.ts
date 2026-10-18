@@ -11,7 +11,7 @@
  */
 import { css, html, nothing, type PropertyValues, type TemplateResult } from 'lit';
 import { repeat } from 'lit/directives/repeat.js';
-import { resolvedPathTitle, sendOutcomeLabel, type FrameRow, type LogView, type PacketRow } from '@meshcore-web/core/app';
+import { PATH_SEPARATOR, resolvedPathTitle, sendOutcomeLabel, type FrameRow, type LogView, type PacketRow } from '@meshcore-web/core/app';
 import { CMD, PUSH, RESP } from '@meshcore-web/core/protocol';
 import { AppElement } from '../../app-context.js';
 import { hrefFor } from '../../router.js';
@@ -19,7 +19,7 @@ import { shared } from '../../styles.js';
 import { formatLogTime, frameInspectorProps, packetInspectorProps, type InspectorProps } from './inspection.js';
 import { jsonReplacer } from './packet-inspector.js';
 import { hopsLink } from '../../components/path-dialog.js';
-import { pathHops } from '../../components/node-link.js';
+import { hashLink, nodeLink, pathHops } from '../../components/node-link.js';
 import './packet-inspector.js';
 import './packet-stats.js';
 import './packet-filters.js';
@@ -227,6 +227,11 @@ export class McPacketsPage extends AppElement {
         min-width: 14rem;
         overflow: hidden;
         text-overflow: ellipsis;
+      }
+      /* a path's source / destination (payload hashes): set apart from the relay hops */
+      .endpoint a {
+        color: var(--mc-text-muted);
+        font-style: italic;
       }
       td.num {
         text-align: end;
@@ -619,15 +624,39 @@ export class McPacketsPage extends AppElement {
     </div>`;
   }
 
-  /** Path / hops: hex hashes, or node names with the "Show path as node names" setting (issue #3). */
+  /**
+   * Path / hops: hex hashes, or node names with the "Show path as node names" setting (issue #3).
+   * Packets whose payload names its ends (REQ / RESPONSE / TXT_MSG / PATH src / dest hashes,
+   * ANON_REQ's sender key) show them first and last, muted: source → relay hops → destination
+   * (flood: the hops so far; direct: the route still ahead). The count covers the relay hops only.
+   */
   #pathCell(r: PacketRow): TemplateResult {
-    if (r.hops === null) return html`<td class="mono" data-field="path">—</td>`;
-    if (!r.path.length) return html`<td class="mono" data-field="path">${r.hops}</td>`;
-    const hops = this.app.contacts.resolvePath(r.path);
+    const { src, dst } = r.endpoints;
+    if (src === null && dst === null) {
+      if (r.hops === null) return html`<td class="mono" data-field="path">—</td>`;
+      if (!r.path.length) return html`<td class="mono" data-field="path">${r.hops}</td>`;
+    }
+    const hops = r.path.length ? this.app.contacts.resolvePath(r.path) : [];
     const names = this.app.appSettings.pathNames.value;
-    return html`<td class="mono" data-field="path" title=${resolvedPathTitle(hops)}
-      >${pathHops(hops, names ? { names, notes: this.#notes } : { names, sep: '→', notes: this.#notes })} ${hopsLink(`(${r.hops})`, { kind: 'packet', id: r.id })}</td
+    const sep = names ? PATH_SEPARATOR : '→';
+    const chain = [
+      ...(src !== null ? [this.#endpoint('src', src)] : []),
+      ...(hops.length ? [pathHops(hops, names ? { names, notes: this.#notes } : { names, sep, notes: this.#notes })] : []),
+      ...(dst !== null ? [this.#endpoint('dst', dst)] : []),
+    ];
+    const count = r.hops === null ? nothing : r.path.length ? hopsLink(`(${r.hops})`, { kind: 'packet', id: r.id }) : `(${r.hops})`;
+    return html`<td class="mono" data-field="path" title=${hops.length ? resolvedPathTitle(hops) : nothing}
+      >${chain.map((c, i) => html`${i ? sep : ''}${c}`)} <span data-field="hop-count">${count}</span></td
     >`;
+  }
+
+  /** A path cell end: the source / destination hash, linked to the nodes with it (ANON_REQ: the sender's node). */
+  #endpoint(role: 'src' | 'dst', hex: string): TemplateResult {
+    const hash = hex.slice(0, 2);
+    const known = this.app.contacts.resolvePath([hash])[0];
+    const what = role === 'src' ? 'Source' : 'Destination';
+    const title = hex.length > 2 ? `${what}: ${hex}` : `${what} ${known?.title ?? hash}`;
+    return html`<span class="endpoint" data-endpoint=${role}>${hex.length > 2 ? nodeLink(hash, hex, title) : hashLink(hash, hash, title)}</span>`;
   }
 
   /** Send outcome of a tx row (pending / sent / confirmed / failed / no ACK). */

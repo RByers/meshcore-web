@@ -209,6 +209,11 @@ candidates in the tooltip) in message meta, the contacts list, the node page (Me
 Info, admin path / trace) and packet log; still wrapped in the hops link. The capture pipeline matches each incoming
 flood message to its LOG_RX_DATA packet (`rx-path-correlator.ts`) and stores the path bytes in
 `MessageRecord.path` (optional, best effort).
+The packet log's *Path / hops* column puts the payload's ends around the relay hops: REQ /
+RESPONSE / TXT_MSG / PATH `src_hash` / `dest_hash`, ANON_REQ the sender key's first byte (linked
+to its node) and `dest_hash` (core `PacketRow.endpoints`), read source → hops → destination,
+muted, always hex, each linked to `/nodes/<hash>` (`[data-endpoint="src|dst"]`); the "(n)" count
+stays the relay hops only.
 
 **Approximate positions (issue #7).** App setting `AppSettingsModel.approximatePositions`
 (default off; Settings page and the map filter bar): contacts without a location get a dashed "?"

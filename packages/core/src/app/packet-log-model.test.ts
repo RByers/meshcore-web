@@ -92,6 +92,9 @@ describe('PacketLogModel — packets', () => {
     expect(grp.summary).toBe('GRP_TXT Public: "Bob: hello mesh"');
     const txt = rows.find((r) => r.record.payloadType === PayloadType.TXT_MSG)!;
     expect(txt.summary).toBe('TXT_MSG Alice → Emulator (encrypted)');
+    // the path column's ends: src_hash / dest_hash (§3.0), kept apart from the relay hops
+    expect(txt.endpoints).toEqual({ src: toHex(scenario.keys.alice.subarray(0, 1)), dst: toHex(scenario.keys.self.subarray(0, 1)) });
+    expect(advert.endpoints).toEqual({ src: null, dst: null });
     expect(log.packets.total.value).toBe(rows.length);
     expect(log.packets.matching.value).toBe(rows.length);
     // the repeater re-floods Alice's advert: a 1-hop copy via the repeater
