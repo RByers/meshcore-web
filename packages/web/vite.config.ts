@@ -32,6 +32,9 @@ export default defineConfig({
   },
   test: {
     include: ['test/**/*.test.ts', 'src/**/*.test.ts'],
+    // The browser test server otherwise inherits `server.strictPort` and fails outright when
+    // another test run on this machine holds Vitest's default port (63315); let it pick the next.
+    api: { strictPort: false },
     // Files run in parallel iframes: each harness scopes its IndexedDB names (see src/testing/harness.ts),
     // so tests must not touch shared origin state (localStorage etc.) outside the harness.
     browser: {
