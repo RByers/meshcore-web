@@ -152,7 +152,11 @@ pathStarts / pathEnds: same shape as bySource (nodeStats), per first / last `pat
 lastHops: LastHopStats   // signal per last hop (lastHopSignalStats), received packets only:
   // { top: LastHopSignal[] /* top 50, count desc, then label */, unattributed /* received, lastHop null: TRACE, direct routes, unattributed zero-hop */, others, othersPackets }
   // LastHopSignal = SnrSummary & { node: NodeRef; lastTs; direct /* zero hop: the node is the source */; relayed /* count − direct */ }
-  // SnrSummary = { count, snrCount /* with an SNR */, meanSnr, minSnr, maxSnr /* null when no SNR */, meanRssi /* over those with an RSSI */ }
+  // SnrSummary = { count, snrCount /* with an SNR */, meanSnr, minSnr, maxSnr /* null when no SNR */, meanRssi /* over those with an RSSI */,
+  //               snr: BoxStats | null /* Tukey box over the SNR values; null when none */ }
+  // BoxStats (app/box-stats.ts, boxStats(values), null for an empty sample) = { n, min, q1, median, q3, max, mean,
+  //   whiskerLow, whiskerHigh /* most extreme values within 1.5·IQR of the box */, outliers /* beyond, ascending, uncapped */ }
+  //   Quartiles by linear interpolation between closest ranks (R type 7 / numpy default: h = (n − 1)·p).
   // Grouped by nodeId(lastHop), so an ambiguous hop hash (resolveHop label `a3?`) is a row of its own
   // rather than being dropped or split: it is still one radio link, just not attributable to one contact.
 timeline: { binMs: number; bins: { t: number; series: Record<string, number> }[]; series: string[] }
@@ -337,13 +341,13 @@ is not shown; the inspector split is hidden). The Stats panel, top to bottom:
    positions" checkbox. Each map fits its markers when opened / when the checkbox changes, and
    re-fits only when filters move its bounds.
 10. **Signal by last hop** (`data-section="last-hops"`, `lastHops`), right after the first / final
-   path node charts: how well this radio hears each neighbour. An `mc-bar-chart` with a bar per last
-   hop (top 50 by packet count, contact links like the source chart, `a3?` rows for ambiguous
-   hashes), the bar value = mean SNR (dB; nodes whose packets carried no SNR show no value; negative
-   means grow left from the zero line, `mc-bar-chart` supports negative and `null` values), tooltip
-   with the packet count (direct / relayed), min–max SNR, mean RSSI and last heard; footer "n
-   received packets had no last hop, m more nodes". A bar filters by that last hop (chip "Last hop:
-   X", field `lastHop`).
+   path node charts: how well this radio hears each neighbour. One horizontal box plot per last hop
+   (`LastHopSignal.snr`; top 50 by packet count as now, contact links like the source chart, `a3?`
+   rows for ambiguous hashes) on a shared SNR axis (dB): box = q1–q3, a line at the median, whiskers
+   to `whiskerLow` / `whiskerHigh`, a dot per outlier and a mean marker; nodes whose packets carried
+   no SNR show no box. Tooltip with n, median, IQR, range (min–max), mean, mean RSSI, the packet
+   count (direct / relayed) and last heard; footer "n received packets had no last hop, m more
+   nodes". Clicking a row filters by that last hop (chip "Last hop: X", field `lastHop`).
 
 **Drill-down** (model side in §6): clicking a source bar, a channel bar, a hop-count bar, a first / final path node bar, a last-hop signal bar, or a breakdown segment /
 legend entry (type, route, direction, category, channel, compression) adds a filter for that value; clicking the
@@ -403,7 +407,9 @@ interface ContactStats {
   hops: { hops: number; count: number }[]
   lastHopOf: readonly StatPacket[]   // received packets whose lastHop.key === key, whatever their source (ascending)
   lastHopSignal: { ts: number; snr: number | null; rssi: number | null; direct: boolean /* zero hop from this node */; id: number }[] // lastHopOf, ascending
-  lastHopSummary: SnrSummary         // { count, snrCount, meanSnr, minSnr, maxSnr, meanRssi } over lastHopOf
+  lastHopSummary: SnrSummary         // { count, snrCount, meanSnr, minSnr, maxSnr, meanRssi, snr: BoxStats | null } over lastHopOf
+  lastHopBoxes: { all: BoxStats | null; direct: BoxStats | null /* zero hop: this node is the source */; relayed: BoxStats | null }
+                                     // SNR boxes over lastHopOf (packets without an SNR skipped; null when no values)
 }
 ```
 
@@ -426,8 +432,10 @@ otherwise the segment skips them. A segment is dashed only when every packet ove
 estimated end or skipped a hop); *Signal over time*
 (`mc-dot-plot`: x time, y SNR (selector SNR / RSSI / Hops), colour = path (top 8 paths, rest
 Other), dot size = bytes); *Hop count* distribution; *Heard via this node (last hop)*
-(`data-section="last-hop"`, shown when `lastHopOf` is non-empty): tiles from `lastHopSummary`
-(packets, mean SNR, min / max SNR) and an SNR-over-time `mc-dot-plot` of `lastHopSignal`
+(`data-section="last-hop"`, shown when `lastHopOf` is non-empty): a packets tile
+(`lastHopSummary.count`), a box plot from `lastHopBoxes` with rows *All* / *Direct* / *Relayed*
+(rows without data omitted; same marks and tooltip as the §3 item 10 chart; it replaces the
+former mean / min–max SNR tiles), then an SNR-over-time `mc-dot-plot` of `lastHopSignal`
 (x time, y SNR, colour = *Direct* (zero hop from this node) / *Relayed*; points without an SNR
 left out). The section comes right after the tiles when `lastHopOf` outnumbers the packets from the
 contact (repeaters), otherwise last; the tab shows its empty state only when `from`, `via` and

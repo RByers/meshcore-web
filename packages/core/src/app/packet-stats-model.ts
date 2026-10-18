@@ -34,6 +34,7 @@ import { resolveHop } from './path-resolver.js';
 import type { PathUsageMap, PathUsageRoute, PathUsageStop } from './path-usage.js';
 import { batch, computed, effect, signal, untracked, type ReadonlySignal } from './signal.js';
 import { StoreBoundModel } from './store-bound.js';
+import { boxStats, type BoxStats } from './box-stats.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -412,6 +413,17 @@ export interface SnrSummary {
   maxSnr: number | null;
   /** Mean over the packets with an RSSI. */
   meanRssi: number | null;
+  /** Tukey box over the SNR values (null when none had one). */
+  snr: BoxStats | null;
+}
+
+/** SNR boxes of a contact's last-hop packets by how they were heard ({@link ContactStats.lastHopBoxes}). */
+export interface LastHopBoxes {
+  all: BoxStats | null;
+  /** Zero hop: the contact is the source ({@link LastHopSignalPoint.direct}). */
+  direct: BoxStats | null;
+  /** The contact was the last forwarder. */
+  relayed: BoxStats | null;
 }
 
 /** One received packet heard from a last hop ({@link ContactStats.lastHopSignal}). */
@@ -470,6 +482,8 @@ export interface ContactStats {
   lastHopSignal: LastHopSignalPoint[];
   /** SNR / RSSI over `lastHopOf`. */
   lastHopSummary: SnrSummary;
+  /** SNR boxes over `lastHopOf`: all, direct (zero hop) and relayed. */
+  lastHopBoxes: LastHopBoxes;
 }
 
 export const SERIES_DMS = 'DMs';
@@ -1129,12 +1143,14 @@ class SnrAcc {
   max = -Infinity;
   rssiN = 0;
   rssiSum = 0;
+  readonly snrs: number[] = [];
 
   add(p: Pick<StatPacket, 'snr' | 'rssi'>): void {
     this.count++;
     if (p.snr !== null) {
       this.snrN++;
       this.snrSum += p.snr;
+      this.snrs.push(p.snr);
       this.min = Math.min(this.min, p.snr);
       this.max = Math.max(this.max, p.snr);
     }
@@ -1153,6 +1169,7 @@ class SnrAcc {
       minSnr: any ? this.min : null,
       maxSnr: any ? this.max : null,
       meanRssi: this.rssiN ? this.rssiSum / this.rssiN : null,
+      snr: boxStats(this.snrs),
     };
   }
 }
@@ -1162,6 +1179,19 @@ export function snrSummary(pts: readonly Pick<StatPacket, 'snr' | 'rssi'>[]): Sn
   const acc = new SnrAcc();
   for (const p of pts) acc.add(p);
   return acc.summary();
+}
+
+/** SNR boxes of `pts` overall and split by {@link StatPacket.direct}. */
+export function lastHopBoxes(pts: readonly Pick<StatPacket, 'snr' | 'direct'>[]): LastHopBoxes {
+  const all: number[] = [];
+  const direct: number[] = [];
+  const relayed: number[] = [];
+  for (const p of pts) {
+    if (p.snr === null) continue;
+    all.push(p.snr);
+    (p.direct ? direct : relayed).push(p.snr);
+  }
+  return { all: boxStats(all), direct: boxStats(direct), relayed: boxStats(relayed) };
 }
 
 /**
@@ -1542,6 +1572,7 @@ export class PacketStatsModel extends StoreBoundModel implements DrillSource {
       lastHopOf,
       lastHopSignal: lastHopOf.map((p) => ({ ts: p.ts, snr: p.snr, rssi: p.rssi, direct: p.direct, id: p.id })),
       lastHopSummary: snrSummary(lastHopOf),
+      lastHopBoxes: lastHopBoxes(lastHopOf),
     };
   }
 

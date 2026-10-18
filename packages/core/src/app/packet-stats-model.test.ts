@@ -1112,6 +1112,7 @@ describe('PacketStatsModel — signal by last hop (§1.6, §5)', () => {
       minSnr: 4,
       maxSnr: 10,
       meanRssi: -90,
+      snr: { n: 2, min: 4, q1: 5.5, median: 7, q3: 8.5, max: 10, mean: 7, whiskerLow: 4, whiskerHigh: 10, outliers: [] },
       lastTs: T + 2000,
       direct: 1,
       relayed: 2,
@@ -1142,11 +1143,16 @@ describe('PacketStatsModel — signal by last hop (§1.6, §5)', () => {
       { ts: T + 1000, snr: 4, rssi: -100, direct: false, id: hill.lastHopOf[1]!.id },
       { ts: T + 2000, snr: null, rssi: null, direct: false, id: hill.lastHopOf[2]!.id },
     ]);
-    expect(hill.lastHopSummary).toEqual({ count: 3, snrCount: 2, meanSnr: 7, minSnr: 4, maxSnr: 10, meanRssi: -90 });
+    expect(hill.lastHopSummary).toMatchObject({ count: 3, snrCount: 2, meanSnr: 7, minSnr: 4, maxSnr: 10, meanRssi: -90 });
+    expect(hill.lastHopSummary.snr).toMatchObject({ n: 2, q1: 5.5, median: 7, q3: 8.5 });
+    // direct = its own zero-hop advert (SNR 10); relayed = the two it forwarded, one without an SNR
+    const point = (v: number) => ({ n: 1, min: v, q1: v, median: v, q3: v, max: v, mean: v, whiskerLow: v, whiskerHigh: v, outliers: [] });
+    expect(hill.lastHopBoxes).toEqual({ all: hill.lastHopSummary.snr, direct: point(10), relayed: point(4) });
     // Alice is never the last hop (her DIRECT-routed DM has none)
     const alice = model.forContact(ALICE.key).value;
     expect(alice.lastHopOf).toEqual([]);
-    expect(alice.lastHopSummary).toEqual({ count: 0, snrCount: 0, meanSnr: null, minSnr: null, maxSnr: null, meanRssi: null });
+    expect(alice.lastHopBoxes).toEqual({ all: null, direct: null, relayed: null });
+    expect(alice.lastHopSummary).toEqual({ count: 0, snrCount: 0, meanSnr: null, minSnr: null, maxSnr: null, meanRssi: null, snr: null });
   });
 
   it('keeps the top last hops and counts the rest', () => {
@@ -1184,6 +1190,6 @@ describe('PacketStatsModel — signal by last hop (§1.6, §5)', () => {
     expect(s.top).toHaveLength(TOP_SOURCES);
     expect(s.top[0]).toMatchObject({ node: { hash: '00' }, count: 2, snrCount: 1, meanSnr: 1, meanRssi: null, relayed: 2, direct: 0 });
     expect(s).toMatchObject({ unattributed: 0, others: 2, othersPackets: 2 });
-    expect(snrSummary([])).toEqual({ count: 0, snrCount: 0, meanSnr: null, minSnr: null, maxSnr: null, meanRssi: null });
+    expect(snrSummary([])).toEqual({ count: 0, snrCount: 0, meanSnr: null, minSnr: null, maxSnr: null, meanRssi: null, snr: null });
   });
 });

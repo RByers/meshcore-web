@@ -14,6 +14,7 @@ export * from './packet-summary.js';
 export * from './packet-log-model.js';
 export * from './node-model.js';
 export * from './airtime.js';
+export * from './box-stats.js';
 export * from './packet-stats-model.js';
 export * from './device-settings-model.js';
 export * from './radio-presets.js';
