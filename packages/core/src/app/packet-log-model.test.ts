@@ -9,6 +9,7 @@ import { effect } from './signal.js';
 import { testApp, connectedApp } from './testing.js';
 import { packetFilterChips, withoutChip, type PacketFilter, type PacketLogModel } from './packet-log-model.js';
 import { SEND_BACKFILL_SETTING } from '../store/send-backfill.js';
+import { relationKeysOf } from './packet-relations.js';
 
 /** Leaves (ignoring bit fields and decrypted overlays) must tile the node exactly. */
 function checkTiling(n: AnnotationNode): void {
@@ -555,5 +556,53 @@ describe('PacketLogModel — filter shared with the packet statistics', () => {
     let g: PacketFilter = f;
     for (const c of packetFilterChips(f)) g = withoutChip(g, c.key);
     expect(g).toEqual({ from: 1, to: 2 });
+  });
+});
+
+describe('PacketLogModel — request ↔ reply pairing', () => {
+  it('links our DM to its ACK and our trace to the trace back, live and after a rebuild', async () => {
+    const { app, log, scenario } = await connected();
+    const store = app.connection.store.value!;
+    const dmRow = async () => (await store.packets.query({ direction: 'tx', payloadType: PayloadType.TXT_MSG })).items[0]!;
+    // the index is built on first use (empty until then), then follows the log live
+    expect(log.related(1)).toEqual([]);
+    await log.settled();
+
+    const dm = app.chat('contact', toHex(scenario.keys.alice));
+    await dm.settled();
+    expect((await (await dm.send('ping')).done).status).toBe('delivered');
+    await app.connection.capture!.idle();
+    await log.settled();
+    const sent = await dmRow();
+    const acks = (await store.packets.query({ payloadType: PayloadType.ACK })).items.filter((r) => relationKeysOf(r)[0]?.key === sent.send!.tag);
+    expect(acks.length).toBeGreaterThan(0);
+    expect(log.related(sent.id).map((r) => r.id).sort()).toEqual(acks.map((r) => r.id).sort());
+    expect(log.related(sent.id).every((r) => r.relation === 'ack' && r.rule === 'ack')).toBe(true);
+    expect(log.answered(sent.id)).toBe(true);
+    expect(log.related(acks[0]!.id)).toEqual([{ id: sent.id, relation: 'acked', rule: 'ack' }]);
+    expect((await log.inspect(sent.id))!.related.length).toBe(acks.length);
+
+    const client = app.connection.client.value!;
+    await client.tracePath(scenario.keys.repeater.subarray(0, 1)).catch(() => undefined);
+    await app.connection.capture!.idle();
+    await log.settled();
+    const trace = (await store.packets.query({ direction: 'tx', payloadType: PayloadType.TRACE })).items[0]!;
+    await vi.waitFor(() => expect(log.related(trace.id).some((r) => r.relation === 'reply' && r.rule === 'trace')).toBe(true));
+
+    // a bulk change (clear / import) rebuilds the index from the store; an effect reading it re-runs
+    const seen: boolean[] = [];
+    const stop = effect(() => {
+      seen.push(log.answered(sent.id));
+    });
+    const before = log.related(sent.id).length;
+    const exported = await log.exportPackets();
+    await log.clearPackets();
+    await log.settled();
+    expect(log.related(sent.id)).toEqual([]);
+    expect(seen).toEqual([true, false]);
+    await log.importJson(exported);
+    await log.settled();
+    expect(log.related((await dmRow()).id).length).toBe(before);
+    stop();
   });
 });

@@ -42,6 +42,7 @@ import {
 import { contactTypeName, type ContactKind } from './messaging.js';
 import { STATS_FIELD_LABEL, filterKey, type StatPacket, type StatsFilter } from './packet-stats-model.js';
 import { StoreBoundModel } from './store-bound.js';
+import { PacketRelationIndex, RELATION_PAYLOAD_TYPES, type RelatedPacket } from './packet-relations.js';
 import { batch, computed, signal, type ReadonlySignal, type Signal } from './signal.js';
 import type { Unsubscribe } from '../util/events.js';
 
@@ -200,6 +201,8 @@ export interface PacketInspection {
   sourceFrame?: FrameRecord;
   /** Number of logged copies with the same packet hash (re-heard / repeated). */
   copies: number;
+  /** Requests / replies / ACKs paired with this packet ({@link PacketLogModel.related}). */
+  related: readonly RelatedPacket[];
 }
 
 export interface FrameInspection {
@@ -498,6 +501,18 @@ export class PacketLogModel extends StoreBoundModel {
   readonly #summaries = new Map<number, string>();
   /** ECDH shared secrets by contact key hex (only while the radio key is stored). */
   readonly #secrets = new Map<string, Promise<Uint8Array | null>>();
+  /** Request ↔ reply pairing keys of the whole log; built on first use, then kept live. */
+  readonly #relations = new PacketRelationIndex();
+  /** Bumped whenever {@link #relations} changes (what {@link related} readers track). */
+  readonly #relationsVersion = signal(0);
+  /** null until first used; then the latest (re)build of {@link #relations}. */
+  #relationsBuild: Promise<void> | null = null;
+  #relationsGen = 0;
+  /**
+   * While a build runs: the records live events indexed meanwhile (newer than the build's
+   * snapshot, so they win over it); null otherwise.
+   */
+  #relationsLive: Map<number, PacketRecord> | null = null;
 
   /** Names / channel hashes used to describe packets. */
   readonly context: ReadonlySignal<SummaryContext> = this.#ctx.readonly;
@@ -587,15 +602,19 @@ export class PacketLogModel extends StoreBoundModel {
         // its point: it is offered then (`attachStats`)
         if (this.#stats && hasDrill(this.packets.filter.peek())) this.packets.countRecord();
         else this.packets.onRecord(r);
+        this.#relateLive(r);
       }),
       store.events.on('packetUpdated', (e) => {
         this.#summaries.delete(e.record.id);
         this.packets.onUpdate(e.record, e.previous);
+        this.#relateLive(e.record); // a DM's ACK code arrives with RESP_SENT
       }),
       store.events.on('frame', (r) => this.frames.onRecord(r)),
       store.events.on('logChanged', (e) => {
-        if (e.store === 'packets') void this.packets.reload();
-        else void this.frames.reload();
+        if (e.store === 'packets') {
+          void this.packets.reload();
+          if (this.#relationsBuild) void this.#buildRelations(store);
+        } else void this.frames.reload();
       }),
       store.events.on('contact', () => void this.reload()),
       store.events.on('channel', () => void this.reload()),
@@ -624,12 +643,84 @@ export class PacketLogModel extends StoreBoundModel {
     this.#secrets.clear();
     this.packets.reset();
     this.frames.reset();
+    this.#relationsGen++;
+    this.#relationsBuild = null;
+    this.#relationsLive = null;
+    this.#relations.clear();
+    this.#relationsVersion.value++;
   }
 
   /** Resolves once loads and queued live-tail updates have been applied. */
   override async settled(): Promise<void> {
     await super.settled();
     await Promise.all([this.packets.settled(), this.frames.settled()]);
+    await this.#relationsSettled();
+  }
+
+  // ---- request ↔ reply pairing (packet-relations.ts) ----
+
+  /**
+   * The packets paired with record `id`: its replies / ACKs, or the request it answers (see
+   * packet-relations.ts for the rules), oldest first. Synchronous and cheap (an index lookup);
+   * reactive: reading it in a computed / render re-runs when the pairing changes. The index of
+   * the whole log is built on the first call (empty until then), then follows the log live.
+   */
+  related(id: number): readonly RelatedPacket[] {
+    void this.#relationsVersion.value;
+    this.#ensureRelations();
+    return this.#relations.related(id);
+  }
+
+  /** True when record `id` has a reply or an ACK (a list-row marker); reactive like {@link related}. */
+  answered(id: number): boolean {
+    return this.related(id).some((r) => r.relation === 'reply' || r.relation === 'ack');
+  }
+
+  #ensureRelations(): Promise<void> {
+    if (this.#relationsBuild) return this.#relationsBuild;
+    const store = this.store;
+    return store ? this.#buildRelations(store) : Promise.resolve();
+  }
+
+  /** Waits for the current relations build, including any that supersede it meanwhile. */
+  async #relationsSettled(): Promise<void> {
+    let b: Promise<void> | null = null;
+    while (this.#relationsBuild && this.#relationsBuild !== b) {
+      b = this.#relationsBuild;
+      await b;
+    }
+  }
+
+  /** (Re)builds the relations index from the log: one indexed scan per payload type a rule reads. */
+  #buildRelations(store: RadioStore): Promise<void> {
+    const gen = ++this.#relationsGen;
+    const live = new Map<number, PacketRecord>();
+    this.#relationsLive = live;
+    const build = (async () => {
+      const lists = await Promise.all(
+        RELATION_PAYLOAD_TYPES.map((payloadType) =>
+          // only our own DMs pair without keys; the rx ones need decryption
+          store.packets.all(payloadType === PayloadType.TXT_MSG ? { payloadType, direction: 'tx' } : { payloadType }),
+        ),
+      );
+      if (gen !== this.#relationsGen) return;
+      batch(() => {
+        this.#relations.clear();
+        for (const list of lists) for (const r of list) if (!live.has(r.id)) this.#relations.add(r);
+        for (const r of live.values()) this.#relations.add(r);
+        this.#relationsLive = null;
+        this.#relationsVersion.value++;
+      });
+    })().catch((err: unknown) => this.onError(err));
+    this.#relationsBuild = build;
+    return build;
+  }
+
+  /** Follows one appended / updated record once the index exists. */
+  #relateLive(r: PacketRecord): void {
+    if (!this.#relationsBuild) return;
+    this.#relationsLive?.set(r.id, r);
+    if (this.#relations.add(r)) this.#relationsVersion.value++;
   }
 
   /**
@@ -818,7 +909,8 @@ export class PacketLogModel extends StoreBoundModel {
       record.sourceFrameId !== undefined ? store.frames.get(record.sourceFrameId) : Promise.resolve(undefined),
       record.hash ? store.packets.count({ hash: record.hash }) : Promise.resolve(1),
     ]);
-    const out: PacketInspection = { record, annotation, view, summary, copies };
+    await this.#ensureRelations();
+    const out: PacketInspection = { record, annotation, view, summary, copies, related: this.#relations.related(id) };
     if (sourceFrame) out.sourceFrame = sourceFrame;
     return out;
   }
