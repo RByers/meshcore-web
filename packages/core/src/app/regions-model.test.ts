@@ -147,6 +147,26 @@ describe('RegionsModel: fetch from repeaters (anon request 0x01)', () => {
     expect(t.client.findContact(t.scenario.keys.repeater)!.outPathLen).toBe(PATH_LEN_UNKNOWN);
   });
 
+  it('the temporary zero-hop path does not join the path history', async () => {
+    const t = await connectedApp();
+    t.scenario.nodes.repeater.remote.config.regions = ['north'];
+    const paths = t.app.contactPaths;
+    await paths.setPath(t.keys.repeater, 'flood');
+    await paths.forget(t.keys.repeater, '0:'); // the scenario's repeater started zero-hop
+    await paths.idle();
+    const before = (await t.store.contacts.get(t.keys.repeater))!.pathHistory ?? [];
+    expect(before.some((e) => e.pathLen === 0)).toBe(false);
+    expect(await t.app.regions.fetchFromRepeater(t.keys.repeater)).toEqual(['north']);
+    await paths.idle();
+    const rec = (await t.store.contacts.get(t.keys.repeater))!;
+    expect(rec.outPathLen & 0xff).toBe(PATH_LEN_UNKNOWN);
+    expect((rec.pathHistory ?? []).some((e) => e.pathLen === 0)).toBe(false);
+    // a path the device really learns afterwards is still recorded
+    await paths.setPath(t.keys.repeater, []);
+    await paths.idle();
+    expect((await t.store.contacts.get(t.keys.repeater))!.pathHistory?.some((e) => e.pathLen === 0)).toBe(true);
+  });
+
   it('a flood-routed regions request is ignored (repeaters answer it only direct)', async () => {
     const t = await connectedApp();
     await t.client.resetPath(t.scenario.keys.repeater);

@@ -182,6 +182,8 @@ interface Used {
 
 export class ContactPathsModel extends StoreBoundModel implements DmPathRecorder {
   #queue: Promise<unknown> = Promise.resolve();
+  /** `key|pathId` → count: temporary paths that must not join the history ({@link ignorePath}). */
+  readonly #ignored = new Map<string, number>();
 
   /** Repeaters / room servers known to us, by name. */
   readonly candidates: ReadonlySignal<readonly PathCandidate[]>;
@@ -201,9 +203,28 @@ export class ContactPathsModel extends StoreBoundModel implements DmPathRecorder
       const r = e.record;
       if ((r.outPathLen & 0xff) === PATH_LEN_UNKNOWN || !decodePathLen(r.outPathLen).valid) return;
       const id = pathId(r.outPathLen, r.outPath);
+      if (this.#ignored.has(`${r.key}|${id}`)) return;
       if (r.pathHistory?.some((x) => pathId(x.pathLen, x.path) === id)) return;
       void this.#mutate(r.key, r.outPathLen, r.outPath, (x) => ({ ...x, observed: x.attempts === 0 ? true : x.observed, lastUsed: this.connection.clock.now() }), { touch: true });
     });
+  }
+
+  /**
+   * While the returned release function is not called, `contactKey` taking this path (e.g. a
+   * temporary zero-hop path set for one request, `RegionsModel.fetchFromRepeater`) is not
+   * recorded as an observed path. Release only after the restored record has been stored.
+   */
+  ignorePath(contactKey: string, pathLen: number, path: Uint8Array): () => void {
+    const k = `${contactKey.toLowerCase()}|${pathId(pathLen, path)}`;
+    this.#ignored.set(k, (this.#ignored.get(k) ?? 0) + 1);
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      const n = (this.#ignored.get(k) ?? 1) - 1;
+      if (n > 0) this.#ignored.set(k, n);
+      else this.#ignored.delete(k);
+    };
   }
 
   protected async load(): Promise<void> {

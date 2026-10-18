@@ -292,6 +292,7 @@ export class AppModel {
         contacts: this.contacts.contacts,
         defaultScope: settings.defaultFloodScope,
         loadDefaultScope: () => settings.loadDefaultFloodScope(),
+        pathHistory: this.contactPaths,
       });
     }
     return this.#regions;

@@ -129,6 +129,11 @@ export interface RegionsModelDeps {
   defaultScope?: ReadonlySignal<FloodScopeView | null | undefined>;
   /** Reads the radio's default scope into `defaultScope`; called on connect while it is unknown. */
   loadDefaultScope?: () => Promise<void>;
+  /**
+   * Keeps the temporary zero-hop path of a fetch out of the contact's path history (AppModel
+   * passes `app.contactPaths`).
+   */
+  pathHistory?: { ignorePath(contactKey: string, pathLen: number, path: Uint8Array): () => void };
 }
 
 export class RegionsModel {
@@ -263,28 +268,32 @@ export class RegionsModel {
     const c = client.findContact(pubKey);
     if (!c) throw new Error('Unknown contact');
     const unknownPath = c.outPathInfo.isFlood;
-    let data: Uint8Array;
-    if (unknownPath) {
-      await client.addOrUpdateContact({
-        pubKey: c.pubKey,
-        type: c.type,
-        flags: c.flags,
-        outPathLen: 0,
-        outPath: new Uint8Array(0),
-        name: c.name,
-        lastAdvert: c.lastAdvert,
-        lat: c.lat,
-        lon: c.lon,
-      });
-      data = regionsRequestData(0);
-    } else {
-      data = regionsRequestData(c.outPathLen, reverseHops(c.outPath, c.outPathInfo.hashSize));
-    }
+    const data = unknownPath ? regionsRequestData(0) : regionsRequestData(c.outPathLen, reverseHops(c.outPath, c.outPathInfo.hashSize));
+    const release = unknownPath ? this.#deps.pathHistory?.ignorePath(pubKeyHex, 0, new Uint8Array(0)) : undefined;
     try {
+      if (unknownPath) {
+        await client.addOrUpdateContact({
+          pubKey: c.pubKey,
+          type: c.type,
+          flags: c.flags,
+          outPathLen: 0,
+          outPath: new Uint8Array(0),
+          name: c.name,
+          lastAdvert: c.lastAdvert,
+          lat: c.lat,
+          lon: c.lon,
+        });
+        opts.signal?.throwIfAborted();
+      }
       const req = client.anonRequest(c.pubKey, data, opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {});
       return parseRegionsReply(await abortable(req, opts.signal));
     } finally {
-      if (unknownPath && client.connected) await client.resetPath(c.pubKey).catch(() => undefined);
+      if (unknownPath) {
+        if (client.connected) await client.resetPath(c.pubKey).catch(() => undefined);
+        // the zero-hop and restored records are stored by the capture pipeline
+        await this.connection.capture?.idle().catch(() => undefined);
+        release?.();
+      }
     }
   }
 
