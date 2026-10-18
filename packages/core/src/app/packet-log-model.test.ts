@@ -7,7 +7,7 @@ import type { AnnotationNode } from '../packet/annotate.js';
 import type { AppModel } from './app-model.js';
 import { effect } from './signal.js';
 import { testApp, connectedApp } from './testing.js';
-import type { PacketLogModel } from './packet-log-model.js';
+import { packetFilterChips, withoutChip, type PacketFilter, type PacketLogModel } from './packet-log-model.js';
 import { SEND_BACKFILL_SETTING } from '../store/send-backfill.js';
 
 /** Leaves (ignoring bit fields and decrypted overlays) must tile the node exactly. */
@@ -466,5 +466,80 @@ describe('PacketLogModel — sent packets (#9)', () => {
     });
     const back = log.packets.rows.value.find((r) => r.typeName === 'TXT_MSG')!.record;
     expect(back).toMatchObject({ direction: 'tx', format: 'none', source: 'sent', hash: '' });
+  });
+});
+
+describe('PacketLogModel — filter shared with the packet statistics', () => {
+  it('app.packetStats drill-downs filter the packet log, live included', async () => {
+    const { app, log, scenario } = await connected();
+    const stats = app.packetStats;
+    await traffic(app, log, scenario);
+    await stats.settled();
+    const alice = toHex(scenario.keys.alice);
+    await stats.addFilter({ field: 'source', value: alice, label: 'Alice' });
+    expect(log.packets.filter.value.drill).toEqual([{ field: 'source', value: alice, label: 'Alice' }]);
+    const ids = stats.points.value.map((p) => p.id);
+    expect(ids.length).toBeGreaterThan(0);
+    expect(log.packets.rows.value.map((r) => r.id).sort((a, b) => a - b)).toEqual([...ids].sort((a, b) => a - b));
+    expect(log.packets.matching.value).toBe(ids.length);
+
+    // a new advert from Alice shows up once its stats point is derived; Bob's does not
+    scenario.nodes.alice.advertise();
+    scenario.nodes.bob.advertise();
+    await vi.waitFor(async () => {
+      await app.connection.capture!.idle();
+      await stats.settled();
+      await log.settled();
+      expect(stats.points.value.length).toBeGreaterThan(ids.length);
+    });
+    const shown = log.packets.rows.value.map((r) => r.id);
+    expect(new Set(shown).size).toBe(shown.length);
+    expect([...shown].sort((a, b) => a - b)).toEqual(stats.points.value.map((p) => p.id).sort((a, b) => a - b));
+    expect(log.packets.matching.value).toBe(shown.length);
+
+    await stats.clearFilters();
+    expect(log.packets.filter.value).toEqual({});
+  });
+
+  it('packetFilterChips / withoutChip cover every criterion but the date range', () => {
+    const f: PacketFilter = {
+      direction: 'rx',
+      payloadTypes: [PayloadType.ADVERT, PayloadType.TXT_MSG],
+      routeTypes: [RouteType.FLOOD],
+      from: 1,
+      to: 2,
+      text: 'foo',
+      node: 'a3',
+      src: 'a1b2c3d4e5f6',
+      drill: [
+        { field: 'source', value: 'k', label: 'Alice' },
+        { field: 'hops', value: '2', label: '2 hops' },
+      ],
+    };
+    expect(packetFilterChips(f).map((c) => [c.key, c.label])).toEqual([
+      ['direction', 'Direction: Received'],
+      ['types', 'Types: ADVERT, TXT_MSG'],
+      ['routes', 'Route: FLOOD'],
+      ['src', 'From: a1b2c3d4…'],
+      ['node', 'Node: a3'],
+      ['text', 'Text: foo'],
+      ['drill-source', 'Source: Alice'],
+      ['drill-hops', 'Hops: 2 hops'],
+    ]);
+    expect(packetFilterChips({ direction: 'tx', payloadTypes: [PayloadType.ACK] }, {}).map((c) => [c.name, c.value])).toEqual([
+      ['Direction', 'Sent'],
+      ['Type', 'ACK'],
+    ]);
+    expect(packetFilterChips({ src: 'abc' }, { srcLabel: (k) => `node ${k}` })[0]!.label).toBe('From: node abc');
+    expect(packetFilterChips({ from: 1, to: 2, payloadTypes: [] })).toEqual([]);
+
+    expect(withoutChip(f, 'types').payloadTypes).toBeUndefined();
+    expect(withoutChip(f, 'direction').direction).toBeUndefined();
+    expect(withoutChip(f, 'drill-source').drill).toEqual([{ field: 'hops', value: '2', label: '2 hops' }]);
+    expect('drill' in withoutChip(withoutChip(f, 'drill-source'), 'drill-hops')).toBe(false);
+    expect(withoutChip(f, 'nope')).toBe(f);
+    let g: PacketFilter = f;
+    for (const c of packetFilterChips(f)) g = withoutChip(g, c.key);
+    expect(g).toEqual({ from: 1, to: 2 });
   });
 });

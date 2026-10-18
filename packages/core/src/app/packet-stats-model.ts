@@ -17,15 +17,17 @@
 
 import { TxtType, decodePathLen, isValidPathLen } from '../protocol/constants.js';
 import type { SelfInfo } from '../protocol/types.js';
-import { PayloadType, hasTransportCodes, isDirectRoute, isFloodRoute, payloadTypeName } from '../packet/constants.js';
+import { PayloadType, hasTransportCodes, isDirectRoute, isFloodRoute, payloadTypeName, routeTypeName } from '../packet/constants.js';
 import { decryptPayload, parseGrpTxtPlaintext } from '../packet/payloads.js';
 import { decodeReceivedText } from '../store/messages.js';
 import type { RadioStore } from '../store/radio-store.js';
 import type { ContactRecord, PacketRecord } from '../store/schema.js';
 import { fromHex, toHex, utf8Encode } from '../util/bytes.js';
+import type { Unsubscribe } from '../util/events.js';
 import { loraAirtimeMs, loraParamsFromSelfInfo, type LoraParams } from './airtime.js';
 import type { ConnectionModel } from './connection.js';
 import { haversineMeters, hasLocation, type LatLon } from './geo.js';
+import type { DrillSource, PacketFilter, SharedPacketFilter } from './packet-log-model.js';
 import { decryptDm, viewPacket, type DmKeys, type PacketView, type SummaryContext } from './packet-summary.js';
 import type { PathEndpoint } from './path-geometry.js';
 import { resolveHop } from './path-resolver.js';
@@ -241,6 +243,90 @@ export interface StatsFilter {
   field: StatsFilterField;
   value: string;
   label: string;
+}
+
+/** Display name of each filter field (chips). */
+export const STATS_FIELD_LABEL: Readonly<Record<StatsFilterField, string>> = {
+  source: 'Source',
+  type: 'Packet type',
+  route: 'Route type',
+  direction: 'Direction',
+  category: 'Category',
+  channel: 'Channel',
+  hops: 'Hops',
+  compression: 'Compression',
+};
+
+const DIRECTION_FILTER_LABEL: Readonly<Record<StatDirection, string>> = { in: 'Received', out: 'Sent' };
+
+/** The payload type number named `typeName` (a {@link StatPacket.typeName}); undefined for 'UNKNOWN'. */
+export function payloadTypeOfName(typeName: string): number | undefined {
+  for (let n = 0; n < 16; n++) if (payloadTypeName(n) === typeName) return n;
+  return undefined;
+}
+
+/** The route type number named `routeName` (a {@link StatPacket.routeName}); undefined for 'unknown'. */
+export function routeTypeOfName(routeName: string): number | undefined {
+  for (let n = 0; n < 4; n++) if (routeTypeName(n) === routeName) return n;
+  return undefined;
+}
+
+/**
+ * The drill-down view of a packet log filter (docs/packet-stats.md §6): direction, a single
+ * payload type and a single route type from the native fields, then {@link PacketFilter.drill}.
+ * Several payload / route types (picked on the Packets tab) have no drill-down equivalent.
+ */
+export function statsFiltersOf(f: PacketFilter): StatsFilter[] {
+  const out: StatsFilter[] = [];
+  const drill = f.drill ?? [];
+  if (f.direction) {
+    const value: StatDirection = f.direction === 'tx' ? 'out' : 'in';
+    out.push({ field: 'direction', value, label: DIRECTION_FILTER_LABEL[value] });
+  }
+  if (f.payloadTypes?.length === 1) {
+    const name = payloadTypeName(f.payloadTypes[0]!);
+    out.push({ field: 'type', value: name, label: name });
+  }
+  if (f.routeTypes?.length === 1) {
+    const name = routeTypeName(f.routeTypes[0]!);
+    out.push({ field: 'route', value: name, label: name });
+  }
+  for (const d of drill) if (!out.some((x) => x.field === d.field)) out.push(d);
+  return out;
+}
+
+/**
+ * `f` with drill-down `d` added, replacing any criterion on the same field: direction, type and
+ * route go to the native fields when the key maps to a number (else, e.g. 'UNKNOWN' / 'unknown',
+ * to `drill`); the other fields to `drill`.
+ */
+export function withStatsFilter(f: PacketFilter, d: StatsFilter): PacketFilter {
+  const entry: StatsFilter = { field: d.field, value: d.value, label: d.label };
+  const out = withoutStatsFilter(f, d.field);
+  const native =
+    d.field === 'direction'
+      ? d.value === 'in' || d.value === 'out'
+      : d.field === 'type'
+        ? payloadTypeOfName(d.value) !== undefined
+        : d.field === 'route'
+          ? routeTypeOfName(d.value) !== undefined
+          : false;
+  if (!native) return { ...out, drill: [...(out.drill ?? []), entry] };
+  if (d.field === 'direction') return { ...out, direction: d.value === 'out' ? 'tx' : 'rx' };
+  if (d.field === 'type') return { ...out, payloadTypes: [payloadTypeOfName(d.value)!] };
+  return { ...out, routeTypes: [routeTypeOfName(d.value)!] };
+}
+
+/** `f` without any criterion on drill-down field `field` (type / route: every payload / route type). */
+export function withoutStatsFilter(f: PacketFilter, field: StatsFilterField): PacketFilter {
+  const out: PacketFilter = { ...f };
+  if (field === 'direction') delete out.direction;
+  if (field === 'type') delete out.payloadTypes;
+  if (field === 'route') delete out.routeTypes;
+  const drill = (f.drill ?? []).filter((x) => x.field !== field);
+  if (drill.length) out.drill = drill;
+  else delete out.drill;
+  return out;
 }
 
 /** The packet's key for a filter field; null when the packet has none (never matches). */
@@ -875,6 +961,11 @@ function hopCounts(pts: readonly StatPacket[]): HopCount[] {
 // ---------------------------------------------------------------------------
 
 export interface PacketStatsDeps {
+  /**
+   * The packet log's filter (PacketLogModel.sharedFilter), shared with the Packets tab: its
+   * `from` / `to` are the date range, every other criterion narrows `points`.
+   */
+  filter: SharedPacketFilter;
   /** Names / channel PSKs (PacketLogModel.context). A change of the channel list reloads. */
   context: ReadonlySignal<SummaryContext>;
   /** DM keys (PacketLogModel.dmKeys) for classifying TXT_MSG text; a change of the keys reloads. */
@@ -885,11 +976,10 @@ export interface PacketStatsDeps {
   ready?: () => Promise<unknown>;
 }
 
-export class PacketStatsModel extends StoreBoundModel {
+export class PacketStatsModel extends StoreBoundModel implements DrillSource {
   readonly #deps: PacketStatsDeps;
-  readonly #range = signal<StatsRange>({ from: null, to: null });
+  readonly #shared: SharedPacketFilter;
   readonly #bin = signal<BinSetting>('auto');
-  readonly #filters = signal<readonly StatsFilter[]>([]);
   readonly #raw = signal<readonly RawPoint[]>([]);
   readonly #bounds = signal<{ first: number; last: number } | null>(null);
   #rawIds = new Set<number>();
@@ -905,21 +995,31 @@ export class PacketStatsModel extends StoreBoundModel {
   readonly #contactStats = new Map<string, ReadonlySignal<ContactStats>>();
   readonly #binning: ReadonlySignal<Binning | null>;
   readonly #knownChannels: ReadonlySignal<ReadonlySet<string>>;
+  readonly #byId: ReadonlySignal<ReadonlyMap<number, StatPacket>>;
+  readonly #watchers = new Set<{ appended(rec: PacketRecord): void; reloaded(): void }>();
+  /** The range the current / last load used (undefined before the first). */
+  #usedRange: StatsRange | undefined;
   #gen = 0;
 
-  /** Selected date range (default: the whole log). */
-  readonly range: ReadonlySignal<StatsRange> = this.#range.readonly;
+  /** Selected date range: the shared filter's `from` / `to` (default: the whole log). */
+  readonly range: ReadonlySignal<StatsRange>;
   /** Bin size setting for the timeline / utilisation over time. */
   readonly bin: ReadonlySignal<BinSetting> = this.#bin.readonly;
   /** ts of the oldest / newest logged packet (whole log, not the range). */
   readonly bounds: ReadonlySignal<{ first: number; last: number } | null> = this.#bounds.readonly;
   /** The radio's LoRa parameters used for airtime (from SELF_INFO), null when unknown. */
   readonly radio: ReadonlySignal<LoraParams | null>;
-  /** Drill-down filters (AND, at most one per field); in memory only, kept across range changes. */
-  readonly filters: ReadonlySignal<readonly StatsFilter[]> = this.#filters.readonly;
+  /**
+   * Drill-down view of the shared filter ({@link statsFiltersOf}: AND, at most one per field); in
+   * memory only, kept across range changes.
+   */
+  readonly filters: ReadonlySignal<readonly StatsFilter[]>;
   /** One point per logged packet in the range, ascending ts, ignoring the filters. */
   readonly allPoints: ReadonlySignal<readonly StatPacket[]>;
-  /** `allPoints` matching the filters: what every aggregation below counts. */
+  /**
+   * `allPoints` matching every criterion of the shared filter (drill-downs, and the packet log's
+   * direction / types / routes / source / node / text): what every aggregation below counts.
+   */
   readonly points: ReadonlySignal<readonly StatPacket[]>;
   /** `allPoints.length` ("showing X of Y"). */
   readonly unfilteredCount: ReadonlySignal<number>;
@@ -941,6 +1041,16 @@ export class PacketStatsModel extends StoreBoundModel {
   constructor(connection: ConnectionModel, deps: PacketStatsDeps) {
     super(connection);
     this.#deps = deps;
+    this.#shared = deps.filter;
+    const shared = deps.filter.filter;
+    this.range = computed(
+      () => {
+        const f = shared.value;
+        return { from: f.from ?? null, to: f.to ?? null };
+      },
+      { equals: (a, b) => a.from === b.from && a.to === b.to },
+    );
+    this.filters = computed(() => statsFiltersOf(shared.value), { equals: sameFilters });
     this.#dmSig = computed(() => dmSignature(deps.dmKeys?.value ?? null));
     this.radio = computed(() => loraParamsFromSelfInfo(connection.selfInfo.value), { equals: sameParams });
 
@@ -967,11 +1077,29 @@ export class PacketStatsModel extends StoreBoundModel {
       cache = next;
       return out;
     });
-    this.points = computed(() => filterPoints(this.allPoints.value, this.#filters.value));
+    this.#byId = computed(() => new Map(this.allPoints.value.map((p) => [p.id, p])));
+    this.points = computed(() => {
+      const all = this.allPoints.value;
+      const f = shared.value;
+      const drill = f.drill ?? [];
+      // the log's own criteria; the range is what allPoints was loaded for
+      const log: PacketFilter = { ...f };
+      delete log.drill;
+      delete log.from;
+      delete log.to;
+      const byLog = Object.keys(log).length > 0;
+      if (!byLog && !drill.length) return all;
+      const raws = this.#raw.value; // allPoints[i] is derived from raws[i]
+      return all.filter((p, i) => {
+        if (!drill.every((d) => matchesFilter(p, d))) return false;
+        const rec = raws[i]?.rec;
+        return !byLog || (rec !== undefined && this.#shared.matches(rec, log));
+      });
+    });
     this.unfilteredCount = computed(() => this.allPoints.value.length);
 
     this.window = computed(() => {
-      const r = this.#range.value;
+      const r = this.range.value;
       const pts = this.allPoints.value;
       const from = r.from ?? pts[0]?.ts ?? r.to;
       const to = r.to ?? pts[pts.length - 1]?.ts ?? r.from;
@@ -1114,31 +1242,60 @@ export class PacketStatsModel extends StoreBoundModel {
     };
   }
 
-  /** Selects the date range (inclusive epoch ms, null = open) and reloads. */
-  setRange(r: StatsRange): Promise<void> {
+  /**
+   * Selects the date range (inclusive epoch ms, null = open): the shared filter's `from` / `to`, so
+   * the packet log follows. Resolves when both have reloaded.
+   */
+  async setRange(r: StatsRange): Promise<void> {
     const from = r.from !== null && Number.isFinite(r.from) ? r.from : null;
     const to = r.to !== null && Number.isFinite(r.to) ? r.to : null;
-    const cur = this.#range.peek();
+    const cur = this.range.peek();
     if (cur.from === from && cur.to === to) return this.settled();
-    this.#range.value = { from, to };
-    return this.reload();
+    const log = this.#shared.setFilter({ from: from ?? undefined, to: to ?? undefined });
+    await Promise.all([log, this.reload()]);
   }
 
-  /** Adds a drill-down filter, replacing any existing one on the same field. */
-  addFilter(f: StatsFilter): void {
-    const cur = this.#filters.peek();
-    const i = cur.findIndex((x) => x.field === f.field);
-    const next = { field: f.field, value: f.value, label: f.label };
-    this.#filters.value = i < 0 ? [...cur, next] : cur.map((x, j) => (j === i ? next : x));
+  /**
+   * Adds a drill-down filter to the shared filter, replacing any criterion on the same field
+   * (see {@link withStatsFilter}). `points` update at once; resolves when the packet log has reloaded.
+   */
+  addFilter(f: StatsFilter): Promise<void> {
+    return this.#shared.setFilter(withStatsFilter(this.#shared.filter.peek(), f), { replace: true });
   }
 
-  removeFilter(field: StatsFilterField): void {
-    const cur = this.#filters.peek();
-    if (cur.some((x) => x.field === field)) this.#filters.value = cur.filter((x) => x.field !== field);
+  /** Removes the criterion on `field` (no-op when there is none). */
+  removeFilter(field: StatsFilterField): Promise<void> {
+    const cur = this.#shared.filter.peek();
+    const next = withoutStatsFilter(cur, field);
+    if (Object.keys(next).length === Object.keys(cur).length) return Promise.resolve();
+    return this.#shared.setFilter(next, { replace: true });
   }
 
-  clearFilters(): void {
-    if (this.#filters.peek().length) this.#filters.value = [];
+  /** Clears every criterion of the shared filter except the date range. */
+  clearFilters(): Promise<void> {
+    const cur = this.#shared.filter.peek();
+    const keep: PacketFilter = {};
+    if (cur.from !== undefined) keep.from = cur.from;
+    if (cur.to !== undefined) keep.to = cur.to;
+    if (Object.keys(cur).length === Object.keys(keep).length) return Promise.resolve();
+    return this.#shared.setFilter(keep, { replace: true });
+  }
+
+  // ---- DrillSource (the packet log matches PacketFilter.drill with these) ----
+
+  /** The derived point of record `id` in the current range, if any. */
+  point(id: number): StatPacket | undefined {
+    return this.#byId.peek().get(id);
+  }
+
+  /** Resolves once the pending load / reload has finished (without waiting for `deps.ready`). */
+  async loaded(): Promise<void> {
+    await super.settled();
+  }
+
+  watch(l: { appended(rec: PacketRecord): void; reloaded(): void }): Unsubscribe {
+    this.#watchers.add(l);
+    return () => void this.#watchers.delete(l);
   }
 
   /** Timeline bin size in ms, or 'auto' (60–150 bins on round steps). */
@@ -1162,6 +1319,12 @@ export class PacketStatsModel extends StoreBoundModel {
       store.events.on('logChanged', (e) => {
         if (e.store === 'packets') void this.reload();
       }),
+      // the shared filter's from / to (setRange, or the Packets tab's date inputs)
+      effect(() => {
+        const r = this.range.value;
+        const used = this.#usedRange;
+        if (used !== undefined && (r.from !== used.from || r.to !== used.to)) untracked(() => void this.reload());
+      }),
       // channel PSKs decide GRP_TXT senders / text, DM keys TXT_MSG text: re-derive when they change
       effect(() => {
         const ch = channelsSignature(this.#deps.context.value.channels);
@@ -1182,7 +1345,8 @@ export class PacketStatsModel extends StoreBoundModel {
     const dm = this.#deps.dmKeys?.peek() ?? null;
     const sig: DeriveSig = { ch: channelsSignature(channels), dm: this.#dmSig.peek() };
     this.#usedSig = sig;
-    const r = this.#range.peek();
+    const r = this.range.peek();
+    this.#usedRange = r;
     const [recs, bounds] = await Promise.all([
       store.packets.all({ ...(r.from !== null ? { from: r.from } : {}), ...(r.to !== null ? { to: r.to } : {}) }),
       store.packets.tsBounds(),
@@ -1207,11 +1371,13 @@ export class PacketStatsModel extends StoreBoundModel {
       this.#raw.value = all;
       this.#bounds.value = mergeBounds(bounds, extra.map((x) => x.rec.ts));
     });
+    for (const w of [...this.#watchers]) w.reloaded();
   }
 
   protected reset(): void {
     this.#gen++;
     this.#usedSig = undefined;
+    this.#usedRange = undefined;
     this.#rawIds = new Set();
     this.#rawCache = new Map();
     this.#rawCacheSig = { ch: '', dm: '' };
@@ -1222,7 +1388,7 @@ export class PacketStatsModel extends StoreBoundModel {
   }
 
   #inRange(ts: number): boolean {
-    const r = this.#range.peek();
+    const r = this.range.peek();
     return (r.from === null || ts >= r.from) && (r.to === null || ts <= r.to);
   }
 
@@ -1240,16 +1406,17 @@ export class PacketStatsModel extends StoreBoundModel {
     const last = cur[cur.length - 1];
     if (!last || compareRaw(last, raw) <= 0) {
       this.#raw.value = [...cur, raw];
-      return;
+    } else {
+      let lo = 0;
+      let hi = cur.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (compareRaw(cur[mid]!, raw) <= 0) lo = mid + 1;
+        else hi = mid;
+      }
+      this.#raw.value = [...cur.slice(0, lo), raw, ...cur.slice(lo)];
     }
-    let lo = 0;
-    let hi = cur.length;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if (compareRaw(cur[mid]!, raw) <= 0) lo = mid + 1;
-      else hi = mid;
-    }
-    this.#raw.value = [...cur.slice(0, lo), raw, ...cur.slice(lo)];
+    for (const w of [...this.#watchers]) w.appended(rec);
   }
 }
 
@@ -1257,6 +1424,10 @@ function mergeBounds(b: { first: number; last: number } | null, ts: readonly num
   let out = b;
   for (const t of ts) out = out ? { first: Math.min(out.first, t), last: Math.max(out.last, t) } : { first: t, last: t };
   return out;
+}
+
+function sameFilters(a: readonly StatsFilter[], b: readonly StatsFilter[]): boolean {
+  return a.length === b.length && a.every((x, i) => x.field === b[i]?.field && x.value === b[i]?.value && x.label === b[i]?.label);
 }
 
 function sameParams(a: LoraParams | null, b: LoraParams | null): boolean {

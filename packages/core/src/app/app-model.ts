@@ -205,12 +205,20 @@ export class AppModel {
 
   /** Packet log statistics: per-packet points and aggregations for the Stats tab (docs/packet-stats.md). */
   get packetStats(): PacketStatsModel {
-    return (this.#packetStats ??= new PacketStatsModel(this.connection, {
-      context: this.packetLog.context,
-      dmKeys: this.packetLog.dmKeys,
-      contacts: this.contacts.contacts,
-      ready: () => Promise.all([this.packetLog.settled(), this.contacts.settled()]),
-    }).start());
+    if (!this.#packetStats) {
+      const log = this.packetLog;
+      // one filter for the Packets and Stats tabs, owned by the packet log; the log matches the
+      // stats drill-downs against the stats model's points
+      this.#packetStats = new PacketStatsModel(this.connection, {
+        filter: log.sharedFilter,
+        context: log.context,
+        dmKeys: log.dmKeys,
+        contacts: this.contacts.contacts,
+        ready: () => Promise.all([log.settled(), this.contacts.settled()]),
+      }).start();
+      log.attachStats(this.#packetStats);
+    }
+    return this.#packetStats;
   }
 
   get deviceSettings(): DeviceSettingsModel {

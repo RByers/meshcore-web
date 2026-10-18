@@ -249,7 +249,8 @@ filters of the list tabs are not shown; the inspector split is hidden). Layout, 
 
 1. **Filter row**: date range — presets *All* (default), *Last hour*, *24 h*, *7 d*, and two
    `datetime-local` inputs for a custom range; bin size *auto / 1 min / 5 min / 1 h / 1 d*. The
-   range and bin are kept in the model (not URL). A line of stat tiles: packets, bytes, airtime %
+   range is the shared packet filter's `from` / `to` (§6), so the Packets tab's *From* / *To*
+   follow it; the bin is kept in the stats model (neither in the URL). A line of stat tiles: packets, bytes, airtime %
    (with the radio params in the tooltip, "—" when unknown), unique sources, span.
 2. **Packet paths** (`data-section="paths"`, from `routes`, §1.7): hidden by default behind a
    *Map* / *Hide map* toggle (`aria-pressed`); while hidden, one line "N packets with a known
@@ -296,19 +297,29 @@ active value again removes it. On source bars the *bar* filters and the *label* 
 link. Charts opt in per item with a `key` (`<mc-bar-chart>` dispatches `bar-select`, keyed rows
 are `role=button` hit rects with Enter / Space; `<mc-breakdown>` dispatches `segment-select` from
 segments and from legend `<button>`s), with `selected` marking the active value; items without a
-key (e.g. the contact Stats tab) stay plain. While filters are active a sticky filter bar sits
-under the range: a chip per filter ("Source: Alice ×"), "Showing X of Y packets" and a *Clear
-filters* button. Filters matching nothing → "No packets match these filters." with the bar kept.
+key (e.g. the contact Stats tab) stay plain. The filter is **shared with the Packets tab** (§6):
+switching tabs never clears it. While any criterion other than the range is active a sticky
+filter bar sits under the range: a chip per criterion from the core `packetFilterChips` — the
+drill-downs and the Packets tab's own filters alike ("Source: Alice ×", "Type: ADVERT ×",
+"Text: foo ×"), each removed with `packetLog.removeFilterChip(key)` — "Showing X of Y packets" and
+a *Clear filters* button (`clearFilters()`: everything but the range). Filters matching nothing →
+"No packets match these filters." with the bar kept. Active-segment highlighting reads
+`stats.filters`. On the Packets tab, drill-downs set here show in its controls (direction, a single
+type, a single route) or, for the fields it has no control for (source, category, channel, hops,
+compression), as removable chips in its filter row (`data-filter="drill-<field>"`); its *Reset*
+clears everything, the range included.
 
 Everything renders from the model's signals (read in `render()` → auto re-render). Empty log →
 one empty-state line. Browser tests (`packages/web/test/packet-stats.test.ts`, harness +
 emulator scenario that produces packets): the tab appears and renders tiles and the four chart
 elements; the source chart has links to `/contact/…`; the y/colour selectors change the dot plot's
 axis label / legend; a date preset shrinks the packet count tile; source-bar / segment / keyboard
-filtering, chip removal, *Clear filters* and the no-match state; the compression section's counts,
-summary, *Compressed* filter, empty state and the *Compression* dot colouring; the paths card's
-summary, map lines and widths, sized markers with counts (this radio `self`), note, filter
-narrowing, the approximate toggle's dashed lines and *Hide map*.
+filtering, chip removal, *Clear filters* and the no-match state; the shared filter across tabs (a
+source drill-down filters the Packets tab and its chip there removes it; a Packets-tab text filter
+narrows Stats with a chip; a date preset is the Packets tab's *From*, cleared by *Reset*); the
+compression section's counts, summary, *Compressed* filter, empty state and the *Compression* dot
+colouring; the paths card's summary, map lines and widths, sized markers with counts (this radio
+`self`), note, filter narrowing, the approximate toggle's dashed lines and *Hide map*.
 
 ## 4. Docs
 
@@ -361,8 +372,11 @@ and a repeated path from the emulator scenario, the timeline renders.
 
 ## 6. Drill-down filters
 
-Clicking a bar on the packets Stats tab narrows every statistic to the matching packets. The model
-holds the filters (in memory only, not persisted; they survive range changes):
+Clicking a bar on the packets Stats tab narrows every statistic to the matching packets. The
+Packets and Stats tabs share **one filter**, owned by the packet log
+(`app.packetLog.packets.filter`, a `PacketFilter`; in memory only, not persisted; drill-downs
+survive range changes). The stats model reads and writes it through `PacketLogModel.sharedFilter`
+(`PacketStatsDeps.filter`); `stats.filters` is a computed drill-down view of it:
 
 ```ts
 type StatsFilterField = 'source' | 'type' | 'route' | 'direction' | 'category' | 'channel' | 'hops' | 'compression';
@@ -386,3 +400,23 @@ matchesFilter(p, f) / filterKey(p, field) / filterPoints(points, filters)   // p
   `window` (and so the bins and `summary.spanMs`) comes from the range and `allPoints`, so axes
   don't move while drilling down.
 - `forContact()` reads `allPoints`: the packets page's filters don't leak into the contact page.
+
+Mapping onto `PacketFilter` (`statsFiltersOf` / `withStatsFilter` / `withoutStatsFilter`):
+
+- The range is `from` / `to` (`range` is computed from them; `setRange` sets them, and a change
+  from the Packets tab's date inputs reloads `allPoints` too).
+- direction → `direction` (`'in'` ↔ `'rx'`, `'out'` ↔ `'tx'`); type → `payloadTypes: [n]`; route →
+  `routeTypes: [n]` — so the Packets tab's selects show them. A type / route key with no number
+  (`'UNKNOWN'` / `'unknown'`) and every other field (source, category, channel, hops, compression)
+  go to `PacketFilter.drill` (at most one entry per field). `filters` lists direction, a single
+  type, a single route, then `drill`; several types / routes picked on the Packets tab have no
+  drill-down equivalent (no segment is highlighted) but still narrow `points`.
+- `points` = `allPoints` matching the `drill` entries **and** every packet-log criterion
+  (direction, types, routes, `src`, `node`, `text`) via the log's own predicate.
+- The log matches `drill` against the stats model's derived point of each record
+  (`PacketLogModel.attachStats`, bound by `AppModel`); its queries wait for the stats load of the
+  current range, and live records are shown once their point is derived.
+- `addFilter` / `removeFilter` / `clearFilters` return promises (the log has reloaded);
+  `clearFilters` keeps the range. Chips: `packetFilterChips(f)` (keys `direction`, `types`,
+  `routes`, `src`, `node`, `text`, `drill-<field>`; no chip for the range), removed with
+  `withoutChip` / `PacketLogModel.removeFilterChip(key)`; `STATS_FIELD_LABEL` names the fields.

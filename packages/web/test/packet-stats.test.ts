@@ -9,6 +9,7 @@ import { smazEncodeIfSmaller } from '@meshcore-web/core/util/smaz';
 import { createHarness, type Harness } from '../src/testing/harness.js';
 import type { McTileMap } from '../src/components/tile-map.js';
 import { timelinePalette, timelineSeries, type McPacketStats } from '../src/pages/packets/packet-stats.js';
+import { toDatetimeLocal } from '../src/pages/packets/inspection.js';
 
 let h: Harness | undefined;
 
@@ -201,12 +202,13 @@ describe('/packets Stats drill-down filters', () => {
     const typeChart = el.shadowRoot!.querySelector('mc-breakdown[data-breakdown="type"]')!;
     typeChart.shadowRoot!.querySelector<HTMLElement>('[data-mark="segment"][data-key="ADVERT"]')!.click();
     await settle(t, el);
-    expect(chips(t)).toEqual(['Source: Alice', 'Packet type: ADVERT']);
+    // the type drill-down is the packet log's own type filter, so its chip comes first
+    expect(chips(t)).toEqual(['Type: ADVERT', 'Source: Alice']);
 
     // × on the source chip leaves the type filter
     await t.click('[data-remove-filter="source"]');
     await settle(t, el);
-    expect(chips(t)).toEqual(['Packet type: ADVERT']);
+    expect(chips(t)).toEqual(['Type: ADVERT']);
     expect(Number(tileValue(t, 'packets'))).toBe(t.app.packetStats.summary.value.packets);
 
     await t.click('[data-action="clear-filters"]');
@@ -253,6 +255,85 @@ describe('/packets Stats drill-down filters', () => {
     await settle(t, el);
     expect(t.query('[data-empty="filtered"]')).toBeNull();
     expect(t.query('[data-tiles]')).not.toBeNull();
+  });
+});
+
+describe('/packets filters shared by the Packets and Stats tabs', () => {
+  function chips(t: Harness): string[] {
+    return t.queryAll('[data-chip]').map((c) => c.textContent!.replace('×', '').replace(/\s+/g, ' ').trim());
+  }
+
+  it('a Stats drill-down filters the Packets tab, where its chip removes it from both', async () => {
+    const { t, el } = await openStats();
+    const stats = t.app.packetStats;
+    const hit = inChart(el, 'sources', 'mc-bar-chart', 'rect[role="button"]').find((r) => r.getAttribute('aria-label')!.startsWith('Alice:'))!;
+    hit.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await t.until(() => t.query('[data-filterbar]'), 3000, 'filter bar');
+
+    await t.click('[data-tab="packets"]');
+    // the log has reloaded with the drill-down (its query waits for the stats load)
+    const log = t.app.packetLog.packets;
+    await t.until(() => !log.loading.value, 3000, 'packet log reloaded');
+    await log.settled();
+    const rowIds = () => t.queryAll('tr[data-packet-id]').map((r) => Number(r.dataset['packetId']));
+    await t.until(() => rowIds().length > 0 && rowIds().join() === log.rows.value.map((r) => r.id).join(), 3000, 'filtered rows rendered');
+    // only Alice's packets: every row is one of the stats points (all from Alice)
+    const ids = new Set(stats.points.value.map((p) => p.id));
+    expect(stats.points.value.every((p) => p.source?.label === 'Alice')).toBe(true);
+    expect(rowIds().every((id) => ids.has(id))).toBe(true);
+    expect(t.query('tr[data-type="GRP_TXT"]')).toBeNull();
+    expect(t.query('[data-filter="drill-source"]')!.textContent).toContain('Source: Alice');
+    expect(t.query('[data-action="clear-filters"]')).not.toBeNull();
+
+    await t.click('[data-filter="drill-source"] [data-action="remove-chip"]');
+    await t.until(() => t.query('tr[data-type="GRP_TXT"]'), 3000, "Bob's packet again");
+    expect(t.query('[data-filter="drill-source"]')).toBeNull();
+    expect(stats.filters.value).toEqual([]);
+
+    await t.click('[data-tab="stats"]');
+    await t.until(() => t.query('[data-tiles]'), 3000, 'stats tiles');
+    expect(t.query('[data-filterbar]')).toBeNull();
+  });
+
+  it('a Packets-tab filter narrows the Stats tab and shows as a chip there', async () => {
+    const { t } = await openStats();
+    const stats = t.app.packetStats;
+    await t.click('[data-tab="packets"]');
+    await t.fill('input[data-filter="text"]', 'hello from bob');
+    await t.until(() => t.app.packetLog.packets.filter.value.text === 'hello from bob', 3000, 'text filter');
+
+    await t.click('[data-tab="stats"]');
+    await t.until(() => t.query('[data-filterbar]'), 3000, 'filter bar');
+    expect(chips(t)).toEqual(['Text: hello from bob']);
+    await t.until(() => stats.points.value.length > 0 && stats.points.value.every((p) => p.typeName === 'GRP_TXT'), 3000, 'only matching points');
+    expect(stats.points.value.length).toBeLessThan(stats.unfilteredCount.value);
+    await t.until(
+      () => t.query('[data-field="filter-count"]')?.textContent === `Showing ${stats.points.value.length} of ${stats.unfilteredCount.value} packets`,
+      3000,
+      'filter count',
+    );
+
+    // Clear filters on Stats clears the Packets tab's text too
+    await t.click('[data-action="clear-filters"]');
+    await t.until(() => t.query('[data-filterbar]') === null, 3000, 'no filter bar');
+    expect(t.app.packetLog.packets.filter.value).toEqual({});
+  });
+
+  it("a Stats date preset is the Packets tab's From; Reset there clears it", async () => {
+    const { t } = await openStats();
+    const stats = t.app.packetStats;
+    await t.click('[data-preset="1h"]');
+    await t.until(() => stats.range.value.from !== null, 3000, 'range set');
+    const from = stats.range.value.from!;
+    // the range is not a chip
+    expect(t.query('[data-filterbar]')).toBeNull();
+
+    await t.click('[data-tab="packets"]');
+    await t.until(() => t.query<HTMLInputElement>('input[data-filter="from"]'), 3000, 'from input');
+    expect(t.query<HTMLInputElement>('input[data-filter="from"]')!.value).toBe(toDatetimeLocal(from));
+    await t.click('[data-action="clear-filters"]');
+    await t.until(() => stats.range.value.from === null, 3000, 'range cleared');
+    await t.until(() => t.query<HTMLInputElement>('input[data-filter="from"]')!.value === '', 3000, 'from input cleared');
   });
 });
 

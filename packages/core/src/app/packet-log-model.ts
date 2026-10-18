@@ -15,6 +15,7 @@ import { calcSharedSecret } from '../packet/crypto.js';
 import { channelHash } from '../packet/payloads.js';
 import { annotateFrame } from '../protocol/annotate-frame.js';
 import { PRIVATE_KEY_SIZE } from '../protocol/constants.js';
+import { payloadTypeName, routeTypeName } from '../packet/constants.js';
 import { decodeFrame } from '../protocol/decode.js';
 import { tryDecodeCommand } from '../protocol/decode-command.js';
 import type { Command, DeviceFrame } from '../protocol/types.js';
@@ -36,8 +37,10 @@ import {
   type SummaryContext,
 } from './packet-summary.js';
 import { ACTIVITY_RANGES, bucketActivity, type ActivityRange, type NodeActivity } from './node-activity.js';
+import { STATS_FIELD_LABEL, filterKey, type StatPacket, type StatsFilter } from './packet-stats-model.js';
 import { StoreBoundModel } from './store-bound.js';
 import { batch, computed, signal, type ReadonlySignal, type Signal } from './signal.js';
+import type { Unsubscribe } from '../util/events.js';
 
 /**
  * Settings key holding the radio's 64-byte expanded private key (hex) for DM decryption in the
@@ -74,6 +77,14 @@ export interface PacketFilter {
    * through the packet log's source index; see store/packet-source.ts).
    */
   src?: string;
+  /**
+   * Packet statistics drill-downs (docs/packet-stats.md §6) on the fields the log has no native
+   * criterion for (source, category, channel, hops, compression; and type / route when the key
+   * maps to no number, e.g. 'UNKNOWN'), at most one per field. Matched against the stats model's
+   * derived point of the record (see {@link PacketLogModel.attachStats}); a record without a
+   * derived point never matches.
+   */
+  drill?: readonly StatsFilter[];
 }
 
 export interface FrameFilter {
@@ -268,7 +279,17 @@ export class LogView<R extends { id: number }, F extends object, Row extends { i
 
   /** A record was appended to the log. */
   onRecord(r: R): void {
+    this.countRecord();
+    this.offer(r);
+  }
+
+  /** Counts a record appended to the log without matching it yet (see {@link offer}). */
+  countRecord(): void {
     this.#total.update((n) => n + 1);
+  }
+
+  /** Shows an appended (already counted) record when it matches the filter. */
+  offer(r: R): void {
     if (!this.src.matches(r, this.#filter.peek())) return;
     this.#matching.update((n) => n + 1);
     if (!this.#live.peek() || this.#page.peek() !== 0) {
@@ -343,6 +364,37 @@ function nonEmpty(xs: readonly number[] | undefined): xs is readonly number[] {
   return xs !== undefined && xs.length > 0;
 }
 
+function hasDrill(f: PacketFilter): boolean {
+  return f.drill !== undefined && f.drill.length > 0;
+}
+
+/**
+ * What the log needs from the packet statistics model to match {@link PacketFilter.drill}
+ * (implemented by PacketStatsModel; bound late because the stats model is built from the log).
+ */
+export interface DrillSource {
+  /** The derived statistics point of a record; undefined when not (yet) derived or out of range. */
+  point(id: number): StatPacket | undefined;
+  /**
+   * Resolves once the load for the current date range has finished. Must not wait for the packet
+   * log (it is awaited from inside a log query).
+   */
+  loaded(): Promise<void>;
+  /** `appended`: a live record's point was derived; `reloaded`: a load (or re-derivation) completed. */
+  watch(l: { appended(rec: PacketRecord): void; reloaded(): void }): Unsubscribe;
+}
+
+/**
+ * The packet log's filter as shared with the statistics model: the Packets and Stats tabs of
+ * /packets read and write the same {@link PacketFilter}.
+ */
+export interface SharedPacketFilter {
+  readonly filter: ReadonlySignal<PacketFilter>;
+  setFilter(patch: Partial<PacketFilter>, opts?: { replace?: boolean }): Promise<void>;
+  /** The log's predicate (`PacketLogModel.packetMatches`). */
+  matches(r: PacketRecord, f: PacketFilter): boolean;
+}
+
 export class PacketLogModel extends StoreBoundModel {
   readonly #ctx = signal<SummaryContext>(EMPTY_SUMMARY_CONTEXT);
   readonly #channelPsks = signal<readonly Uint8Array[]>([]);
@@ -382,8 +434,15 @@ export class PacketLogModel extends StoreBoundModel {
     };
   });
 
+  /** The statistics model matching drill-downs; see {@link attachStats}. */
+  #stats: DrillSource | null = null;
+  /** Drill-down queries waiting for a stats load (which they will see when they resume). */
+  #drillWaiting = 0;
+
   /** Over-the-air packets. */
   readonly packets: LogView<PacketRecord, PacketFilter, PacketRow>;
+  /** `packets`' filter, shared with the statistics model. */
+  readonly sharedFilter: SharedPacketFilter;
   /** Host ↔ device frames. */
   readonly frames: LogView<FrameRecord, FrameFilter, FrameRow>;
 
@@ -393,8 +452,15 @@ export class PacketLogModel extends StoreBoundModel {
     const getStore = (): RadioStore | null => this.store;
     this.packets = new LogView<PacketRecord, PacketFilter, PacketRow>(
       {
-        query: (s, f, offset, limit) => s.packets.query({ ...this.#packetQuery(f), offset, limit }),
-        count: (s, f) => s.packets.count(f ? this.#packetQuery(f) : {}),
+        query: async (s, f, offset, limit) => {
+          await this.#drillReady(f);
+          return s.packets.query({ ...this.#packetQuery(f), offset, limit });
+        },
+        count: async (s, f) => {
+          if (!f) return s.packets.count({});
+          await this.#drillReady(f);
+          return s.packets.count(this.#packetQuery(f));
+        },
         matches: (r, f) => this.packetMatches(r, f),
         row: (r) => this.#packetRow(r),
       },
@@ -402,6 +468,11 @@ export class PacketLogModel extends StoreBoundModel {
       {},
       pageSize,
     );
+    this.sharedFilter = {
+      filter: this.packets.filter,
+      setFilter: (patch, o) => this.packets.setFilter(patch, o),
+      matches: (r, f) => this.packetMatches(r, f),
+    };
     this.frames = new LogView<FrameRecord, FrameFilter, FrameRow>(
       {
         query: (s, f, offset, limit) => s.frames.query({ ...this.#frameQuery(f), offset, limit }),
@@ -417,7 +488,12 @@ export class PacketLogModel extends StoreBoundModel {
 
   protected override bind(store: RadioStore) {
     const offs = [
-      store.events.on('packet', (r) => this.packets.onRecord(r)),
+      store.events.on('packet', (r) => {
+        // with a drill-down active the record can only be matched once the stats model has derived
+        // its point: it is offered then (`attachStats`)
+        if (this.#stats && hasDrill(this.packets.filter.peek())) this.packets.countRecord();
+        else this.packets.onRecord(r);
+      }),
       store.events.on('packetUpdated', (e) => {
         this.#summaries.delete(e.record.id);
         this.packets.onUpdate(e.record, e.previous);
@@ -462,6 +538,44 @@ export class PacketLogModel extends StoreBoundModel {
     await Promise.all([this.packets.settled(), this.frames.settled()]);
   }
 
+  /**
+   * Binds the statistics model that matches {@link PacketFilter.drill} (AppModel, once, when it
+   * creates `packetStats`). While a drill-down is active, live records are shown once their point
+   * is derived, and the page reloads when the stats model reloads (range, channel or DM key change).
+   */
+  attachStats(stats: DrillSource): Unsubscribe {
+    this.#stats = stats;
+    const off = stats.watch({
+      appended: (rec) => {
+        if (hasDrill(this.packets.filter.peek())) this.packets.offer(rec);
+      },
+      reloaded: () => {
+        if (this.#drillWaiting === 0 && hasDrill(this.packets.filter.peek())) void this.packets.reload();
+      },
+    });
+    return () => {
+      off();
+      if (this.#stats === stats) this.#stats = null;
+    };
+  }
+
+  /** With a drill-down, waits until the stats model has loaded the current range. */
+  async #drillReady(f: PacketFilter): Promise<void> {
+    const stats = this.#stats;
+    if (!stats || !hasDrill(f)) return;
+    this.#drillWaiting++;
+    try {
+      await stats.loaded();
+    } finally {
+      this.#drillWaiting--;
+    }
+  }
+
+  /** Removes one criterion shown by {@link packetFilterChips}. */
+  removeFilterChip(key: string): Promise<void> {
+    return this.packets.setFilter(withoutChip(this.packets.filter.peek(), key), { replace: true });
+  }
+
   async #loadContext(store: RadioStore): Promise<void> {
     const [contacts, channels, self] = await Promise.all([
       store.contacts.list(),
@@ -494,7 +608,7 @@ export class PacketLogModel extends StoreBoundModel {
     if (f.to !== undefined) q.to = f.to;
     if (nonEmpty(f.payloadTypes) && f.payloadTypes.length === 1) q.payloadType = f.payloadTypes[0]!;
     if (nonEmpty(f.routeTypes) && f.routeTypes.length === 1) q.routeType = f.routeTypes[0]!;
-    if ((nonEmpty(f.payloadTypes) && f.payloadTypes.length > 1) || (nonEmpty(f.routeTypes) && f.routeTypes.length > 1) || f.text || f.node) {
+    if ((nonEmpty(f.payloadTypes) && f.payloadTypes.length > 1) || (nonEmpty(f.routeTypes) && f.routeTypes.length > 1) || f.text || f.node || hasDrill(f)) {
       q.match = (r) => this.packetMatches(r, f);
     }
     return q;
@@ -518,6 +632,10 @@ export class PacketLogModel extends StoreBoundModel {
     if (nonEmpty(f.payloadTypes) && !f.payloadTypes.includes(r.payloadType)) return false;
     if (nonEmpty(f.routeTypes) && !f.routeTypes.includes(r.routeType)) return false;
     if (f.src !== undefined && !sourceMatches(r, PacketLog.srcQuery(f.src) ?? '')) return false;
+    if (f.drill && f.drill.length) {
+      const p = this.#stats?.point(r.id);
+      if (!p || !f.drill.every((d) => filterKey(p, d.field) === d.value)) return false;
+    }
     if (!f.text && !f.node) return true;
     const view = viewPacket(r, this.#ctx.peek());
     if (f.node && !packetMentionsNode(view, hexNorm(f.node))) return false;
@@ -739,6 +857,83 @@ function parseKey(v: unknown): Uint8Array | null {
   } catch {
     return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Filter chips
+// ---------------------------------------------------------------------------
+
+/** One active criterion of a {@link PacketFilter}, for a removable chip. */
+export interface PacketFilterChip {
+  /**
+   * 'direction', 'types', 'routes', 'src', 'node', 'text', or `drill-<field>` (one per
+   * {@link PacketFilter.drill} entry); pass to {@link withoutChip}.
+   */
+  key: string;
+  /** What is filtered, e.g. 'Direction', 'Types', 'Source'. */
+  name: string;
+  /** The criterion, e.g. 'Received', 'ADVERT, TXT_MSG', the drill entry's label. */
+  value: string;
+  /** `${name}: ${value}`. */
+  label: string;
+}
+
+export interface PacketFilterChipContext {
+  /** Display name of the `src` key (e.g. the contact's name); default: the first 8 hex digits + '…'. */
+  srcLabel?: (key: string) => string;
+}
+
+const DIRECTION_LABEL: Readonly<Record<PacketDirection, string>> = { rx: 'Received', tx: 'Sent' };
+
+/**
+ * The chips of a filter's active criteria, in a fixed order: direction, types, routes, src, node,
+ * text, then each drill entry. The date range (`from` / `to`) is not a chip.
+ */
+export function packetFilterChips(f: PacketFilter, ctx: PacketFilterChipContext = {}): PacketFilterChip[] {
+  const out: PacketFilterChip[] = [];
+  const add = (key: string, name: string, value: string): void => {
+    out.push({ key, name, value, label: `${name}: ${value}` });
+  };
+  if (f.direction) add('direction', 'Direction', DIRECTION_LABEL[f.direction]);
+  if (nonEmpty(f.payloadTypes)) add('types', f.payloadTypes.length > 1 ? 'Types' : 'Type', f.payloadTypes.map((t) => payloadTypeName(t)).join(', '));
+  if (nonEmpty(f.routeTypes)) add('routes', f.routeTypes.length > 1 ? 'Routes' : 'Route', f.routeTypes.map((t) => routeTypeName(t)).join(', '));
+  if (f.src !== undefined) add('src', 'From', ctx.srcLabel?.(f.src) ?? `${f.src.slice(0, 8)}…`);
+  if (f.node) add('node', 'Node', f.node);
+  if (f.text) add('text', 'Text', f.text);
+  for (const d of f.drill ?? []) add(`drill-${d.field}`, STATS_FIELD_LABEL[d.field], d.label);
+  return out;
+}
+
+/** `f` without the criterion of chip `key` (an unknown key: `f` unchanged). */
+export function withoutChip(f: PacketFilter, key: string): PacketFilter {
+  const out: PacketFilter = { ...f };
+  switch (key) {
+    case 'direction':
+      delete out.direction;
+      break;
+    case 'types':
+      delete out.payloadTypes;
+      break;
+    case 'routes':
+      delete out.routeTypes;
+      break;
+    case 'src':
+      delete out.src;
+      break;
+    case 'node':
+      delete out.node;
+      break;
+    case 'text':
+      delete out.text;
+      break;
+    default: {
+      if (!key.startsWith('drill-') || !f.drill) return f;
+      const drill = f.drill.filter((d) => `drill-${d.field}` !== key);
+      if (drill.length) out.drill = drill;
+      else delete out.drill;
+    }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------

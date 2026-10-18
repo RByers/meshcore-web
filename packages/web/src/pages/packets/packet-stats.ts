@@ -7,13 +7,16 @@
  * the chart selectors are local state. Everything here maps model output to chart props.
  *
  * Drill-down (§6): clicking a source bar, hop-count bar or breakdown segment adds a model filter
- * for that value (clicking the active one again removes it); a sticky filter bar under the range
- * shows the filters as removable chips with "Clear filters" and the filtered / total count.
+ * for that value (clicking the active one again removes it). The filter is shared with the Packets
+ * tab (owned by the packet log); a sticky filter bar under the range shows each of its criteria
+ * as a removable chip with "Clear filters" and the filtered / total count.
  */
 import { css, html, nothing, type TemplateResult } from 'lit';
 import {
   formatDistance,
   nodeId,
+  packetFilterChips,
+  type PacketFilterChip,
   type Breakdown,
   type CompressionCounts,
   type CompressionStats,
@@ -262,17 +265,15 @@ export function hopItems(hops: readonly HopCount[], active?: string): BarItem[] 
   return hops.map((h) => ({ label: hopLabel(h.hops), value: h.count, key: String(h.hops), selected: String(h.hops) === active }));
 }
 
-/** Chip prefix per filter field. */
-export const FILTER_FIELD_LABEL: Readonly<Record<StatsFilterField, string>> = {
-  source: 'Source',
-  type: 'Packet type',
-  route: 'Route type',
-  direction: 'Direction',
-  category: 'Category',
-  channel: 'Channel',
-  hops: 'Hops',
-  compression: 'Compression',
-};
+/**
+ * The `data-chip` / `data-remove-filter` hook of a shared filter chip: the drill-down field for
+ * direction / types / routes / `drill-<field>` chips, else the chip key (src, node, text).
+ */
+export function chipHook(key: string): string {
+  if (key === 'types') return 'type';
+  if (key === 'routes') return 'route';
+  return key.startsWith('drill-') ? key.slice('drill-'.length) : key;
+}
 
 export function formatBytes(b: number): string {
   return `${formatNumber(b)} B`;
@@ -547,8 +548,8 @@ export class McPacketStats extends AppElement {
   /** Adds the filter, or removes it when that exact value is already the active one (toggle). */
   #toggle(field: StatsFilterField, value: string, label: string): void {
     const stats = this.app.packetStats;
-    if (stats.filters.value.some((f) => f.field === field && f.value === value)) stats.removeFilter(field);
-    else stats.addFilter({ field, value, label });
+    if (stats.filters.value.some((f) => f.field === field && f.value === value)) void stats.removeFilter(field);
+    else void stats.addFilter({ field, value, label });
   }
 
   #onSource = (e: CustomEvent<BarSelectDetail>): void => {
@@ -598,22 +599,23 @@ export class McPacketStats extends AppElement {
     </section>`;
   }
 
-  #filterBar(filters: readonly StatsFilter[], shown: number, total: number): TemplateResult {
+  #filterBar(chips: readonly PacketFilterChip[], shown: number, total: number): TemplateResult {
     const stats = this.app.packetStats;
+    const log = this.app.packetLog;
     return html`<div class="filterbar" role="region" aria-label="Active filters" data-filterbar>
       <span class="title">Filtered:</span>
       <ul class="chips">
-        ${filters.map(
-          (f) => html`<li class="chip" data-chip=${f.field}>
-            <span>${FILTER_FIELD_LABEL[f.field]}: <strong>${f.label}</strong></span>
-            <button type="button" data-remove-filter=${f.field} aria-label=${`Remove ${FILTER_FIELD_LABEL[f.field]} filter`} title="Remove filter" @click=${() => stats.removeFilter(f.field)}>
+        ${chips.map(
+          (c) => html`<li class="chip" data-chip=${chipHook(c.key)}>
+            <span>${c.name}: <strong>${c.value}</strong></span>
+            <button type="button" data-remove-filter=${chipHook(c.key)} aria-label=${`Remove ${c.name} filter`} title="Remove filter" @click=${() => void log.removeFilterChip(c.key)}>
               ×
             </button>
           </li>`,
         )}
       </ul>
       <span class="count" data-field="filter-count">Showing ${formatNumber(shown, 0)} of ${formatNumber(total, 0)} packets</span>
-      <button type="button" class="primary clear" data-action="clear-filters" @click=${() => stats.clearFilters()}>Clear filters</button>
+      <button type="button" class="primary clear" data-action="clear-filters" @click=${() => void stats.clearFilters()}>Clear filters</button>
     </div>`;
   }
 
@@ -621,13 +623,15 @@ export class McPacketStats extends AppElement {
     const stats = this.app.packetStats;
     const points = stats.points.value;
     const filters = stats.filters.value;
+    // every criterion of the filter shared with the Packets tab, the date range aside
+    const chips = packetFilterChips(this.app.packetLog.packets.filter.value, { srcLabel: (k) => this.app.contacts.view(k)?.name ?? `${k.slice(0, 8)}…` });
     const total = stats.unfilteredCount.value;
     let body: TemplateResult;
     if (points.length > 0) body = this.#content(points, filters);
-    else if (filters.length > 0 && total > 0) body = html`<p class="muted" data-empty="filtered">No packets match these filters.</p>`;
+    else if (chips.length > 0 && total > 0) body = html`<p class="muted" data-empty="filtered">No packets match these filters.</p>`;
     else body = html`<p class="muted" data-empty>${stats.loading.value ? 'Loading…' : 'No packets logged in this range.'}</p>`;
     return html`<mc-stats-range></mc-stats-range>
-      ${filters.length > 0 ? this.#filterBar(filters, points.length, total) : nothing} ${body}`;
+      ${chips.length > 0 ? this.#filterBar(chips, points.length, total) : nothing} ${body}`;
   }
 
   #content(points: readonly StatPacket[], filters: readonly StatsFilter[]): TemplateResult {

@@ -42,6 +42,7 @@ import {
   type StatPacket,
   type StatsFilter,
 } from './packet-stats-model.js';
+import { PacketLogModel } from './packet-log-model.js';
 import type { DmKeys, SummaryContext } from './packet-summary.js';
 import { signal, type ReadonlySignal } from './signal.js';
 
@@ -109,6 +110,8 @@ function ack(path: number[] = []): Uint8Array {
 interface Harness {
   store: RadioStore;
   model: PacketStatsModel;
+  /** The packet log owning the shared filter (wired as AppModel does). */
+  log: PacketLogModel;
   context: ReturnType<typeof signal<SummaryContext>>;
   contacts: ReturnType<typeof signal<readonly ContactRecord[]>>;
   selfInfo: ReturnType<typeof signal<SelfInfo | null>>;
@@ -128,14 +131,23 @@ async function harness(inputs: PacketInput[], opts: { contacts?: readonly Contac
   const channels = opts.channels ?? [{ name: 'Test', psk: PSK, hash: await channelHash(PSK) }];
   const context = signal<SummaryContext>({ nodes: [], channels });
   const contacts = signal<readonly ContactRecord[]>(opts.contacts ?? CONTACTS);
-  const model = new PacketStatsModel(connection, { context: context.readonly, contacts: contacts.readonly, ...(opts.dmKeys ? { dmKeys: opts.dmKeys } : {}) }).start();
+  const log = new PacketLogModel(connection).start();
+  const model = new PacketStatsModel(connection, {
+    filter: log.sharedFilter,
+    context: context.readonly,
+    contacts: contacts.readonly,
+    ready: () => log.settled(),
+    ...(opts.dmKeys ? { dmKeys: opts.dmKeys } : {}),
+  }).start();
+  log.attachStats(model);
   storeSig.value = store;
   await model.settled();
   cleanups.push(() => {
     model.dispose();
+    log.dispose();
     store.close();
   });
-  return { store, model, context, contacts, selfInfo };
+  return { store, model, log, context, contacts, selfInfo };
 }
 
 function rx(bytes: Uint8Array, ts: number, over: Partial<PacketInput> = {}): PacketInput {
@@ -493,7 +505,7 @@ describe('PacketStatsModel — drill-down filters (§6)', () => {
     const binMs = model.timeline.value.binMs;
     const aliceBefore = model.forContact(ALICE.key).value;
 
-    model.addFilter({ field: 'source', value: ALICE.key, label: 'Alice' });
+    await model.addFilter({ field: 'source', value: ALICE.key, label: 'Alice' });
     expect(model.filters.value).toEqual([{ field: 'source', value: ALICE.key, label: 'Alice' }]);
     expect(tss(model.points.value)).toEqual([0, 10_000]);
     expect(model.unfilteredCount.value).toBe(5);
@@ -512,7 +524,7 @@ describe('PacketStatsModel — drill-down filters (§6)', () => {
     expect(model.window.value).toEqual(window);
     expect(model.timeline.value.binMs).toBe(binMs);
     // the contact page ignores the packets page's filters
-    model.addFilter(f('type', 'ACK'));
+    await model.addFilter(f('type', 'ACK'));
     expect(model.points.value).toEqual([]);
     expect(model.forContact(ALICE.key).value.from).toEqual(aliceBefore.from);
     expect(model.forContact(ALICE.key).value.from).toHaveLength(2);
@@ -520,37 +532,37 @@ describe('PacketStatsModel — drill-down filters (§6)', () => {
 
   it('filters by channel, direction, category and hops; unknown hops never match', async () => {
     const { model } = await filtered();
-    model.addFilter(f('channel', 'Test'));
+    await model.addFilter(f('channel', 'Test'));
     expect(tss(model.points.value)).toEqual([20_000]);
     expect(model.utilization.value.byChannel.map((b) => [b.name, b.count])).toEqual([['Test', 1]]);
-    model.clearFilters();
-    model.addFilter(f('direction', 'out'));
+    await model.clearFilters();
+    await model.addFilter(f('direction', 'out'));
     expect(tss(model.points.value)).toEqual([40_000]);
     expect(model.bySource.value.top.map((x) => x.node.label)).toEqual(['Me']);
-    model.clearFilters();
-    model.addFilter(f('category', 'channel'));
+    await model.clearFilters();
+    await model.addFilter(f('category', 'channel'));
     expect(tss(model.points.value)).toEqual([20_000, 40_000]);
-    model.clearFilters();
-    model.addFilter(f('hops', '2'));
+    await model.clearFilters();
+    await model.addFilter(f('hops', '2'));
     expect(tss(model.points.value)).toEqual([20_000]);
     expect(model.hops.value).toEqual([{ hops: 2, count: 1 }]);
   });
 
   it('ANDs fields, replaces a field, removes and clears; survives range changes', async () => {
     const { model } = await filtered();
-    model.addFilter(f('route', 'FLOOD'));
-    model.addFilter(f('hops', '0'));
+    await model.addFilter(f('route', 'FLOOD'));
+    await model.addFilter(f('hops', '0'));
     expect(tss(model.points.value)).toEqual([10_000, 30_000, 40_000]);
-    model.addFilter(f('type', 'TXT_MSG'));
+    await model.addFilter(f('type', 'TXT_MSG'));
     expect(tss(model.points.value)).toEqual([10_000]);
-    // same field: replaces, keeps its position
-    model.addFilter(f('type', 'ACK'));
-    expect(model.filters.value.map((x) => [x.field, x.value])).toEqual([['route', 'FLOOD'], ['hops', '0'], ['type', 'ACK']]);
+    // same field: replaces (direction, type and route come first: native packet log fields)
+    await model.addFilter(f('type', 'ACK'));
+    expect(model.filters.value.map((x) => [x.field, x.value])).toEqual([['type', 'ACK'], ['route', 'FLOOD'], ['hops', '0']]);
     expect(tss(model.points.value)).toEqual([30_000]);
-    model.removeFilter('type');
+    await model.removeFilter('type');
     expect(model.filters.value.map((x) => x.field)).toEqual(['route', 'hops']);
     expect(tss(model.points.value)).toEqual([10_000, 30_000, 40_000]);
-    model.removeFilter('channel'); // absent: no-op
+    await model.removeFilter('channel'); // absent: no-op
     expect(model.filters.value).toHaveLength(2);
 
     await model.setRange({ from: T + 20_000, to: null });
@@ -558,8 +570,127 @@ describe('PacketStatsModel — drill-down filters (§6)', () => {
     expect(tss(model.points.value)).toEqual([30_000, 40_000]);
     expect(model.unfilteredCount.value).toBe(3);
 
-    model.clearFilters();
+    await model.clearFilters();
     expect(model.filters.value).toEqual([]);
+    expect(model.points.value).toEqual(model.allPoints.value);
+  });
+});
+
+describe('PacketStatsModel — filter shared with the packet log', () => {
+  async function shared(): Promise<Harness> {
+    return harness([
+      rx(datagram(PayloadType.TXT_MSG, 0xa1, 0x01, [0x7e]), T),
+      rx(datagram(PayloadType.TXT_MSG, 0xa1, 0x01), T + 10_000),
+      rx(await grpTxt(PSK, 'Carol', 'hi', [0x7e, 0x22]), T + 20_000),
+      rx(ack(), T + 30_000),
+      { direction: 'tx', bytes: new Uint8Array(0), format: 'none', source: 'sent', payloadType: PayloadType.GRP_TXT, routeType: RouteType.FLOOD, pathLen: 0, ts: T + 40_000 },
+    ]);
+  }
+  const tss = (pts: readonly StatPacket[]): number[] => pts.map((p) => p.ts - T);
+  const rowTs = (h: Harness): number[] => h.log.packets.rows.value.map((r) => r.record.ts - T);
+
+  it('drill-downs land in the log filter: direction / type / route natively, the rest in drill', async () => {
+    const { model, log } = await shared();
+    await model.addFilter({ field: 'direction', value: 'in', label: 'Received' });
+    await model.addFilter({ field: 'type', value: 'TXT_MSG', label: 'TXT_MSG' });
+    await model.addFilter({ field: 'route', value: 'FLOOD', label: 'FLOOD' });
+    await model.addFilter({ field: 'source', value: ALICE.key, label: 'Alice' });
+    expect(log.packets.filter.value).toEqual({
+      direction: 'rx',
+      payloadTypes: [PayloadType.TXT_MSG],
+      routeTypes: [RouteType.FLOOD],
+      drill: [{ field: 'source', value: ALICE.key, label: 'Alice' }],
+    });
+    expect(model.filters.value.map((x) => [x.field, x.value, x.label])).toEqual([
+      ['direction', 'in', 'Received'],
+      ['type', 'TXT_MSG', 'TXT_MSG'],
+      ['route', 'FLOOD', 'FLOOD'],
+      ['source', ALICE.key, 'Alice'],
+    ]);
+    expect(tss(model.points.value)).toEqual([0, 10_000]);
+    expect(rowTs({ model, log } as Harness)).toEqual([10_000, 0]);
+
+    // 'out' ⇄ 'tx'; a type with no number ('UNKNOWN') stays a drill entry and drops the native one
+    await model.addFilter({ field: 'direction', value: 'out', label: 'Sent' });
+    expect(log.packets.filter.value.direction).toBe('tx');
+    await model.addFilter({ field: 'type', value: 'UNKNOWN', label: 'UNKNOWN' });
+    expect(log.packets.filter.value.payloadTypes).toBeUndefined();
+    expect(log.packets.filter.value.drill?.map((d) => d.field)).toEqual(['source', 'type']);
+    expect(model.filters.value.map((x) => x.field)).toEqual(['direction', 'route', 'source', 'type']);
+    // and a numbered type replaces it again
+    await model.addFilter({ field: 'type', value: 'ACK', label: 'ACK' });
+    expect(log.packets.filter.value.payloadTypes).toEqual([PayloadType.ACK]);
+    expect(log.packets.filter.value.drill?.map((d) => d.field)).toEqual(['source']);
+
+    await model.removeFilter('source');
+    expect('drill' in log.packets.filter.value).toBe(false);
+    await model.removeFilter('direction');
+    expect(log.packets.filter.value).toEqual({ payloadTypes: [PayloadType.ACK], routeTypes: [RouteType.FLOOD] });
+  });
+
+  it('the log lists the drilled-down packets, waits for the stats load, and live-tails them once', async () => {
+    const h = await shared();
+    const { store, model, log } = h;
+    await model.addFilter({ field: 'hops', value: '1', label: '1 hop' });
+    expect(rowTs(h)).toEqual([0]);
+    expect(log.packets.matching.value).toBe(1);
+    // a range change reloads both; the log's query waits for the stats points of the new range
+    await model.setRange({ from: T + 5_000, to: null });
+    expect(rowTs(h)).toEqual([]);
+    await model.setRange({ from: null, to: null });
+    expect(rowTs(h)).toEqual([0]);
+    await log.packets.reload();
+    expect(rowTs(h)).toEqual([0]);
+
+    // live, while the drill-down is active: shown once its point is derived; non-matching ones only counted
+    const total = log.packets.total.value;
+    const { id } = await store.packets.append(rx(datagram(PayloadType.TXT_MSG, 0xb2, 0x01, [0x22]), T + 50_000));
+    await store.packets.append(rx(ack(), T + 60_000));
+    await model.settled();
+    await log.settled();
+    expect(log.packets.rows.value.filter((r) => r.id === id)).toHaveLength(1);
+    expect(rowTs(h)).toEqual([50_000, 0]);
+    expect(log.packets.matching.value).toBe(2);
+    expect(log.packets.total.value).toBe(total + 2);
+    expect(tss(model.points.value)).toEqual([0, 50_000]);
+
+    await model.clearFilters();
+    expect(log.packets.rows.value).toHaveLength(7);
+  });
+
+  it('a log text / node / types filter narrows the stats points', async () => {
+    const { model, log } = await shared();
+    await log.packets.setFilter({ node: '7e' });
+    expect(tss(model.points.value)).toEqual([0, 20_000]);
+    expect(model.unfilteredCount.value).toBe(5);
+    // several types (Packets tab only): no single-type drill-down to show
+    await log.packets.setFilter({ node: undefined, payloadTypes: [PayloadType.TXT_MSG, PayloadType.ACK] });
+    expect(tss(model.points.value)).toEqual([0, 10_000, 30_000]);
+    expect(model.filters.value).toEqual([]);
+    await log.packets.setFilter({ payloadTypes: undefined, text: 'grp_txt' });
+    expect(tss(model.points.value)).toEqual([20_000, 40_000]);
+    expect(model.summary.value.packets).toBe(2);
+  });
+
+  it('the stats range is the log filter from / to, both ways; clearFilters keeps it', async () => {
+    const { model, log } = await shared();
+    await model.setRange({ from: T + 10_000, to: T + 30_000 });
+    expect(log.packets.filter.value).toEqual({ from: T + 10_000, to: T + 30_000 });
+    expect(log.packets.rows.value).toHaveLength(3);
+    await model.setRange({ from: null, to: T + 30_000 });
+    expect(log.packets.filter.value).toEqual({ to: T + 30_000 });
+
+    // the log's date inputs move the stats range (and reload it)
+    await log.packets.setFilter({ from: T + 20_000, to: undefined });
+    await model.settled();
+    expect(model.range.value).toEqual({ from: T + 20_000, to: null });
+    expect(tss(model.allPoints.value)).toEqual([20_000, 30_000, 40_000]);
+
+    await log.packets.setFilter({ text: 'ack', direction: 'rx' });
+    await model.addFilter({ field: 'hops', value: '0', label: '0' });
+    await model.clearFilters();
+    expect(log.packets.filter.value).toEqual({ from: T + 20_000 });
+    expect(model.range.value).toEqual({ from: T + 20_000, to: null });
     expect(model.points.value).toEqual(model.allPoints.value);
   });
 });
@@ -645,20 +776,20 @@ describe('PacketStatsModel — SMAZ compression (§1.2, §1.6)', () => {
       byDirection: { in: { text: 5, smaz: 2, plain: 1, unknown: 2 }, out: { text: 2, smaz: 2, plain: 0, unknown: 0 } },
       compressedSources: 2, // Alice (channel + DM) and this radio
     });
-    model.addFilter({ field: 'direction', value: 'in', label: 'in' });
+    await model.addFilter({ field: 'direction', value: 'in', label: 'in' });
     expect(model.compression.value).toMatchObject({ text: 5, smaz: 2, compressedSources: 1 });
-    model.addFilter({ field: 'category', value: 'advert', label: 'advert' });
+    await model.addFilter({ field: 'category', value: 'advert', label: 'advert' });
     expect(model.compression.value).toMatchObject({ text: 0, compressedShare: null, savingsRatio: null, bytesSaved: 0, compressedSources: 0 });
   });
 
   it('drills down by compression; non-text packets never match', async () => {
     const { model } = await compressed();
     const tss = (): number[] => model.points.value.map((p) => p.ts - T);
-    model.addFilter({ field: 'compression', value: 'smaz', label: 'Compressed' });
+    await model.addFilter({ field: 'compression', value: 'smaz', label: 'Compressed' });
     expect(tss()).toEqual([0, 3, 5, 6]);
-    model.addFilter({ field: 'compression', value: 'unknown', label: 'Not decrypted' });
+    await model.addFilter({ field: 'compression', value: 'unknown', label: 'Not decrypted' });
     expect(tss()).toEqual([2, 8]);
-    model.addFilter({ field: 'compression', value: 'plain', label: 'Plain' });
+    await model.addFilter({ field: 'compression', value: 'plain', label: 'Plain' });
     expect(tss()).toEqual([1]);
     expect(matchesFilter(byTs(model.allPoints.value, T + 7), { field: 'compression', value: '', label: '' })).toBe(false);
   });

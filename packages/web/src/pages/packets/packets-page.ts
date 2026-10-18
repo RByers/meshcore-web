@@ -4,11 +4,13 @@
  * inspector in a side panel (wide) or on its own page `/packets/:id` (narrow).
  * `/packets/node/:key` opens the packet log filtered to the packets that node originated (linked
  * from the contact page; the filter uses the packet log's source index).
- * State and logic live in the core PacketLogModel; this component renders and forwards intents.
+ * The Packets and Stats tabs share one filter (the packet log's): Stats drill-downs with no control
+ * here show as removable chips. State and logic live in the core PacketLogModel; this component
+ * renders and forwards intents.
  */
 import { css, html, nothing, type PropertyValues, type TemplateResult } from 'lit';
 import { repeat } from 'lit/directives/repeat.js';
-import { resolvedPathTitle, sendOutcomeLabel, type FrameRow, type LogView, type PacketFilter, type PacketRow } from '@meshcore-web/core/app';
+import { packetFilterChips, resolvedPathTitle, sendOutcomeLabel, type FrameRow, type LogView, type PacketFilter, type PacketRow } from '@meshcore-web/core/app';
 import { PayloadType, RouteType, payloadTypeName } from '@meshcore-web/core/packet';
 import { CMD, PUSH, RESP } from '@meshcore-web/core/protocol';
 import { AppElement } from '../../app-context.js';
@@ -529,6 +531,15 @@ export class McPacketsPage extends AppElement {
             <button data-action="clear-src" aria-label="Show packets from every node" @click=${() => this.#clearSrc()}>✕</button></span
           >`
         : nothing}
+      ${packetFilterChips(f)
+        .filter((c) => c.key.startsWith('drill-'))
+        .map(
+          // Stats-tab drill-downs with no control of their own (the filter is shared, §6)
+          (c) => html`<span class="chip" data-filter=${c.key} title="Filter set on the Stats tab"
+            >${c.label}
+            <button data-action="remove-chip" aria-label=${`Remove ${c.name} filter`} @click=${() => void this.#log.removeFilterChip(c.key)}>✕</button></span
+          >`,
+        )}
       <label
         >Direction
         <select data-filter="direction" @change=${(e: Event) => this.#setPacketFilter({ direction: ((e.target as HTMLSelectElement).value || undefined) as PacketFilter['direction'] })}>
