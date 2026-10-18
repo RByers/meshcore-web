@@ -251,6 +251,7 @@ Elements (all `data-chart="…"` for tests, all accept plain arrays so they can 
 without the app):
 
 - `<mc-bar-chart>` horizontal bars: `items: { label, value, href?, title?, key?, selected? }[]`; label column is a link when `href` is set; value label at the bar end; sorted as given; keyed rows dispatch `bar-select` (§3 drill-down).
+- `<mc-box-plot>` horizontal box-and-whisker rows on one value axis (tick labels below, zero line when 0 is in range): `rows: { label, box: BoxStats | null, href?, title?: string | string[], key?, selected? }[]`, `format`, `empty-row-text`; per row whiskers with end caps, box q1–q3, median line, mean diamond, outlier dots, the median printed at the right; a null box shows `empty-row-text`. Label links, tooltip and keyed-row `bar-select` / pressed state as `<mc-bar-chart>`.
 - `<mc-dot-plot>` `points: { x: number, y: number | null, size: number, color: string /* series key */, id }[]`, `xDomain`, `yLabel`, `yFormat`; dot radius ∝ `sqrt(size)` (area ∝ bytes, 2–9 px); nulls in `y` dropped with a count shown ("n packets without SNR"); click → `dot-select` event with the id; legend with series → colour (≤ 8 + Other).
 - `<mc-line-chart>` `series: { key, points: { t, v }[] }[]`, `xDomain`, `stacked?: boolean`; crosshair tooltip listing all series at the hovered bin; legend.
 - `<mc-breakdown>` a single horizontal 100 % stacked bar per dimension: `segments: { label, value, title?, key?, selected? }[]` with a legend / inline labels; 2 px gaps between segments; keyed segments dispatch `segment-select`.
@@ -340,7 +341,7 @@ is not shown; the inspector split is hidden). The Stats panel, top to bottom:
    busiest count and how many nodes (packets) have no known location; the shared "Approximate
    positions" checkbox. Each map fits its markers when opened / when the checkbox changes, and
    re-fits only when filters move its bounds.
-10. **Signal by last hop** (`data-section="last-hops"`, `lastHops`), right after the first / final
+10. **Signal by last hop** (`data-section="last-hops"`, `lastHops`, `mc-box-plot`), right after the first / final
    path node charts: how well this radio hears each neighbour. One horizontal box plot per last hop
    (`LastHopSignal.snr`; top 50 by packet count as now, contact links like the source chart, `a3?`
    rows for ambiguous hashes) on a shared SNR axis (dB): box = q1–q3, a line at the median, whiskers
@@ -434,7 +435,8 @@ estimated end or skipped a hop); *Signal over time*
 Other), dot size = bytes); *Hop count* distribution; *Heard via this node (last hop)*
 (`data-section="last-hop"`, shown when `lastHopOf` is non-empty): a packets tile
 (`lastHopSummary.count`), a box plot from `lastHopBoxes` with rows *All* / *Direct* / *Relayed*
-(rows without data omitted; same marks and tooltip as the §3 item 10 chart; it replaces the
+(rows without data omitted, and only the one row when just direct or just relayed packets have an SNR,
+since *All* would repeat it; same marks and tooltip SNR lines as the §3 item 10 chart; it replaces the
 former mean / min–max SNR tiles), then an SNR-over-time `mc-dot-plot` of `lastHopSignal`
 (x time, y SNR, colour = *Direct* (zero hop from this node) / *Relayed*; points without an SNR
 left out). The section comes right after the tiles when `lastHopOf` outnumbers the packets from the
@@ -442,7 +444,7 @@ contact (repeaters), otherwise last; the tab shows its empty state only when `fr
 `lastHopOf` are all empty. Browser test in
 `packages/web/test/contact-stats.test.ts`: the tab appears, the paths chart lists the direct row
 and a repeated path from the emulator scenario, the timeline renders, and a repeater's page leads
-with the last-hop section (tiles, dots).
+with the last-hop section (packets tile, a *Relayed* box row, dots).
 
 ## 6. Drill-down filters
 

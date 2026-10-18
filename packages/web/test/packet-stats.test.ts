@@ -655,37 +655,38 @@ describe('/packets Stats packet paths map', () => {
     expect(bars('path-ends')).toEqual([[hill, '1']]);
   });
 
-  it('charts mean SNR by last hop, negative bars included; a bar filters by that last hop', async () => {
+  it('box-plots SNR by last hop; a row filters by that last hop', async () => {
     const { t, el, hill, alice } = await openWithPaths();
     const card = el.shadowRoot!.querySelector('[data-section="last-hops"]')!;
     expect(card.querySelector('h3')!.textContent).toBe('Signal by last hop');
-    const bars = (): [string, string][] =>
-      inChart(el, 'last-hops', 'mc-bar-chart', 'rect[role="button"]').map((r) => [r.getAttribute('data-key')!, r.getAttribute('aria-label')!.split(': ').pop()!]);
+    const rows = (): [string, string][] =>
+      inChart(el, 'last-hops', 'mc-box-plot', 'rect[role="button"]').map((r) => [r.getAttribute('data-key')!, r.getAttribute('aria-label')!.split(': ').pop()!]);
     // count desc: Hilltop relayed 4 (SNR 4, 2, −3, −7), Alice was heard directly once (SNR 6)
-    expect(bars()).toEqual([
-      [hill, '-1 dB'],
-      [alice, '6 dB'],
+    expect(rows()).toEqual([
+      [hill, 'median -0.5 dB'],
+      [alice, 'median 6 dB'],
     ]);
-    const links = inChart(el, 'last-hops', 'mc-bar-chart', '[data-label] a').map((a) => a.getAttribute('href'));
+    expect(inChart(el, 'last-hops', 'mc-box-plot', '[data-field="median"]').map((v) => v.textContent)).toEqual(['-0.5 dB', '6 dB']);
+    const links = inChart(el, 'last-hops', 'mc-box-plot', '[data-label] a').map((a) => a.getAttribute('href'));
     expect(links).toEqual([`#/node/${hill}`, `#/node/${alice}`]);
-    // Hilltop's mean is negative: its bar grows left from the zero line (mirrored), Alice's right
-    const marks = inChart(el, 'last-hops', 'mc-bar-chart', '[data-mark="bar"]');
-    expect(marks).toHaveLength(2);
-    expect(marks[0]!.getAttribute('transform')).toBe('scale(-1,1)');
-    expect(marks[1]!.getAttribute('transform')).toBeNull();
+    // a box per row on one axis that crosses zero
+    expect(inChart(el, 'last-hops', 'mc-box-plot', '[data-mark="box"]')).toHaveLength(2);
+    expect(inChart(el, 'last-hops', 'mc-box-plot', '[data-field="zero"]')).toHaveLength(1);
     expect(card.querySelector('[data-field="last-hops-footer"]')).toBeNull();
-    // the tooltip text: count (direct / relayed), SNR range, mean RSSI
-    const top = t.app.packetStats.lastHops.value.top[0]!;
-    expect(top).toMatchObject({ count: 4, direct: 0, relayed: 4, minSnr: -7, maxSnr: 4, meanRssi: -100 });
+    // the tooltip lines: n / median, IQR / range, mean, mean RSSI, count (direct / relayed), last heard
+    const box = card.querySelector('mc-box-plot')!;
+    const title = box.rows[0]!.title as readonly string[];
+    expect(title.slice(0, 5)).toEqual(['n 4 · median -0.5 dB', 'IQR -4 dB – 2.5 dB · range -7 dB – 4 dB', 'mean -1 dB', 'mean RSSI -100 dBm', '4 packets (0 direct, 4 relayed)']);
+    expect(title[5]).toMatch(/^last heard /);
 
-    inChart(el, 'last-hops', 'mc-bar-chart', `rect[data-key="${hill}"]`)[0]!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    inChart(el, 'last-hops', 'mc-box-plot', `rect[data-key="${hill}"]`)[0]!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await t.until(() => chips(t).length > 0, 3000, 'last hop chip');
     await settle(t, el);
     expect(t.app.packetStats.filters.value).toEqual([expect.objectContaining({ field: 'lastHop', value: hill })]);
     expect(chips(t)[0]).toMatch(/^Last hop: /);
     expect(t.app.packetStats.points.value).toHaveLength(4);
-    expect(bars()).toEqual([[hill, '-1 dB']]);
-    expect(inChart(el, 'last-hops', 'mc-bar-chart', 'rect[role="button"]')[0]!.getAttribute('aria-pressed')).toBe('true');
+    expect(rows()).toEqual([[hill, 'median -0.5 dB']]);
+    expect(inChart(el, 'last-hops', 'mc-box-plot', 'rect[role="button"]')[0]!.getAttribute('aria-pressed')).toBe('true');
   });
 
   it('maps the first / final path nodes on demand, each dot sized by its packet count', async () => {

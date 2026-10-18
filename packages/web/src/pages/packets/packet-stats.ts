@@ -54,6 +54,8 @@ import {
   OTHER_KEY,
   type BarItem,
   type BarSelectDetail,
+  type BoxRow,
+  type BoxSummary,
   type BreakdownSegment,
   type SegmentSelectDetail,
   type DotPoint,
@@ -206,23 +208,37 @@ export function pathNodeFooter(s: SourceStats): string {
 }
 
 /**
- * Signal-by-last-hop bars: value = mean SNR (null when none of its packets had one), a contact
+ * Tooltip lines for an SNR box: n, median, IQR (q1–q3), range (min–max), mean; "No SNR" when null.
+ * Shared by the last-hop box plots here and on the node page.
+ */
+export function snrBoxLines(b: BoxSummary | null): string[] {
+  if (!b) return ['No SNR'];
+  return [
+    `n ${formatNumber(b.n, 0)} · median ${formatSnr(b.median)}`,
+    `IQR ${formatSnr(b.q1)} – ${formatSnr(b.q3)} · range ${formatSnr(b.min)} – ${formatSnr(b.max)}`,
+    `mean ${formatSnr(b.mean)}${b.outliers.length > 0 ? ` · ${b.outliers.length} ${b.outliers.length === 1 ? 'outlier' : 'outliers'}` : ''}`,
+  ];
+}
+
+/**
+ * Signal-by-last-hop box plot rows: the SNR box (null when none of its packets had an SNR), a contact
  * link like the source chart, keyed by `nodeId` (the lastHop filter value); `now` for "last heard".
  */
-export function lastHopItems(s: LastHopStats, now: number, active?: string): BarItem[] {
+export function lastHopItems(s: LastHopStats, now: number, active?: string): BoxRow[] {
   return s.top.map((h) => {
     const key = nodeId(h.node);
-    const parts = [`${formatNumber(h.count, 0)} ${h.count === 1 ? 'packet' : 'packets'} (${formatNumber(h.direct, 0)} direct, ${formatNumber(h.relayed, 0)} relayed)`];
-    if (h.minSnr !== null && h.maxSnr !== null) parts.push(`SNR ${formatSnr(h.minSnr)} – ${formatSnr(h.maxSnr)}`);
-    if (h.meanRssi !== null) parts.push(`mean RSSI ${formatNumber(h.meanRssi, 0)} dBm`);
-    parts.push(`last heard ${formatRelative(h.lastTs, now)}`);
+    const lines = snrBoxLines(h.snr);
+    if (h.meanRssi !== null) lines.push(`mean RSSI ${formatNumber(h.meanRssi, 0)} dBm`);
+    lines.push(`${formatNumber(h.count, 0)} ${h.count === 1 ? 'packet' : 'packets'} (${formatNumber(h.direct, 0)} direct, ${formatNumber(h.relayed, 0)} relayed)`);
+    lines.push(`last heard ${formatRelative(h.lastTs, now)}`);
+    if (!h.node.resolved) lines.push('(not uniquely resolved)');
     return {
       label: h.node.label,
-      value: h.meanSnr,
+      box: h.snr,
       key,
       selected: key === active,
       ...(h.node.resolved && h.node.key && !h.node.self ? { href: nodeHref(h.node.key) } : {}),
-      title: `${parts.join(' · ')}${h.node.resolved ? '' : ' (not uniquely resolved)'}`,
+      title: lines,
     };
   });
 }
@@ -453,7 +469,8 @@ export class McPacketStats extends AppElement {
         font-size: 13px;
         color: var(--mc-text-muted);
       }
-      mc-bar-chart.sources {
+      mc-bar-chart.sources,
+      mc-box-plot.sources {
         --mc-bar-label-width: 40%;
       }
       .count {
@@ -624,19 +641,23 @@ export class McPacketStats extends AppElement {
     this.#toggle('lastHop', e.detail.key, node?.label ?? e.detail.key);
   };
 
-  /** Mean SNR per last hop: how well this radio hears each neighbour. */
+  /** SNR box per last hop: how well this radio hears each neighbour. */
   #lastHops(s: LastHopStats, active: string | undefined): TemplateResult {
     const footer = lastHopFooter(s);
     return html`<section class="card" data-section="last-hops">
       <h3>Signal by last hop</h3>
-      <p class="note muted intro">Mean SNR of the received packets each node was the last to transmit (its own, heard directly, or relayed).</p>
-      <mc-bar-chart
+      <p class="note muted intro">
+        SNR of the received packets each node was the last to transmit (its own, heard directly, or relayed): box = middle half, line = median,
+        ◇ = mean, whiskers to 1.5 × IQR, dots = outliers.
+      </p>
+      <mc-box-plot
         class="sources"
-        .items=${lastHopItems(s, this.app.clock.now(), active)}
+        .rows=${lastHopItems(s, this.app.clock.now(), active)}
         .format=${formatSnr}
         empty-text="No received packets with a known last hop in the shown packets."
+        empty-row-text="no SNR"
         @bar-select=${this.#onLastHop}
-      ></mc-bar-chart>
+      ></mc-box-plot>
       ${footer ? html`<p class="note muted" data-field="last-hops-footer">${footer}</p>` : nothing}
     </section>`;
   }

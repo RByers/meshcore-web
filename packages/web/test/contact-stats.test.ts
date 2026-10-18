@@ -3,7 +3,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { PayloadType, RouteType, buildPacket, encodeAdvertAppData } from '@meshcore-web/core/packet';
 import { concatBytes, toHex } from '@meshcore-web/core/util/bytes';
 import '../src/mc-app.js';
-import type { McContactStats } from '../src/pages/messaging/contact-stats.js';
+import { lastHopBoxRows, type McContactStats } from '../src/pages/messaging/contact-stats.js';
+import { boxStats } from '@meshcore-web/core/app';
 import { createHarness, type Harness } from '../src/testing/harness.js';
 
 let h: Harness | undefined;
@@ -27,6 +28,21 @@ function stats(t: Harness): McContactStats {
 function within(root: Element | null | undefined, selector: string): Element[] {
   return root?.shadowRoot ? [...root.shadowRoot.querySelectorAll(selector)] : [];
 }
+
+describe('lastHopBoxRows', () => {
+  it('lists All / Direct / Relayed when both kinds have data, else only the one with data', () => {
+    const direct = boxStats([5, 7]);
+    const relayed = boxStats([-3, 1, 2]);
+    const all = boxStats([5, 7, -3, 1, 2]);
+    expect(lastHopBoxRows({ all, direct, relayed }).map((r) => [r.label, r.box?.median])).toEqual([
+      ['All', 2],
+      ['Direct', 6],
+      ['Relayed', 1],
+    ]);
+    expect(lastHopBoxRows({ all: relayed, direct: null, relayed }).map((r) => r.label)).toEqual(['Relayed']);
+    expect(lastHopBoxRows({ all: null, direct: null, relayed: null })).toEqual([]);
+  });
+});
 
 describe('contact Stats tab', () => {
   it('shows tiles, paths (direct + repeated), the timeline and a signal plot with a y selector', async () => {
@@ -144,7 +160,11 @@ describe('contact Stats tab', () => {
     const order = within(el, '[data-section]').map((sec) => sec.getAttribute('data-section'));
     expect(order.at(-1)).toBe('last-hop');
     expect(tile('last-hop-packets')).toBe('1');
-    expect(tile('last-hop-snr')).toBe('8 dB');
+    // one direct packet: a single Direct box row (no All duplicate)
+    const lastBox = t.query('[data-section="last-hop"] mc-box-plot');
+    await t.until(() => within(lastBox, '[data-field="median"]').length === 1, 3000, 'last hop box');
+    expect(within(lastBox, '[data-label]').map((l) => l.textContent!.trim())).toEqual(['Direct']);
+    expect(within(lastBox, '[data-field="median"]')[0]!.textContent).toBe('8 dB');
   });
 
   it('shows how a repeater is heard as the last hop, first on its page', async () => {
@@ -175,8 +195,13 @@ describe('contact Stats tab', () => {
     expect(order.slice(0, 2)).toEqual(['tiles', 'last-hop']);
     expect(t.query('[data-section="last-hop"] h3')!.textContent).toBe('Heard via this node (last hop)');
     expect(tile('last-hop-packets')).toBe('3');
-    expect(tile('last-hop-snr')).toBe('1 dB');
-    expect(tile('last-hop-range')).toBe('-3 dB / 4 dB');
+    expect(t.query('[data-tile="last-hop-snr"]')).toBeNull();
+    // only relayed packets: one Relayed row, median 2 dB, box above the dot plot
+    const box = t.query('[data-section="last-hop"] mc-box-plot');
+    await t.until(() => within(box, '[data-mark="box"]').length === 1, 3000, 'last hop box');
+    expect(within(box, '[data-label]').map((l) => l.textContent!.trim())).toEqual(['Relayed']);
+    expect(within(box, '[data-field="median"]').map((v) => v.textContent)).toEqual(['2 dB']);
+    expect(box!.compareDocumentPosition(t.query('[data-section="last-hop"] mc-dot-plot')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
     // SNR over time, all Relayed (none heard straight from it)
     const plot = t.query('[data-section="last-hop"] mc-dot-plot');

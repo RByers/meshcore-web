@@ -11,8 +11,8 @@ import { AppElement } from '../../app-context.js';
 import { formatRelative, formatSnr } from '../../format.js';
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
-import { assignSlots, fixedSlots, type BarItem, type Describe, type DotPoint, type DotSelectDetail, type LineSeries, type SeriesPalette } from '../../charts/index.js';
-import { timelineDescribe, timelinePalette, timelineSeries } from '../packets/packet-stats.js';
+import { assignSlots, fixedSlots, type BarItem, type BoxRow, type Describe, type DotPoint, type DotSelectDetail, type LineSeries, type SeriesPalette } from '../../charts/index.js';
+import { snrBoxLines, timelineDescribe, timelinePalette, timelineSeries } from '../packets/packet-stats.js';
 import type { McTileMap } from '../../components/tile-map.js';
 import { directedUsageLines } from '../../components/path-usage-lines.js';
 import '../../components/stats-range.js';
@@ -31,6 +31,18 @@ const Y_FIELDS: Record<YField, { option: string; label: string; format: (v: numb
 
 /** Last-hop signal colours: heard straight from this node vs relayed by it. */
 const LAST_HOP_PALETTE = fixedSlots({ direct: 1, relayed: 2 }, new Map([['direct', 'Direct'], ['relayed', 'Relayed']]));
+
+/**
+ * Last-hop SNR box rows: *All*, *Direct*, *Relayed*, rows without data omitted; when only one of
+ * direct / relayed has data, just that row (*All* would repeat it).
+ */
+export function lastHopBoxRows(b: ContactStats['lastHopBoxes']): BoxRow[] {
+  const parts: BoxRow[] = [];
+  if (b.direct) parts.push({ label: 'Direct', box: b.direct, title: ['Heard straight from this node (its own packets)', ...snrBoxLines(b.direct)] });
+  if (b.relayed) parts.push({ label: 'Relayed', box: b.relayed, title: ['Relayed by this node', ...snrBoxLines(b.relayed)] });
+  if (parts.length < 2) return parts;
+  return [{ label: 'All', box: b.all, title: snrBoxLines(b.all) }, ...parts];
+}
 
 /** SNR-over-time dots of the packets this node was the last hop of (points without an SNR left out). */
 export function lastHopDots(pts: readonly LastHopSignalPoint[]): DotPoint[] {
@@ -105,6 +117,13 @@ export class McContactStats extends AppElement {
       }
       section.card .tiles {
         margin-block-end: 12px;
+      }
+      .tiles.single {
+        grid-template-columns: minmax(130px, 240px);
+      }
+      mc-box-plot {
+        margin-block-end: 12px;
+        --mc-bar-label-width: 5.5em;
       }
       .head h3 {
         margin: 0;
@@ -294,19 +313,13 @@ export class McContactStats extends AppElement {
     if (s.lastHopOf.length === 0) return nothing;
     if (this.#lastHopMemo?.pts !== s.lastHopSignal) this.#lastHopMemo = { pts: s.lastHopSignal, dots: lastHopDots(s.lastHopSignal) };
     const sum = s.lastHopSummary;
-    const snr = (v: number | null): string => (v !== null ? formatSnr(v) : '—');
     return html`<section class="card" data-section="last-hop">
       <h3>Heard via this node (last hop)</h3>
       <p class="muted note">Packets whose final transmission came from this node: its own heard directly, and the ones it relayed.</p>
-      <div class="tiles">
+      <div class="tiles single">
         <mc-stat-tile data-tile="last-hop-packets" label="Packets" .value=${sum.count} hint="Received packets this node was the last to transmit"></mc-stat-tile>
-        <mc-stat-tile data-tile="last-hop-snr" label="Mean SNR" .value=${snr(sum.meanSnr)}></mc-stat-tile>
-        <mc-stat-tile
-          data-tile="last-hop-range"
-          label="Min / max SNR"
-          .value=${sum.minSnr !== null && sum.maxSnr !== null ? `${formatSnr(sum.minSnr)} / ${formatSnr(sum.maxSnr)}` : '—'}
-        ></mc-stat-tile>
       </div>
+      <mc-box-plot data-chart="last-hop-box" .rows=${lastHopBoxRows(s.lastHopBoxes)} .format=${formatSnr} empty-text="No SNR recorded."></mc-box-plot>
       <mc-dot-plot
         .points=${this.#lastHopMemo.dots}
         .xDomain=${xDomain}

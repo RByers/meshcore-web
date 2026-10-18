@@ -11,6 +11,8 @@ import {
   type SegmentSelectDetail,
   type DotSelectDetail,
   type McBarChart,
+  type McBoxPlot,
+  type BoxSummary,
   type McBreakdown,
   type McDotPlot,
   type McLineChart,
@@ -176,6 +178,86 @@ describe('mc-bar-chart', () => {
     hit.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     (qa(el, '[data-label] span')[0] as HTMLElement).click();
     expect(seen).toHaveLength(0);
+  });
+});
+
+describe('mc-box-plot', () => {
+  const box = (o: Partial<BoxSummary> = {}): BoxSummary => ({
+    n: 9, min: -8, q1: -2, median: 1, q3: 4, max: 20, mean: 2, whiskerLow: -8, whiskerHigh: 9, outliers: [15, 20], ...o,
+  });
+  const fmt = (v: number): string => `${v} dB`;
+  const num = (e: Element, a: string): number => Number(e.getAttribute(a));
+
+  it('draws whiskers, box q1–q3, median, mean and outliers on a shared axis with a zero line', async () => {
+    const el = await mount('mc-box-plot', {
+      rows: [
+        { label: 'Hill', box: box(), href: '#/node/aa', title: ['n 9'] },
+        { label: 'Quiet', box: null },
+        { label: 'Alice', box: box({ min: 3, q1: 5, median: 6, q3: 7, max: 8, mean: 6, whiskerLow: 3, whiskerHigh: 8, outliers: [] }) },
+      ],
+      format: fmt,
+      emptyRowText: 'no SNR',
+    } satisfies Partial<McBoxPlot>);
+    expect(qa(el, '[data-label]')).toHaveLength(3);
+    expect((qa(el, '[data-label] a') as HTMLAnchorElement[]).map((a) => a.getAttribute('href'))).toEqual(['#/node/aa']);
+    // the zero line, and one rect width per unit derived from two points on the shared axis
+    const zero = q(el, '[data-field="zero"]')!;
+    const marks = (row: number, m: string) => qa(el, `g[data-row="${row}"] [data-mark="${m}"]`);
+    const rect = marks(0, 'box')[0]!;
+    const unit = num(rect, 'width') / 6; // q3 − q1 = 6
+    const at = (v: number): number => num(rect, 'x') + (v + 2) * unit;
+    // the zero line is pixel-snapped
+    expect(Math.abs(num(zero, 'x1') - at(0))).toBeLessThanOrEqual(1);
+    expect(num(marks(0, 'median')[0]!, 'x1')).toBeCloseTo(at(1), 0);
+    const whisker = marks(0, 'whisker')[0]!;
+    expect(num(whisker, 'x1')).toBeCloseTo(at(-8), 0);
+    expect(num(whisker, 'x2')).toBeCloseTo(at(9), 0);
+    expect(marks(0, 'cap').map((c) => Math.round(num(c, 'x1')))).toEqual([Math.round(at(-8)), Math.round(at(9))]);
+    expect(marks(0, 'outlier').map((c) => num(c, 'cx'))).toEqual([expect.closeTo(at(15), 0), expect.closeTo(at(20), 0)]);
+    expect(marks(0, 'mean')).toHaveLength(1);
+    // the second box sits on the same axis
+    expect(num(marks(2, 'box')[0]!, 'x')).toBeCloseTo(at(5), 0);
+    expect(marks(2, 'outlier')).toHaveLength(0);
+    // no box for the null row, its text instead; medians at the right
+    expect(qa(el, 'g[data-row="1"]')).toHaveLength(0);
+    expect(qa(el, '[data-field="no-box"]').map((t) => t.textContent)).toEqual(['no SNR']);
+    expect(qa(el, '[data-field="median"]').map((t) => t.textContent)).toEqual(['1 dB', '6 dB']);
+    expect(qa(el, '.tick').length).toBeGreaterThan(1);
+  });
+
+  it('has no zero line when 0 is out of range, and an empty state', async () => {
+    const el = await mount('mc-box-plot', { rows: [{ label: 'a', box: box({ min: 3, q1: 4, median: 5, q3: 6, max: 7, whiskerLow: 3, whiskerHigh: 7, outliers: [] }) }] } satisfies Partial<McBoxPlot>);
+    expect(q(el, '[data-field="zero"]')).toBeNull();
+    el.rows = [];
+    await el.updateComplete;
+    expect(q(el, '[data-empty]')).not.toBeNull();
+  });
+
+  it('keyed rows dispatch bar-select on click and Enter, with a pressed state; unkeyed rows do not', async () => {
+    const el = await mount('mc-box-plot', {
+      rows: [
+        { label: 'Hill', box: box(), key: 'hh', href: '#/node/hh' },
+        { label: 'Bob', box: null, key: 'bb', selected: true },
+        { label: 'Plain', box: box() },
+      ],
+      format: fmt,
+    } satisfies Partial<McBoxPlot>);
+    const seen: BarSelectDetail[] = [];
+    el.parentElement!.addEventListener('bar-select', (e) => seen.push((e as CustomEvent<BarSelectDetail>).detail));
+    const hits = qa(el, 'rect.hit[role="button"]') as SVGRectElement[];
+    expect(hits.map((h) => h.getAttribute('aria-pressed'))).toEqual(['false', 'true']);
+    expect(hits.map((h) => h.getAttribute('aria-label'))).toEqual(['Hill: median 1 dB', 'Bob: no data']);
+    hits[0]!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    hits[1]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    (qa(el, '[data-label] span')[0] as HTMLElement).click();
+    // the unkeyed row: plain hit target, no event
+    q<SVGRectElement>(el, 'rect.hit:not([role])')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    (qa(el, '[data-label] span')[1] as HTMLElement).click();
+    expect(seen).toEqual([
+      { key: 'hh', index: 0 },
+      { key: 'bb', index: 1 },
+      { key: 'bb', index: 1 },
+    ]);
   });
 });
 
