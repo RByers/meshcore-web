@@ -26,6 +26,7 @@ import './packet-inspector.js';
 import './packet-stats.js';
 import './packet-filters.js';
 import './packets-map.js';
+import { scrollParent } from '../../scroll.js';
 
 /** The list tabs plus the Stats tab (docs/packet-stats.md §3); Frames only with `showFrames`. */
 export type LogTab = 'packets' | 'frames' | 'stats';
@@ -131,7 +132,8 @@ export class McPacketsPage extends AppElement {
       }
       aside.card {
         position: sticky;
-        top: calc(72px + var(--mc-filters-h, 0px));
+        /* <main> (the scroller) starts under the app header */
+        top: calc(12px + var(--mc-filters-h, 0px));
         align-self: start;
         max-height: calc(100dvh - 96px - var(--mc-filters-h, 0px));
         overflow: auto;
@@ -145,7 +147,7 @@ export class McPacketsPage extends AppElement {
       @media (min-width: 900px) {
         mc-packet-filters {
           position: sticky;
-          top: 60px; /* under the app header (61px) */
+          top: 0; /* top of <main>, the page scroller */
           z-index: 2;
         }
       }
@@ -319,11 +321,12 @@ export class McPacketsPage extends AppElement {
       if (wide !== this.wide) this.wide = wide;
     });
     this.#ro.observe(this);
+    // root: the page scroller (<main>), so the 600px look-ahead applies inside it
     this.#io = new IntersectionObserver(
       (entries) => {
         if (entries.some((e) => e.isIntersecting)) this.#loadMore();
       },
-      { rootMargin: '0px 0px 600px 0px' },
+      { root: scrollParent(this), rootMargin: '0px 0px 600px 0px' },
     );
     this.#filtersRo = new ResizeObserver((entries) => {
       const h = entries[0]?.borderBoxSize[0]?.blockSize ?? 0;
@@ -414,11 +417,12 @@ export class McPacketsPage extends AppElement {
     const attr = this.tab === 'packets' ? 'data-packet-id' : 'data-frame-id';
     const rows = this.renderRoot.querySelectorAll<HTMLElement>(`tbody tr[${attr}]`);
     const first = rows[0];
+    const viewTop = scrollParent(this)?.getBoundingClientRect().top ?? 0;
     // only once the reader has scrolled past the top of the list: at the top new rows should show
-    if (!first || first.getBoundingClientRect().top >= 0) return null;
+    if (!first || first.getBoundingClientRect().top >= viewTop) return null;
     for (const tr of rows) {
       const r = tr.getBoundingClientRect();
-      if (r.bottom > 0) return { attr, id: tr.getAttribute(attr)!, top: r.top };
+      if (r.bottom > viewTop) return { attr, id: tr.getAttribute(attr)!, top: r.top };
     }
     return null;
   }
@@ -430,7 +434,7 @@ export class McPacketsPage extends AppElement {
     const tr = this.renderRoot.querySelector<HTMLElement>(`tbody tr[${a.attr}="${a.id}"]`);
     if (!tr) return; // different page / filter / tab: nothing to keep in place
     const delta = tr.getBoundingClientRect().top - a.top;
-    if (delta !== 0) window.scrollBy({ top: delta, behavior: 'instant' });
+    if (delta !== 0) (scrollParent(this) ?? window).scrollBy({ top: delta, behavior: 'instant' });
   }
 
   get #log() {

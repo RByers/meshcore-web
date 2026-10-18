@@ -232,6 +232,29 @@ describe('direct chat', () => {
     }
   });
 
+  it('on a phone the chat fills the space between the app header and bottom nav without scrolling the page', async () => {
+    await page.viewport(390, 640);
+    try {
+      const t = await connected();
+      const k = keys(t);
+      await t.go(`/node/${k.alice}/messages`, '[data-field="composer"]');
+      const main = t.query('main')!;
+      const nav = t.query('nav')!.getBoundingClientRect();
+      // the composer sits wholly above the bottom nav, not partly under it
+      await t.until(() => t.query('[data-field="composer"]')!.getBoundingClientRect().bottom <= nav.top, 2000, 'composer above nav');
+      // nothing to drag: neither the document nor the page scroller can scroll (the message log does)
+      expect(document.scrollingElement!.scrollHeight).toBeLessThanOrEqual(document.scrollingElement!.clientHeight);
+      expect(main.scrollHeight).toBeLessThanOrEqual(main.clientHeight);
+      expect(nav.bottom).toBeCloseTo(640, 0);
+      // the node page (header, tabs, chat) fills <main>'s content box exactly instead of guessing at the chrome around it
+      const cs = getComputedStyle(main);
+      const content = main.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+      expect(t.query('mc-node-page')!.getBoundingClientRect().height).toBeCloseTo(content, 0);
+    } finally {
+      await page.viewport(1280, 800);
+    }
+  });
+
   it('Enter sends, Shift+Enter does not, and the counter flags overflow', async () => {
     const t = await connected();
     const k = keys(t);

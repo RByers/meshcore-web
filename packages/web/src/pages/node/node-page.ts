@@ -60,7 +60,7 @@ export class McNodePage extends AppElement {
       :host([data-active-tab='messages']) {
         display: flex;
         flex-direction: column;
-        height: calc(100dvh - 6.5rem);
+        height: 100%; /* fills <main> */
       }
       :host([data-active-tab='messages']) section[role='tabpanel'] {
         flex: 1;

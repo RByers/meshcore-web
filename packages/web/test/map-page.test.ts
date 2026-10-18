@@ -134,12 +134,14 @@ describe('/map page', () => {
       const { t, map } = await openMap();
       const root = t.el!.shadowRoot!;
       await t.until(() => getComputedStyle(root.querySelector('nav ul')!).flexDirection === 'row', 2000, 'row nav');
-      // put the map's bottom edge at the viewport bottom, under the sticky nav
+      // scroll the map's bottom edge as far down as it goes: <main> (the page scroller) ends at the
+      // nav, so the map is clipped there rather than sliding under it
       map.scrollIntoView({ block: 'end' });
       const m = map.getBoundingClientRect();
+      const visibleBottom = Math.min(m.bottom, t.query('main')!.getBoundingClientRect().bottom);
       for (const a of t.queryAll<HTMLAnchorElement>('nav a')) {
         const r = a.getBoundingClientRect();
-        expect(r.top).toBeLessThan(m.bottom); // the nav overlaps the map here
+        expect(r.top).toBeGreaterThanOrEqual(visibleBottom - 0.5);
         const hit = root.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
         expect(hit?.closest('nav a'), a.dataset['path']).toBe(a);
       }

@@ -56,6 +56,55 @@ describe('<mc-app> shell', () => {
     expect(document.title).toBe('Channels · MeshCore Web');
   });
 
+  it('fills the viewport and follows its size; only <main> scrolls, never the document', async () => {
+    const t = harness();
+    const el = await t.mount();
+    const doc = document.scrollingElement!;
+    const main = t.query('main')!;
+    try {
+      // wide and narrow, and a shorter viewport as when mobile browser controls appear
+      for (const [w, hgt] of [[1280, 800], [390, 700], [390, 620], [1280, 400]] as const) {
+        await page.viewport(w, hgt);
+        await t.until(() => el.getBoundingClientRect().height === hgt && el.getBoundingClientRect().width === w, 2000, `${w}x${hgt}`);
+        const nav = t.query('nav')!.getBoundingClientRect();
+        expect(nav.bottom).toBeCloseTo(hgt, 0);
+        expect(main.getBoundingClientRect().bottom).toBeLessThanOrEqual(hgt + 0.5);
+        expect(doc.scrollHeight).toBeLessThanOrEqual(doc.clientHeight);
+      }
+      // overflowing content scrolls <main>, leaving the header and nav in place
+      const tall = document.createElement('div');
+      tall.style.height = '3000px';
+      main.append(tall);
+      const header = t.query('header.top')!.getBoundingClientRect().top;
+      const navTop = t.query('nav')!.getBoundingClientRect().top;
+      main.scrollTop = 500;
+      expect(main.scrollTop).toBe(500);
+      expect(doc.scrollTop).toBe(0);
+      expect(doc.scrollHeight).toBeLessThanOrEqual(doc.clientHeight);
+      expect(t.query('header.top')!.getBoundingClientRect().top).toBe(header);
+      expect(t.query('nav')!.getBoundingClientRect().top).toBe(navTop);
+      tall.remove();
+    } finally {
+      await page.viewport(1280, 800);
+    }
+  });
+
+  it('a new page starts scrolled to the top of <main>', async () => {
+    const t = harness();
+    await t.mount();
+    await page.viewport(1280, 400);
+    try {
+      await t.go('/settings', 'mc-settings-page');
+      const main = t.query('main')!;
+      await t.until(() => main.scrollHeight > main.clientHeight, 2000, 'settings overflow');
+      main.scrollTop = 200;
+      await t.go('/', 'mc-connect-page');
+      expect(main.scrollTop).toBe(0);
+    } finally {
+      await page.viewport(1280, 800);
+    }
+  });
+
   it('nav links are keyboard reachable', async () => {
     const t = harness();
     await t.mount();

@@ -46,7 +46,7 @@ export class McChatPage extends AppElement {
       :host {
         display: flex;
         flex-direction: column;
-        height: calc(100dvh - 6.5rem);
+        height: 100%; /* fills <main>, which scrolls only if this hits min-height */
         min-height: 20rem;
       }
       :host([embedded]) {

@@ -24,6 +24,11 @@ afterEach(async () => {
 });
 
 /** Connects the in-page emulator and opens the packet log. */
+/** The app shell's page scroller: the document never scrolls. */
+function mainScroller(t: Harness): HTMLElement {
+  return t.query<HTMLElement>('main')!;
+}
+
 async function openLog(): Promise<Harness> {
   const t = (h = createHarness());
   await t.mount();
@@ -172,7 +177,8 @@ describe('/packets page', () => {
     // scroll so the list's top is out of view and pick the row at the top of the viewport
     const rows = t.queryAll('tr[data-packet-id]');
     rows[8]!.scrollIntoView({ block: 'start', behavior: 'instant' });
-    const anchor = rows.find((r) => r.getBoundingClientRect().bottom > 0)!;
+    const viewTop = mainScroller(t).getBoundingClientRect().top;
+    const anchor = rows.find((r) => r.getBoundingClientRect().bottom > viewTop)!;
     const top = anchor.getBoundingClientRect().top;
     const before = rows.length;
 
@@ -218,12 +224,13 @@ describe('/packets page', () => {
     const t = await openLog();
     await traffic(t);
     await t.app.packetLog.packets.settled();
-    window.scrollTo({ top: 0, behavior: 'instant' });
+    const main = mainScroller(t);
+    main.scrollTo({ top: 0, behavior: 'instant' });
     const first = t.query('tr[data-packet-id]')!;
     const top = first.getBoundingClientRect().top;
     t.emulatorScenario().nodes.bob.sendChannelMessage('Public', 'pushes down');
     await t.until(() => t.query('tr[data-packet-id]')!.textContent!.includes('pushes down'), 5000, 'new row on top');
-    expect(window.scrollY).toBe(0);
+    expect(main.scrollTop).toBe(0);
     expect(first.getBoundingClientRect().top).toBeGreaterThan(top);
   });
 

@@ -26,9 +26,14 @@ export class McApp extends AppElement {
     tokens,
     shared,
     css`
+      /* Pinned to the viewport, so the document itself never scrolls; only <main> does. A fixed
+         box follows the visible viewport as mobile browser controls show or hide and (with
+         interactive-widget=resizes-content in index.html) as the on-screen keyboard opens. */
       :host {
         display: block;
-        min-height: 100dvh;
+        position: fixed;
+        inset: 0;
+        overflow: hidden;
         background: var(--mc-bg);
         container-type: inline-size;
         container-name: app;
@@ -48,9 +53,9 @@ export class McApp extends AppElement {
       .shell {
         display: grid;
         grid-template-columns: 13rem minmax(0, 1fr);
-        grid-template-rows: auto 1fr;
+        grid-template-rows: auto minmax(0, 1fr);
         grid-template-areas: 'top top' 'nav main';
-        min-height: 100dvh;
+        height: 100%;
       }
       header.top {
         grid-area: top;
@@ -62,8 +67,7 @@ export class McApp extends AppElement {
           calc(var(--mc-gap) + env(safe-area-inset-left, 0px));
         background: var(--mc-surface);
         border-block-end: 1px solid var(--mc-border);
-        position: sticky;
-        top: 0;
+        position: relative;
         z-index: 1;
       }
       .brand {
@@ -147,6 +151,8 @@ export class McApp extends AppElement {
         padding: 8px;
         padding-inline-start: calc(8px + env(safe-area-inset-left, 0px));
         padding-block-end: calc(8px + env(safe-area-inset-bottom, 0px));
+        overflow-y: auto;
+        overscroll-behavior: contain;
       }
       nav ul {
         list-style: none;
@@ -155,8 +161,6 @@ export class McApp extends AppElement {
         display: flex;
         flex-direction: column;
         gap: 2px;
-        position: sticky;
-        top: 64px;
       }
       nav a {
         display: flex;
@@ -197,6 +201,11 @@ export class McApp extends AppElement {
         padding-inline-end: calc(var(--mc-gap) + env(safe-area-inset-right, 0px));
         padding-block-end: calc(var(--mc-gap) + env(safe-area-inset-bottom, 0px));
         min-width: 0;
+        min-height: 0;
+        /* the one page scroller; pages that manage their own scrolling (chat) fill it with
+           height: 100% instead */
+        overflow-y: auto;
+        overscroll-behavior: contain;
         /* page z-indexes (map overlays, sticky table heads) stay below the header and mobile nav */
         isolation: isolate;
       }
@@ -206,13 +215,13 @@ export class McApp extends AppElement {
       @container app (max-width: 640px) {
         .shell {
           grid-template-columns: minmax(0, 1fr);
-          grid-template-rows: auto 1fr auto;
+          grid-template-rows: auto minmax(0, 1fr) auto;
           grid-template-areas: 'top' 'main' 'nav';
         }
         nav {
-          position: sticky;
-          bottom: 0;
+          position: relative;
           z-index: 1;
+          overflow: visible;
           border-inline-end: 0;
           border-block-start: 1px solid var(--mc-border);
           padding: 4px;
@@ -226,7 +235,6 @@ export class McApp extends AppElement {
         nav ul {
           flex-direction: row;
           justify-content: space-around;
-          position: static;
         }
         nav li {
           flex: 1;
@@ -404,6 +412,9 @@ export class McApp extends AppElement {
       const first = this.#lastPath === undefined;
       this.#lastPath = path;
       if (route) document.title = route.page.path === '/' ? 'MeshCore Web' : `${route.page.title} · MeshCore Web`;
+      // <main> is the page scroller, so a new page starts at its top
+      const main = this.renderRoot.querySelector<HTMLElement>('main');
+      if (main) main.scrollTop = 0;
       // move focus to the content after an in-app navigation (not on first load)
       if (!first && this.matches(':focus-within')) this.renderRoot.querySelector<HTMLElement>('main')?.focus();
     }
