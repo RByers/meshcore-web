@@ -235,6 +235,24 @@ describe('connect flows', () => {
     expect(t.ble.bluetooth.requestCount).toBe(1);
   });
 
+  it('explains when the browser forgot the Bluetooth radio on reload', async () => {
+    const t = harness({ app: { autoReconnect: true } });
+    await t.mount();
+    await t.click('[data-connect="ble"]');
+    await t.until(() => t.app.connection.phase.value === 'connected', 5000, 'connected');
+    await t.app.connection.capture!.idle();
+    await t.until(() => t.app.devices.value[0]?.bleDeviceId === t.ble.device.id, 3000, 'ble device id recorded');
+
+    t.ble.bluetooth.granted = false; // getDevices() is empty after a reload without persistent permissions
+    await t.reload();
+    await t.until(() => t.query('.toast'), 5000, 'warning toast');
+    const toast = t.query('.toast')!.textContent ?? '';
+    expect(toast).toContain('Could not reconnect');
+    expect(toast).toContain("The browser didn't keep Bluetooth permission for this radio after the page reloaded.");
+    expect(t.app.connection.phase.value).toBe('idle');
+    expect(t.ble.bluetooth.requestCount).toBe(1); // no chooser without a click
+  });
+
   it('without getDevices(), Reconnect shows a chooser that lists only the known Bluetooth radio', async () => {
     const t = harness({ bleGetDevices: false, app: { reconnectableKinds: ['emulator', 'serial'] } });
     await t.mount();

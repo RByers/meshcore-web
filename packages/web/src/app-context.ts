@@ -92,7 +92,10 @@ export function bleTransportFactory(bluetooth: BluetoothLike, clock?: Clock): Tr
         });
       }
     }
-    if (req.auto) throw new NoGrantedDeviceError('No previously allowed Bluetooth device');
+    if (req.auto) {
+      // Without persistent Bluetooth permissions the browser forgets the radio on reload.
+      throw new NoGrantedDeviceError("The browser didn't keep Bluetooth permission for this radio after the page reloaded. Click Reconnect to choose it again.");
+    }
     const name = req.device?.bleName;
     return new WebBluetoothTransport({ bluetooth, ...(name ? { requestOptions: { name } } : {}) });
   };
