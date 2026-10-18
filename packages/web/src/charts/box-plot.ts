@@ -5,6 +5,12 @@
  * with a `null` box draws no marks, only `emptyRowText`. The axis spans every row's min…max (and
  * zero when it is in range, drawn as a baseline); its tick labels sit under the rows.
  *
+ * Optional extras (the Stats tab's signal-by-last-hop card): a `refLine` — a vertical dashed
+ * `--mc-danger` line across every row, labelled above them and always inside the axis — and per
+ * row a `tone` (box colour `--mc-ok` / `--mc-warn` / `--mc-danger`, `data-tone` on the row), a muted
+ * `detail` line under the label, and `valueText` / `valueSub` replacing the printed median (the sub
+ * line in the tone colour). Rows grow to two lines when any row has a `detail` or `valueSub`.
+ *
  * Rows follow `<mc-bar-chart>`: a label column (a link when the row has an `href`), a hover
  * tooltip (label, median, the caller's `title` lines), and rows with a `key` are selectable —
  * clicking the row (or a label that isn't a link) or Enter / Space on the focused row dispatches the
@@ -31,8 +37,24 @@ export interface BoxSummary {
   outliers: readonly number[];
 }
 
+/** Row colour: good `--mc-ok`, ok `--mc-warn`, bad `--mc-danger`; none = the chart colour. */
+export type BoxTone = 'good' | 'ok' | 'bad';
+
+/** A vertical reference line across all rows. */
+export interface BoxRefLine {
+  value: number;
+  label: string;
+}
+
 export interface BoxRow {
   label: string;
+  /** Muted second label line. */
+  detail?: string;
+  tone?: BoxTone;
+  /** Right-hand text instead of the median (`data-field="value"`). */
+  valueText?: string;
+  /** Right-hand second line, in the tone colour (`data-field="value-sub"`). */
+  valueSub?: string;
   /** `null` = no values: no marks, `emptyRowText` instead. */
   box: BoxSummary | null;
   /** Makes the label a link. */
@@ -45,17 +67,28 @@ export interface BoxRow {
   selected?: boolean;
 }
 
-/** Row pitch and box thickness (px). */
+/** Row pitch (one / two text lines) and box thickness (px). */
 const ROW = 24;
+const ROW2 = 36;
 const BOX = 12;
-/** Height of the tick label strip under the rows. */
+/** Height of the tick label strip under the rows; room above them for the reference label. */
 const AXIS = 18;
-/** Room reserved right of the axis for the median label. */
+const TOP = 16;
+/** Room reserved right of the axis for the median label (wider for `valueSub`). */
 const VALUE_ROOM = 56;
+const VALUE_ROOM2 = 76;
+
+const TONE_COLOR: Record<BoxTone, string> = {
+  good: 'var(--mc-ok, CanvasText)',
+  ok: 'var(--mc-warn, CanvasText)',
+  bad: 'var(--mc-danger, CanvasText)',
+};
 
 export class McBoxPlot extends ChartBase {
   static override properties = {
     rows: { attribute: false },
+    refLine: { attribute: false },
+    label: { type: String },
     format: { attribute: false },
     color: { type: String },
     emptyText: { type: String, attribute: 'empty-text' },
@@ -73,18 +106,28 @@ export class McBoxPlot extends ChartBase {
       }
       .labels {
         display: grid;
-        grid-auto-rows: ${ROW}px;
+        grid-auto-rows: var(--row, ${ROW}px);
+        padding-top: var(--top, 0px);
         font-size: 13px;
         min-width: 0;
         align-content: start;
       }
       .label {
-        align-self: center;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        min-width: 0;
+        text-align: end;
+        line-height: 1.2;
+      }
+      .label > * {
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-        text-align: end;
-        line-height: ${ROW}px;
+      }
+      .detail {
+        font-size: 11px;
+        color: var(--chart-muted);
       }
       .label a {
         color: var(--mc-accent, LinkText);
@@ -92,7 +135,7 @@ export class McBoxPlot extends ChartBase {
       .label.selected {
         font-weight: 600;
       }
-      .label.selectable span {
+      .label.selectable span.name {
         cursor: pointer;
       }
       .value {
@@ -100,6 +143,19 @@ export class McBoxPlot extends ChartBase {
         font-size: 12px;
         font-variant-numeric: tabular-nums;
         pointer-events: none;
+      }
+      .value.sub {
+        font-size: 11px;
+        fill: var(--c);
+      }
+      .ref line {
+        stroke: var(--mc-danger, GrayText);
+        stroke-width: 1.5;
+        stroke-dasharray: 5 4;
+      }
+      .ref text {
+        fill: var(--chart-muted);
+        font-size: 11px;
       }
       .value.none {
         fill: var(--chart-muted);
@@ -155,16 +211,24 @@ export class McBoxPlot extends ChartBase {
   ];
 
   declare rows: readonly BoxRow[];
+  declare refLine: BoxRefLine | null;
+  /** The SVG's accessible name (the reference label is appended). */
+  declare label: string;
   declare format: ((v: number) => string) | undefined;
   /** Box colour (default palette slot 1). */
   declare color: string | undefined;
   declare emptyText: string;
   declare emptyRowText: string;
   declare hover: number | null;
+  /** Row pitch and top offset of the last render (tooltip / hit layout). */
+  #row = ROW;
+  #top = 0;
 
   constructor() {
     super();
     this.rows = [];
+    this.refLine = null;
+    this.label = 'Box plot';
     this.format = undefined;
     this.color = undefined;
     this.emptyText = 'No data';
@@ -193,7 +257,7 @@ export class McBoxPlot extends ChartBase {
     const lines = r.title === undefined ? [] : typeof r.title === 'string' ? [r.title] : r.title;
     this.showTip(
       p.x,
-      i * ROW + ROW / 2,
+      this.#top + i * this.#row + this.#row / 2,
       html`<div class="head">${r.label}</div>
         <div><strong>${this.#summary(r)}</strong></div>
         ${lines.map((l) => html`<div>${l}</div>`)}
@@ -219,15 +283,16 @@ export class McBoxPlot extends ChartBase {
   }
 
   #hit(r: BoxRow, i: number, w: number): TemplateResult {
-    if (r.key === undefined) return svg`<rect class="hit" data-i=${i} x="0" y=${i * ROW} width=${w} height=${ROW}></rect>`;
+    const y = this.#top + i * this.#row;
+    if (r.key === undefined) return svg`<rect class="hit" data-i=${i} x="0" y=${y} width=${w} height=${this.#row}></rect>`;
     return svg`<rect
       class="hit selectable ${r.selected ? 'selected' : ''}"
       data-i=${i}
       data-key=${r.key}
       x="0"
-      y=${i * ROW}
+      y=${y}
       width=${w}
-      height=${ROW}
+      height=${this.#row}
       role="button"
       tabindex="0"
       aria-pressed=${r.selected ? 'true' : 'false'}
@@ -237,8 +302,21 @@ export class McBoxPlot extends ChartBase {
     ></rect>`;
   }
 
+  #cy(i: number): number {
+    return this.#top + i * this.#row + this.#row / 2;
+  }
+
+  #value(r: BoxRow, b: BoxSummary, i: number, x: number): TemplateResult {
+    const cy = this.#cy(i);
+    if (r.valueText === undefined && r.valueSub === undefined) {
+      return svg`<text class="value" data-field="median" x=${x} y=${cy} dy="0.32em">${this.#fmt(b.median)}</text>`;
+    }
+    return svg`<text class="value" data-field="value" x=${x} y=${r.valueSub ? cy - 6 : cy} dy="0.32em">${r.valueText ?? this.#fmt(b.median)}</text>
+      ${r.valueSub ? svg`<text class="value sub" data-field="value-sub" x=${x} y=${cy + 8} dy="0.32em">${r.valueSub}</text>` : nothing}`;
+  }
+
   #marks(b: BoxSummary, i: number, x: (v: number) => number): TemplateResult {
-    const cy = i * ROW + ROW / 2;
+    const cy = this.#cy(i);
     const top = cy - BOX / 2;
     const cap = BOX / 4;
     const [wl, wh, q1, q3, med, mean] = [x(b.whiskerLow), x(b.whiskerHigh), x(b.q1), x(b.q3), x(b.median), x(b.mean)];
@@ -257,52 +335,67 @@ export class McBoxPlot extends ChartBase {
   override render(): TemplateResult {
     const rows = this.rows;
     if (rows.length === 0) return html`<p class="empty" data-chart="box" data-empty>${this.emptyText}</p>`;
-    const h = rows.length * ROW;
+    const ref = this.refLine;
+    const twoLine = rows.some((r) => r.detail !== undefined || r.valueSub !== undefined);
+    const rowH = (this.#row = twoLine ? ROW2 : ROW);
+    const top = (this.#top = ref ? TOP : 0);
+    const h = rows.length * rowH;
+    const bottom = top + h;
     const w = this.width;
     const boxes = rows.flatMap((r) => (r.box ? [r.box] : []));
-    let lo = Math.min(...boxes.map((b) => b.min));
-    let hi = Math.max(...boxes.map((b) => b.max));
-    if (boxes.length === 0) [lo, hi] = [0, 1];
+    const values = boxes.flatMap((b) => [b.min, b.max]);
+    if (ref) values.push(ref.value);
+    let lo = Math.min(...values);
+    let hi = Math.max(...values);
+    if (values.length === 0) [lo, hi] = [0, 1];
     else if (lo === hi) [lo, hi] = [lo - 1, hi + 1];
-    const plotW = Math.max(w - VALUE_ROOM, 10);
+    const plotW = Math.max(w - (rows.some((r) => r.valueSub !== undefined) ? VALUE_ROOM2 : VALUE_ROOM), 10);
     const x = scaleLinear().domain([lo, hi]).range([0, plotW]).nice(tickCount(plotW, 60));
     const [d0, d1] = x.domain() as [number, number];
     const zero = d0 <= 0 && d1 >= 0 ? Math.round(x(0)) + 0.5 : null;
     const ticks = x.ticks(tickCount(plotW, 60));
     const color = this.color ?? seriesColor(0);
     const selectable = rows.some((r) => r.key !== undefined);
+    const refX = ref ? Math.round(x(ref.value)) + 0.5 : 0;
+    const refLeft = refX < plotW / 2;
     return html`<div class="rows" data-chart="box">
-      <div class="labels">
+      <div class="labels" style="--row:${rowH}px;--top:${top}px">
         ${rows.map(
           (r, i) => html`<div class="label ${r.key !== undefined ? 'selectable' : ''} ${r.selected ? 'selected' : ''}" title=${r.label} data-label>
             ${r.href
-              ? html`<a href=${r.href}>${r.label}</a>`
+              ? html`<a class="name" href=${r.href}>${r.label}</a>`
               : r.key !== undefined
-                ? html`<span @click=${() => this.#select(i)}>${r.label}</span>`
-                : html`<span>${r.label}</span>`}
+                ? html`<span class="name" @click=${() => this.#select(i)}>${r.label}</span>`
+                : html`<span class="name">${r.label}</span>`}
+            ${r.detail ? html`<span class="detail" data-detail>${r.detail}</span>` : nothing}
           </div>`,
         )}
       </div>
       <div class="plot" data-measure>
         <svg
           width=${w}
-          height=${h + AXIS}
+          height=${bottom + AXIS}
           role=${selectable ? 'group' : 'img'}
-          aria-label="Box plot"
+          aria-label=${`${this.label}${ref ? `; ${ref.label}` : ''}`}
           style="--c:${color}"
           @pointermove=${this.#onMove}
           @pointerleave=${this.#onLeave}
         >
-          ${w > 0 ? xGrid(x, 0, h, tickCount(plotW, 60)) : nothing}
-          ${zero !== null ? svg`<line class="baseline" data-field="zero" x1=${zero} x2=${zero} y1="0" y2=${h}></line>` : nothing}
+          ${w > 0 ? xGrid(x, top, bottom, tickCount(plotW, 60)) : nothing}
+          ${zero !== null ? svg`<line class="baseline" data-field="zero" x1=${zero} x2=${zero} y1=${top} y2=${bottom}></line>` : nothing}
           <g class="axis x" aria-hidden="true">
-            ${ticks.map((t) => svg`<text class="tick" x=${x(t)} y=${h + 13} text-anchor="middle">${this.#fmt(t)}</text>`)}
+            ${ticks.map((t) => svg`<text class="tick" x=${x(t)} y=${bottom + 13} text-anchor="middle">${this.#fmt(t)}</text>`)}
           </g>
+          ${ref
+            ? svg`<g class="ref" data-ref-line aria-hidden="true">
+                <line x1=${refX} x2=${refX} y1=${top - 2} y2=${bottom}></line>
+                <text x=${refLeft ? refX + 4 : refX - 4} y=${top - 5} text-anchor=${refLeft ? 'start' : 'end'} data-field="ref-label">${ref.label}</text>
+              </g>`
+            : nothing}
           ${rows.map((r, i) => {
             const hit = this.#hit(r, i, Math.max(w, 0));
-            if (!r.box) return svg`${hit}<text class="value none" data-field="no-box" x="4" y=${i * ROW + ROW / 2} dy="0.32em">${this.emptyRowText}</text>`;
-            return svg`${hit}${this.#marks(r.box, i, x)}
-              <text class="value" data-field="median" x=${plotW + 8} y=${i * ROW + ROW / 2} dy="0.32em">${this.#fmt(r.box.median)}</text>`;
+            if (!r.box) return svg`${hit}<text class="value none" data-field="no-box" x="4" y=${this.#cy(i)} dy="0.32em">${this.emptyRowText}</text>`;
+            return svg`${hit}<g style=${r.tone ? `--c:${TONE_COLOR[r.tone]}` : nothing} data-tone=${r.tone ?? nothing}>${this.#marks(r.box, i, x)}${this.#value(r, r.box, i, plotW + 8)}</g>`;
           })}
         </svg>
         ${this.renderTip()}

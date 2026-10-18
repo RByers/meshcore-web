@@ -461,12 +461,20 @@ export interface LastHopSignal extends SnrSummary {
   direct: number;
   /** Of `count`, relayed (the node is the last forwarder). */
   relayed: number;
+  /** Median over the packets with an RSSI; null when none had one. */
+  medianRssi: number | null;
+  /** Median SNR − the decode limit's SNR: the link's headroom; null without an SNR or a decode limit. */
+  margin: number | null;
+  /** {@link linkMarginLevel} of `margin`; null with it. */
+  level: LinkMarginLevel | null;
 }
 
 /** Received packets per last hop ({@link PacketStatsModel.lastHops}). */
 export interface LastHopStats {
   /** Top {@link TOP_SOURCES} last hops, count desc. */
   top: LastHopSignal[];
+  /** The decode limit the margins are measured against (null: no margins). */
+  decodeLimit: DecodeLimit | null;
   /** Received packets without a last hop (TRACE, direct routes, unattributed zero-hop). */
   unattributed: number;
   /** Last hops beyond the top list. */
@@ -1210,36 +1218,6 @@ export function lastHopBoxes(pts: readonly Pick<StatPacket, 'snr' | 'direct'>[])
   return { all: boxStats(all), direct: boxStats(direct), relayed: boxStats(relayed) };
 }
 
-/**
- * Signal per last hop over the received packets of `pts` (docs/packet-stats.md §1.6): the radio's
- * SNR / RSSI measure the link from the last hop to this radio. Grouped by `nodeId`, so an
- * ambiguous hop hash is its own row (`a3?`). Sent packets are skipped; received ones without a
- * last hop are `unattributed`. By count desc, then label; top {@link TOP_SOURCES}.
- */
-export function lastHopSignalStats(pts: readonly StatPacket[]): LastHopStats {
-  const m = new Map<string, { node: NodeRef; acc: SnrAcc; lastTs: number; direct: number }>();
-  let unattributed = 0;
-  for (const p of pts) {
-    if (p.direction !== 'in') continue;
-    const node = p.lastHop;
-    if (!node) {
-      unattributed++;
-      continue;
-    }
-    const id = nodeId(node);
-    let e = m.get(id);
-    if (!e) m.set(id, (e = { node, acc: new SnrAcc(), lastTs: p.ts, direct: 0 }));
-    e.acc.add(p);
-    e.lastTs = Math.max(e.lastTs, p.ts);
-    if (p.direct) e.direct++;
-  }
-  const all = [...m.values()]
-    .map((e): LastHopSignal => ({ node: e.node, ...e.acc.summary(), lastTs: e.lastTs, direct: e.direct, relayed: e.acc.count - e.direct }))
-    .sort((a, b) => b.count - a.count || a.node.label.localeCompare(b.node.label));
-  const rest = all.slice(TOP_SOURCES);
-  return { top: all.slice(0, TOP_SOURCES), unattributed, others: rest.length, othersPackets: rest.reduce((n, s) => n + s.count, 0) };
-}
-
 /** Link margin at or above which a neighbour's link is "comfortable" (dB over the decode limit). */
 export const LINK_MARGIN_COMFORTABLE_DB = 10;
 /** Link margin at or above which a neighbour's link is "ok"; below it, "marginal". */
@@ -1255,55 +1233,18 @@ export function linkMarginLevel(marginDb: number): LinkMarginLevel {
   return 'marginal';
 }
 
-/** How reliably this radio hears one neighbour (a last hop; {@link linkQualityStats}). */
-export interface NeighbourLink {
-  node: NodeRef;
-  /** Received packets from this last hop with an SNR. */
-  count: number;
-  medianSnr: number;
-  minSnr: number;
-  maxSnr: number;
-  /** Median over those packets with an RSSI; null when none had one. */
-  medianRssi: number | null;
-  /** ts of the newest of those packets. */
-  lastTs: number;
-  /** medianSnr − the decode limit's SNR; null when the decode limit is unknown. */
-  margin: number | null;
-  /** {@link linkMarginLevel} of `margin`; null with it. */
-  level: LinkMarginLevel | null;
-}
-
-/** Link quality per neighbour ({@link PacketStatsModel.linkQuality}). */
-export interface LinkQualityStats {
-  /** The {@link TOP_SOURCES} neighbours with the most packets, by median SNR desc. */
-  top: NeighbourLink[];
-  /** The decode limit the margins are measured against (null: no margins). */
-  decodeLimit: DecodeLimit | null;
-  /** Received packets with an SNR but no last hop (TRACE, direct routes, unattributed zero-hop). */
-  unattributed: number;
-  /** Neighbours beyond the top list. */
-  others: number;
-  /** Packets from those neighbours. */
-  othersPackets: number;
-}
-
-function median(values: number[]): number | null {
-  if (values.length === 0) return null;
-  return quantileSorted(values.sort((a, b) => a - b), 0.5);
-}
-
 /**
- * Link quality per neighbour (docs/packet-stats.md §1.9): the received packets of `pts` with an
- * SNR, grouped by last hop (`nodeId`; a zero-hop packet's last hop is its source). Like
- * {@link lastHopSignalStats}, a hop hash that is unknown or ambiguous is its own row (`a3?`,
- * `node.resolved` false). The {@link TOP_SOURCES} neighbours with the most packets are kept and
- * sorted by median SNR desc (then count, label); `margin` is measured against `decodeLimit`.
+ * Signal per last hop over the received packets of `pts` (docs/packet-stats.md §1.6): the radio's
+ * SNR / RSSI measure the link from the last hop to this radio. Grouped by `nodeId`, so an
+ * ambiguous hop hash is its own row (`a3?`). Sent packets are skipped; received ones without a
+ * last hop are `unattributed`. By count desc, then label; top {@link TOP_SOURCES}. Each node's
+ * `margin` is its median SNR over `decodeLimit` (none when that is null).
  */
-export function linkQualityStats(pts: readonly StatPacket[], decodeLimit: DecodeLimit | null): LinkQualityStats {
-  const m = new Map<string, { node: NodeRef; snrs: number[]; rssis: number[]; lastTs: number }>();
+export function lastHopSignalStats(pts: readonly StatPacket[], decodeLimit: DecodeLimit | null = null): LastHopStats {
+  const m = new Map<string, { node: NodeRef; acc: SnrAcc; rssis: number[]; lastTs: number; direct: number }>();
   let unattributed = 0;
   for (const p of pts) {
-    if (p.direction !== 'in' || p.snr === null) continue;
+    if (p.direction !== 'in') continue;
     const node = p.lastHop;
     if (!node) {
       unattributed++;
@@ -1311,34 +1252,30 @@ export function linkQualityStats(pts: readonly StatPacket[], decodeLimit: Decode
     }
     const id = nodeId(node);
     let e = m.get(id);
-    if (!e) m.set(id, (e = { node, snrs: [], rssis: [], lastTs: p.ts }));
-    e.snrs.push(p.snr);
+    if (!e) m.set(id, (e = { node, acc: new SnrAcc(), rssis: [], lastTs: p.ts, direct: 0 }));
+    e.acc.add(p);
     if (p.rssi !== null) e.rssis.push(p.rssi);
     e.lastTs = Math.max(e.lastTs, p.ts);
+    if (p.direct) e.direct++;
   }
-  const all = [...m.values()].sort((a, b) => b.snrs.length - a.snrs.length || a.node.label.localeCompare(b.node.label));
+  const all = [...m.values()].sort((a, b) => b.acc.count - a.acc.count || a.node.label.localeCompare(b.node.label));
   const rest = all.slice(TOP_SOURCES);
-  const top = all
-    .slice(0, TOP_SOURCES)
-    .map((e): NeighbourLink => {
-      const count = e.snrs.length;
-      const medianSnr = median(e.snrs) ?? 0;
-      const margin = decodeLimit ? medianSnr - decodeLimit.snrDb : null;
-      return {
-        node: e.node,
-        count,
-        medianSnr,
-        // sorted by median()
-        minSnr: e.snrs[0] ?? medianSnr,
-        maxSnr: e.snrs[count - 1] ?? medianSnr,
-        medianRssi: median(e.rssis),
-        lastTs: e.lastTs,
-        margin,
-        level: margin === null ? null : linkMarginLevel(margin),
-      };
-    })
-    .sort((a, b) => b.medianSnr - a.medianSnr || b.count - a.count || a.node.label.localeCompare(b.node.label));
-  return { top, decodeLimit, unattributed, others: rest.length, othersPackets: rest.reduce((n, e) => n + e.snrs.length, 0) };
+  const top = all.slice(0, TOP_SOURCES).map((e): LastHopSignal => {
+    const summary = e.acc.summary();
+    const margin = decodeLimit && summary.snr ? summary.snr.median - decodeLimit.snrDb : null;
+    const rssis = e.rssis.sort((a, b) => a - b);
+    return {
+      node: e.node,
+      ...summary,
+      lastTs: e.lastTs,
+      direct: e.direct,
+      relayed: e.acc.count - e.direct,
+      medianRssi: rssis.length > 0 ? quantileSorted(rssis, 0.5) : null,
+      margin,
+      level: margin === null ? null : linkMarginLevel(margin),
+    };
+  });
+  return { top, decodeLimit, unattributed, others: rest.length, othersPackets: rest.reduce((n, e) => n + e.acc.count, 0) };
 }
 
 /** A counted node placed on a map (see {@link placeNodeCounts}). */
@@ -1521,10 +1458,8 @@ export class PacketStatsModel extends StoreBoundModel implements DrillSource {
   readonly pathStarts: ReadonlySignal<SourceStats>;
   /** Packets per last path entry (for a received flood, the forwarder this radio heard); no path → `unattributed`. */
   readonly pathEnds: ReadonlySignal<SourceStats>;
-  /** Signal (SNR / RSSI) of the received `points` per last hop ({@link lastHopSignalStats}). */
+  /** Signal (SNR / RSSI) of the received `points` per last hop ({@link lastHopSignalStats}), margins against `decodeLimit`. */
   readonly lastHops: ReadonlySignal<LastHopStats>;
-  /** Link quality per neighbour of the received `points` with an SNR ({@link linkQualityStats}), margins against `decodeLimit`. */
-  readonly linkQuality: ReadonlySignal<LinkQualityStats>;
   readonly timeline: ReadonlySignal<Timeline>;
   readonly utilization: ReadonlySignal<Utilization>;
   readonly hops: ReadonlySignal<HopCount[]>;
@@ -1647,8 +1582,7 @@ export class PacketStatsModel extends StoreBoundModel implements DrillSource {
     this.bySource = computed(() => nodeStats(this.points.value, (p) => p.source));
     this.pathStarts = computed(() => nodeStats(this.points.value, (p) => p.path[0]));
     this.pathEnds = computed(() => nodeStats(this.points.value, (p) => p.path[p.path.length - 1]));
-    this.lastHops = computed(() => lastHopSignalStats(this.points.value));
-    this.linkQuality = computed(() => linkQualityStats(this.points.value, this.decodeLimit.value));
+    this.lastHops = computed(() => lastHopSignalStats(this.points.value, this.decodeLimit.value));
 
     const binning = (this.#binning = computed((): Binning | null => {
       const w = this.window.value;

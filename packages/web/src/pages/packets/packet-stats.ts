@@ -3,7 +3,7 @@
  * `PacketStatsModel` (`app.packetStats`) as tiles and charts: packet rate (stacked), packets per
  * source node, packets over time (dot plot with y / colour selectors), network utilisation, text compression, the hop
  * count distribution, then the paths: a "Packet paths" map (on demand: each hop's line as thick as the packets
- * that crossed it, each node's dot sized by use), the most common first and final nodes in the path and the signal (mean SNR) by last hop. The bin size lives in the model (`<mc-stats-range parts="bin">`); only
+ * that crossed it, each node's dot sized by use), the most common first and final nodes in the path and the signal (SNR box, margin over the decode limit) by last hop. The bin size lives in the model (`<mc-stats-range parts="bin">`); only
  * the chart selectors are local state. Everything here maps model output to chart props.
  *
  * Drill-down (§6): clicking a source bar, first / final path node bar, last-hop signal bar, hop-count bar or breakdown segment adds a model filter
@@ -28,7 +28,6 @@ import {
   type DecodeLimit,
   type LastHopStats,
   type LinkMarginLevel,
-  type LinkQualityStats,
   type LoraParams,
   type NodeRef,
   type NoiseFloorSummary,
@@ -62,9 +61,8 @@ import {
   type BarSelectDetail,
   type BoxRow,
   type BoxSummary,
-  type RangeRefLine,
-  type RangeRow,
-  type RangeTone,
+  type BoxRefLine,
+  type BoxTone,
   type BreakdownSegment,
   type SegmentSelectDetail,
   type DotPoint,
@@ -260,21 +258,33 @@ export function snrBoxLines(b: BoxSummary | null): string[] {
   ];
 }
 
+const MARGIN_TONE: Record<LinkMarginLevel, BoxTone> = { comfortable: 'good', ok: 'ok', marginal: 'bad' };
+
+function signedDb(v: number): string {
+  return `${v >= 0 ? '+' : '−'}${formatNumber(Math.abs(v))} dB`;
+}
+
 /**
  * Signal-by-last-hop box plot rows: the SNR box (null when none of its packets had an SNR), a contact
  * link like the source chart, keyed by `nodeId` (the lastHop filter value); `now` for "last heard".
+ * Packet count and median RSSI as the detail line; when the decode limit is known, the box is
+ * coloured by the margin level and the margin and level replace the printed median.
  */
 export function lastHopItems(s: LastHopStats, now: number, active?: string): BoxRow[] {
   return s.top.map((h) => {
     const key = nodeId(h.node);
     const lines = snrBoxLines(h.snr);
-    if (h.meanRssi !== null) lines.push(`mean RSSI ${formatNumber(h.meanRssi, 0)} dBm`);
+    if (h.margin !== null && h.level) lines.push(`margin ${signedDb(h.margin)} over the decode limit (${h.level})`);
+    if (h.medianRssi !== null) lines.push(`median RSSI ${formatDbm(h.medianRssi)}`);
     lines.push(`${formatNumber(h.count, 0)} ${h.count === 1 ? 'packet' : 'packets'} (${formatNumber(h.direct, 0)} direct, ${formatNumber(h.relayed, 0)} relayed)`);
     lines.push(`last heard ${formatRelative(h.lastTs, now)}`);
     if (!h.node.resolved) lines.push('(not uniquely resolved)');
+    const pkts = `${formatNumber(h.count, 0)} ${h.count === 1 ? 'pkt' : 'pkts'}`;
     return {
       label: h.node.label,
+      detail: h.medianRssi === null ? pkts : `${pkts} · ${formatDbm(h.medianRssi)}`,
       box: h.snr,
+      ...(h.margin !== null && h.level ? { tone: MARGIN_TONE[h.level], valueText: signedDb(h.margin), valueSub: h.level } : {}),
       key,
       selected: key === active,
       ...(h.node.resolved && h.node.key && !h.node.self ? { href: nodeHref(h.node.key) } : {}),
@@ -283,53 +293,10 @@ export function lastHopItems(s: LastHopStats, now: number, active?: string): Box
   });
 }
 
-const MARGIN_TONE: Record<LinkMarginLevel, RangeTone> = { comfortable: 'good', ok: 'ok', marginal: 'bad' };
-
-function signedDb(v: number): string {
-  return `${v >= 0 ? '+' : '−'}${formatNumber(Math.abs(v))} dB`;
-}
-
-/**
- * Link quality range rows: min–max SNR with the median, coloured and labelled by the margin over
- * the decode limit (median SNR when unknown); count and median RSSI as the detail line. Keyed by
- * `nodeId` (the lastHop filter value), a contact link like the source chart.
- */
-export function linkQualityRows(s: LinkQualityStats, now: number, active?: string): RangeRow[] {
-  return s.top.map((q) => {
-    const key = nodeId(q.node);
-    const pkts = `${formatNumber(q.count, 0)} ${q.count === 1 ? 'pkt' : 'pkts'}`;
-    const detail = q.medianRssi === null ? pkts : `${pkts} · ${formatDbm(q.medianRssi)}`;
-    const lines = [
-      `median SNR ${formatSnr(q.medianSnr)} · range ${formatSnr(q.minSnr)} – ${formatSnr(q.maxSnr)}`,
-      ...(q.margin !== null && q.level ? [`margin ${signedDb(q.margin)} over the decode limit (${q.level})`] : []),
-      `${formatNumber(q.count, 0)} ${q.count === 1 ? 'packet' : 'packets'} with SNR${q.medianRssi === null ? '' : ` · median RSSI ${formatDbm(q.medianRssi)}`}`,
-      `last heard ${formatRelative(q.lastTs, now)}`,
-      ...(q.node.resolved ? [] : ['(not uniquely resolved)']),
-    ];
-    return {
-      label: q.node.label,
-      detail,
-      min: q.minSnr,
-      max: q.maxSnr,
-      median: q.medianSnr,
-      ...(q.margin !== null && q.level ? { tone: MARGIN_TONE[q.level], valueText: signedDb(q.margin), valueSub: q.level } : {}),
-      key,
-      selected: key === active,
-      ...(q.node.resolved && q.node.key && !q.node.self ? { href: nodeHref(q.node.key) } : {}),
-      title: lines,
-    };
-  });
-}
-
-/** The decode limit as the link quality plot's reference line (none when unknown). */
-export function linkQualityRefLine(s: LinkQualityStats): RangeRefLine | null {
+/** The decode limit as the signal-by-last-hop plot's reference line (none when unknown). */
+export function lastHopRefLine(s: LastHopStats): BoxRefLine | null {
   const l = s.decodeLimit;
   return l ? { value: l.snrDb, label: `SF${l.sf} limit ${formatDb(l.snrDb)}` } : null;
-}
-
-/** "n received packets with SNR had no last hop, m more nodes" (empty when both are 0). */
-export function linkQualityFooter(s: LinkQualityStats): string {
-  return nodeFooter(s, (n) => `${n} received ${n === 1 ? 'packet' : 'packets'} with SNR had no last hop`);
 }
 
 /** "n received packets had no last hop, m more nodes" (empty when both are 0). */
@@ -337,7 +304,7 @@ export function lastHopFooter(s: LastHopStats): string {
   return nodeFooter(s, (n) => `${n} received ${n === 1 ? 'packet' : 'packets'} had no last hop`);
 }
 
-function nodeFooter(s: SourceStats | LastHopStats | LinkQualityStats, none: (n: number) => string): string {
+function nodeFooter(s: SourceStats | LastHopStats, none: (n: number) => string): string {
   const parts: string[] = [];
   if (s.unattributed > 0) parts.push(none(s.unattributed));
   if (s.others > 0) parts.push(`${s.others} more ${s.others === 1 ? 'node' : 'nodes'} (${s.othersPackets} packets)`);
@@ -561,8 +528,7 @@ export class McPacketStats extends AppElement {
         color: var(--mc-text-muted);
       }
       mc-bar-chart.sources,
-      mc-box-plot.sources,
-      mc-range-plot.sources {
+      mc-box-plot.sources {
         --mc-bar-label-width: 40%;
       }
       .count {
@@ -779,37 +745,10 @@ export class McPacketStats extends AppElement {
     this.#toggle('lastHop', e.detail.key, node?.label ?? e.detail.key);
   };
 
-  #onLinkQuality = (e: CustomEvent<BarSelectDetail>): void => {
-    const node = this.app.packetStats.linkQuality.value.top.find((s) => nodeId(s.node) === e.detail.key)?.node;
-    this.#toggle('lastHop', e.detail.key, node?.label ?? e.detail.key);
-  };
-
-  /** Min–max / median SNR per neighbour (last hop) and its margin over the decode limit. */
-  #linkQuality(s: LinkQualityStats, active: string | undefined): TemplateResult {
-    const footer = linkQualityFooter(s);
-    return html`<section class="card" data-section="link-quality">
-      <h3>Link quality by neighbour</h3>
-      <mc-range-plot
-        class="sources"
-        label="SNR range and median per neighbour"
-        .rows=${linkQualityRows(s, this.app.clock.now(), active)}
-        .refLine=${linkQualityRefLine(s)}
-        .format=${formatSnr}
-        empty-text="No received packets with an SNR and a known last hop in the shown packets."
-        @bar-select=${this.#onLinkQuality}
-      ></mc-range-plot>
-      ${footer ? html`<p class="note muted" data-field="link-quality-footer">${footer}</p>` : nothing}
-      <p class="note muted">
-        Bar = weakest to strongest SNR heard from each node, line = median. Margin = median SNR above the
-        ${s.decodeLimit ? `SF${s.decodeLimit.sf} decode limit (dashed)` : 'decode limit at the radio\'s spreading factor (unknown until connected)'}: ≥ 10 dB comfortable, ≥ 5 dB ok, less is
-        marginal — fades of a few dB will drop packets.
-      </p>
-    </section>`;
-  }
-
-  /** SNR box per last hop: how well this radio hears each neighbour. */
+  /** SNR box per last hop: how well this radio hears each neighbour, and its margin over the decode limit. */
   #lastHops(s: LastHopStats, active: string | undefined): TemplateResult {
     const footer = lastHopFooter(s);
+    const limit = s.decodeLimit;
     return html`<section class="card" data-section="last-hops">
       <h3>Signal by last hop</h3>
       <p class="note muted intro">
@@ -818,13 +757,20 @@ export class McPacketStats extends AppElement {
       </p>
       <mc-box-plot
         class="sources"
+        label="SNR box per last hop"
         .rows=${lastHopItems(s, this.app.clock.now(), active)}
+        .refLine=${lastHopRefLine(s)}
         .format=${formatSnr}
         empty-text="No received packets with a known last hop in the shown packets."
         empty-row-text="no SNR"
         @bar-select=${this.#onLastHop}
       ></mc-box-plot>
       ${footer ? html`<p class="note muted" data-field="last-hops-footer">${footer}</p>` : nothing}
+      <p class="note muted" data-field="margin-note">
+        Margin = median SNR above the
+        ${limit ? `SF${limit.sf} decode limit (dashed)` : 'decode limit at the radio\'s spreading factor (unknown until connected)'}: ≥ 10 dB comfortable, ≥ 5 dB ok, less is
+        marginal — fades of a few dB will drop packets.
+      </p>
     </section>`;
   }
 
@@ -1125,8 +1071,7 @@ export class McPacketStats extends AppElement {
       ${this.#pathsCard(stats.routes.value)}
       ${this.#pathNodes('path-starts', 'Most common first nodes in path', stats.pathStarts.value, active('pathStart'), this.#onPathStart)}
       ${this.#pathNodes('path-ends', 'Most common final nodes in path', stats.pathEnds.value, active('pathEnd'), this.#onPathEnd)}
-      ${this.#lastHops(stats.lastHops.value, active('lastHop'))}
-      ${this.#linkQuality(stats.linkQuality.value, active('lastHop'))}`;
+      ${this.#lastHops(stats.lastHops.value, active('lastHop'))}`;
   }
 }
 

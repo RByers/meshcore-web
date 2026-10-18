@@ -8,7 +8,7 @@ import '../src/pages/packets/index.js';
 import { smazEncodeIfSmaller } from '@meshcore-web/core/util/smaz';
 import { createHarness, type Harness, type HarnessOptions } from '../src/testing/harness.js';
 import type { McTileMap } from '../src/components/tile-map.js';
-import type { McRangePlot } from '../src/charts/range-plot.js';
+import type { McBoxPlot } from '../src/charts/box-plot.js';
 import { timelineDescribe, timelinePalette, timelineSeries, type McPacketStats } from '../src/pages/packets/packet-stats.js';
 import { NOISE_FLOOR_FIRST_DELAY_MS, NOISE_FLOOR_INTERVAL_MS, regionKeySync, timelineSeriesDescription } from '@meshcore-web/core/app';
 import { envelope } from '@meshcore-web/core/emulator';
@@ -706,7 +706,9 @@ describe('/packets Stats packet paths map', () => {
   it('sits below hop count, followed by charts of the most common first and final path nodes; a bar filters by it', async () => {
     const { t, el, hill } = await openWithPaths();
     const order = [...el.shadowRoot!.querySelectorAll('[data-section]')].map((s) => s.getAttribute('data-section'));
-    expect(order.slice(-6)).toEqual(['hops', 'paths', 'path-starts', 'path-ends', 'last-hops', 'link-quality']);
+    // the signal-by-last-hop box plot is the last card (link quality is merged into it)
+    expect(order.slice(-5)).toEqual(['hops', 'paths', 'path-starts', 'path-ends', 'last-hops']);
+    expect(el.shadowRoot!.querySelector('[data-section="link-quality"], mc-range-plot')).toBeNull();
     expect(el.shadowRoot!.querySelector('[data-section="path-starts"] h3')!.textContent).toBe('Most common first nodes in path');
     expect(el.shadowRoot!.querySelector('[data-section="path-ends"] h3')!.textContent).toBe('Most common final nodes in path');
 
@@ -729,10 +731,15 @@ describe('/packets Stats packet paths map', () => {
     expect(bars('path-ends')).toEqual([[hill, '1']]);
   });
 
-  it('box-plots SNR by last hop; a row filters by that last hop', async () => {
+  it('box-plots SNR by last hop against the decode limit, margin as text and colour; a row filters by that last hop', async () => {
     const { t, el, hill, alice } = await openWithPaths();
     const card = el.shadowRoot!.querySelector('[data-section="last-hops"]')!;
     expect(card.querySelector('h3')!.textContent).toBe('Signal by last hop');
+    const sf = t.app.connection.selfInfo.value!.radioSf;
+    const limit = t.app.packetStats.decodeLimit.value!;
+    expect(limit.sf).toBe(sf);
+    const plot = card.querySelector('mc-box-plot')!;
+    await t.until(() => inChart(el, 'last-hops', 'mc-box-plot', '.axis .tick').length > 0, 3000, 'box plot axis');
     const rows = (): [string, string][] =>
       inChart(el, 'last-hops', 'mc-box-plot', 'rect[role="button"]').map((r) => [r.getAttribute('data-key')!, r.getAttribute('aria-label')!.split(': ').pop()!]);
     // count desc: Hilltop relayed 4 (SNR 4, 2, −3, −7), Alice was heard directly once (SNR 6)
@@ -740,18 +747,44 @@ describe('/packets Stats packet paths map', () => {
       [hill, 'median -0.5 dB'],
       [alice, 'median 6 dB'],
     ]);
-    expect(inChart(el, 'last-hops', 'mc-box-plot', '[data-field="median"]').map((v) => v.textContent)).toEqual(['-0.5 dB', '6 dB']);
-    const links = inChart(el, 'last-hops', 'mc-box-plot', '[data-label] a').map((a) => a.getAttribute('href'));
-    expect(links).toEqual([`#/node/${hill}`, `#/node/${alice}`]);
+    const labels = inChart(el, 'last-hops', 'mc-box-plot', '[data-label]');
+    expect(labels.map((l) => l.querySelector('a')!.getAttribute('href'))).toEqual([`#/node/${hill}`, `#/node/${alice}`]);
+    expect(labels.map((l) => l.querySelector('[data-detail]')!.textContent)).toEqual(['4 pkts · −100 dBm', '1 pkt · −100 dBm']);
     // a box per row on one axis that crosses zero
     expect(inChart(el, 'last-hops', 'mc-box-plot', '[data-mark="box"]')).toHaveLength(2);
     expect(inChart(el, 'last-hops', 'mc-box-plot', '[data-field="zero"]')).toHaveLength(1);
     expect(card.querySelector('[data-field="last-hops-footer"]')).toBeNull();
-    // the tooltip lines: n / median, IQR / range, mean, mean RSSI, count (direct / relayed), last heard
-    const box = card.querySelector('mc-box-plot')!;
-    const title = box.rows[0]!.title as readonly string[];
-    expect(title.slice(0, 5)).toEqual(['n 4 · median -0.5 dB', 'IQR -4 dB – 2.5 dB · range -7 dB – 4 dB', 'mean -1 dB', 'mean RSSI -100 dBm', '4 packets (0 direct, 4 relayed)']);
-    expect(title[5]).toMatch(/^last heard /);
+
+    // the margin over the decode limit replaces the median: text, level and the box colour
+    const fmt = (v: number) => `${v >= 0 ? '+' : '−'}${Math.abs(v)} dB`;
+    const level = (m: number) => (m >= 10 ? 'comfortable' : m >= 5 ? 'ok' : 'marginal');
+    const tone = { comfortable: 'good', ok: 'ok', marginal: 'bad' } as const;
+    const margins = [-0.5 - limit.snrDb, 6 - limit.snrDb];
+    expect(inChart(el, 'last-hops', 'mc-box-plot', '[data-field="median"]')).toHaveLength(0);
+    expect(inChart(el, 'last-hops', 'mc-box-plot', '[data-field="value"]').map((v) => v.textContent)).toEqual(margins.map(fmt));
+    expect(inChart(el, 'last-hops', 'mc-box-plot', '[data-field="value-sub"]').map((v) => v.textContent)).toEqual(margins.map(level));
+    expect(inChart(el, 'last-hops', 'mc-box-plot', '[data-tone]').map((g) => g.getAttribute('data-tone'))).toEqual(margins.map((m) => tone[level(m)]));
+
+    // the decode limit is one dashed line left of every box, named in the SVG's label
+    const ref = inChart(el, 'last-hops', 'mc-box-plot', '[data-ref-line]');
+    expect(ref).toHaveLength(1);
+    expect(ref[0]!.querySelector('[data-field="ref-label"]')!.textContent).toBe(`SF${sf} limit −${Math.abs(limit.snrDb)} dB`);
+    const refX = Number(ref[0]!.querySelector('line')!.getAttribute('x1'));
+    for (const w of inChart(el, 'last-hops', 'mc-box-plot', '[data-mark="whisker"]')) expect(refX).toBeLessThan(Number(w.getAttribute('x1')));
+    expect(plot.shadowRoot!.querySelector('svg')!.getAttribute('aria-label')).toBe(`SNR box per last hop; SF${sf} limit −${Math.abs(limit.snrDb)} dB`);
+    expect(card.querySelector('[data-field="margin-note"]')!.textContent!.replace(/\s+/g, ' ')).toContain(`Margin = median SNR above the SF${sf} decode limit (dashed)`);
+
+    // the tooltip lines: n / median, IQR / range, mean, margin, median RSSI, count (direct / relayed), last heard
+    const title = plot.rows[0]!.title as readonly string[];
+    expect(title.slice(0, 6)).toEqual([
+      'n 4 · median -0.5 dB',
+      'IQR -4 dB – 2.5 dB · range -7 dB – 4 dB',
+      'mean -1 dB',
+      `margin ${fmt(margins[0]!)} over the decode limit (${level(margins[0]!)})`,
+      'median RSSI −100 dBm',
+      '4 packets (0 direct, 4 relayed)',
+    ]);
+    expect(title[6]).toMatch(/^last heard /);
 
     inChart(el, 'last-hops', 'mc-box-plot', `rect[data-key="${hill}"]`)[0]!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await t.until(() => chips(t).length > 0, 3000, 'last hop chip');
@@ -763,55 +796,7 @@ describe('/packets Stats packet paths map', () => {
     expect(inChart(el, 'last-hops', 'mc-box-plot', 'rect[role="button"]')[0]!.getAttribute('aria-pressed')).toBe('true');
   });
 
-  it('link quality: an SNR range per neighbour against the decode limit, margin as text and colour; a row filters by it', async () => {
-    const { t, el, hill, alice } = await openWithPaths();
-    const card = el.shadowRoot!.querySelector('[data-section="link-quality"]')!;
-    expect(card.querySelector('h3')!.textContent).toBe('Link quality by neighbour');
-    const sf = t.app.connection.selfInfo.value!.radioSf;
-    const limit = t.app.packetStats.decodeLimit.value!;
-    expect(limit.sf).toBe(sf);
-    const plot = card.querySelector('mc-range-plot')!;
-    await t.until(() => inChart(el, 'link-quality', 'mc-range-plot', '.axis .tick').length > 0, 3000, 'range plot axis');
-
-    // median desc: Alice heard directly once (6), Hilltop relayed SNR 4, 2, −3, −7 (median −0.5)
-    const keys = inChart(el, 'link-quality', 'mc-range-plot', 'rect[role="button"]').map((r) => r.getAttribute('data-key'));
-    expect(keys).toEqual([alice, hill]);
-    const labels = inChart(el, 'link-quality', 'mc-range-plot', '[data-label]');
-    expect(labels.map((l) => l.querySelector('a')!.getAttribute('href'))).toEqual([`#/node/${alice}`, `#/node/${hill}`]);
-    expect(labels.map((l) => l.querySelector('[data-detail]')!.textContent)).toEqual(['1 pkt · −100 dBm', '4 pkts · −100 dBm']);
-
-    const fmt = (v: number) => `${v >= 0 ? '+' : '−'}${Math.abs(v)} dB`;
-    const level = (m: number) => (m >= 10 ? 'comfortable' : m >= 5 ? 'ok' : 'marginal');
-    const tone = { comfortable: 'good', ok: 'ok', marginal: 'bad' } as const;
-    const margins = [6 - limit.snrDb, -0.5 - limit.snrDb];
-    expect(inChart(el, 'link-quality', 'mc-range-plot', '[data-field="value"]').map((v) => v.textContent)).toEqual(margins.map(fmt));
-    expect(inChart(el, 'link-quality', 'mc-range-plot', '[data-field="value-sub"]').map((v) => v.textContent)).toEqual(margins.map(level));
-    expect(inChart(el, 'link-quality', 'mc-range-plot', '[data-row]').map((g) => g.dataset['tone'])).toEqual(margins.map((m) => tone[level(m)]));
-
-    // Hilltop's bar spans −7…4 with the median inside; the decode limit is one dashed line left of every bar
-    const rowMark = (i: number, mark: string) => inChart(el, 'link-quality', 'mc-range-plot', `[data-row="${i}"] [data-mark="${mark}"]`)[0]!;
-    const range = rowMark(1, 'range');
-    const med = Number(rowMark(1, 'median').getAttribute('x1'));
-    expect(med).toBeGreaterThan(Number(range.getAttribute('x')));
-    expect(med).toBeLessThan(Number(range.getAttribute('x')) + Number(range.getAttribute('width')));
-    const ref = inChart(el, 'link-quality', 'mc-range-plot', '[data-ref-line]');
-    expect(ref).toHaveLength(1);
-    expect(ref[0]!.querySelector('[data-field="ref-label"]')!.textContent).toBe(`SF${sf} limit −${Math.abs(limit.snrDb)} dB`);
-    expect(Number(ref[0]!.querySelector('line')!.getAttribute('x1'))).toBeLessThan(Number(range.getAttribute('x')));
-    expect(plot.shadowRoot!.querySelector('svg')!.getAttribute('aria-label')).toContain(`SF${sf} limit`);
-    expect(card.querySelector('[data-field="link-quality-footer"]')).toBeNull();
-    expect(card.textContent).toContain('Margin = median SNR above the');
-
-    inChart(el, 'link-quality', 'mc-range-plot', `rect[data-key="${hill}"]`)[0]!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await t.until(() => chips(t).length > 0, 3000, 'last hop chip');
-    await settle(t, el);
-    expect(t.app.packetStats.filters.value).toEqual([expect.objectContaining({ field: 'lastHop', value: hill })]);
-    expect(chips(t)[0]).toMatch(/^Last hop: /);
-    const pressed = inChart(el, 'link-quality', 'mc-range-plot', 'rect[role="button"]');
-    expect(pressed.map((r) => [r.getAttribute('data-key'), r.getAttribute('aria-pressed')])).toEqual([[hill, 'true']]);
-  });
-
-  it('link quality: an empty state when no received packet has an SNR', async () => {
+  it('signal by last hop: a last hop without an SNR has no box and no margin', async () => {
     const t = (h = createHarness());
     await t.mount();
     await t.connectEmulator('/packets');
@@ -828,25 +813,25 @@ describe('/packets Stats packet paths map', () => {
     const el = t.query<McPacketStats>('mc-packet-stats')!;
     await settle(t, el);
     expect(t.app.packetStats.points.value).toHaveLength(1);
-    const empty = inChart(el, 'link-quality', 'mc-range-plot', '[data-empty]');
-    expect(empty.map((e) => e.textContent)).toEqual(['No received packets with an SNR and a known last hop in the shown packets.']);
-    expect(el.shadowRoot!.querySelector('[data-section="link-quality"]')!.textContent).toContain('Margin = median SNR above the');
+    expect(inChart(el, 'last-hops', 'mc-box-plot', '[data-field="no-box"]').map((e) => e.textContent)).toEqual(['no SNR']);
+    expect(inChart(el, 'last-hops', 'mc-box-plot', '[data-tone], [data-field="value"]')).toHaveLength(0);
+    expect(el.shadowRoot!.querySelector('[data-section="last-hops"] [data-field="margin-note"]')).not.toBeNull();
   });
 
-  it('link quality: the range plot fits a phone-width card', async () => {
+  it('signal by last hop: the box plot fits a phone-width card', async () => {
     const { t, el } = await openWithPaths();
     await page.viewport(375, 800);
-    const plot = el.shadowRoot!.querySelector<McRangePlot>('[data-section="link-quality"] mc-range-plot')!;
-    // re-measured for the narrow card: the svg as wide as its column, the value text inside the host
+    const plot = el.shadowRoot!.querySelector<McBoxPlot>('[data-section="last-hops"] mc-box-plot')!;
+    // re-measured for the narrow card: the svg as wide as its column, the margin text inside the host
     await t.until(() => {
       const svgEl = plot.shadowRoot!.querySelector('svg');
       const col = plot.shadowRoot!.querySelector('[data-measure]');
       return svgEl !== null && col !== null && Number(svgEl.getAttribute('width')) === Math.floor(col.getBoundingClientRect().width) && plot.getBoundingClientRect().width < 375;
-    }, 3000, 'narrow range plot');
+    }, 3000, 'narrow box plot');
     await plot.updateComplete;
     expect(plot.scrollWidth).toBeLessThanOrEqual(plot.clientWidth);
     const right = plot.getBoundingClientRect().right;
-    for (const v of plot.shadowRoot!.querySelectorAll('[data-field="value-sub"]')) expect(v.getBoundingClientRect().right).toBeLessThanOrEqual(right + 1);
+    for (const v of plot.shadowRoot!.querySelectorAll('[data-field="value-sub"], [data-field="value"]')) expect(v.getBoundingClientRect().right).toBeLessThanOrEqual(right + 1);
   });
 
   it('maps the first / final path nodes on demand, each dot sized by its packet count', async () => {

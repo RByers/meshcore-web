@@ -259,6 +259,37 @@ describe('mc-box-plot', () => {
       { key: 'bb', index: 1 },
     ]);
   });
+
+  it('draws a labelled reference line inside the axis, toned boxes, detail lines and value text; none of it by default', async () => {
+    const el = await mount('mc-box-plot', {
+      rows: [
+        { label: 'Hill', detail: '4 pkts', box: box({ min: 3, q1: 4, median: 5, q3: 6, max: 7, whiskerLow: 3, whiskerHigh: 7, outliers: [] }), tone: 'bad', valueText: '+2 dB', valueSub: 'marginal' },
+        { label: 'Plain', box: box({ min: 3, q1: 4, median: 5, q3: 6, max: 7, whiskerLow: 3, whiskerHigh: 7, outliers: [] }) },
+      ],
+      refLine: { value: -10, label: 'SF9 limit −10 dB' },
+      label: 'SNR',
+      format: fmt,
+    } satisfies Partial<McBoxPlot>);
+    const ref = q(el, '[data-ref-line]')!;
+    expect(ref.querySelector('[data-field="ref-label"]')!.textContent).toBe('SF9 limit −10 dB');
+    // the axis reaches the reference value: the line sits left of every box
+    const refX = num(ref.querySelector('line')!, 'x1');
+    expect(refX).toBeGreaterThanOrEqual(0);
+    for (const b of qa(el, '[data-mark="box"]')) expect(refX).toBeLessThan(num(b, 'x'));
+    expect(q(el, 'svg')!.getAttribute('aria-label')).toBe('SNR; SF9 limit −10 dB');
+    expect(qa(el, '[data-tone]').map((g) => g.getAttribute('data-tone'))).toEqual(['bad']);
+    expect(qa(el, '[data-detail]').map((d) => d.textContent)).toEqual(['4 pkts']);
+    expect(qa(el, '[data-field="value"]').map((v) => v.textContent)).toEqual(['+2 dB']);
+    expect(qa(el, '[data-field="value-sub"]').map((v) => v.textContent)).toEqual(['marginal']);
+    expect(qa(el, '[data-field="median"]').map((v) => v.textContent)).toEqual(['5 dB']);
+
+    el.refLine = null;
+    el.rows = [el.rows[1]!];
+    await el.updateComplete;
+    expect(q(el, '[data-ref-line]')).toBeNull();
+    expect(qa(el, '[data-tone], [data-detail], [data-field="value"]')).toHaveLength(0);
+    expect(q(el, 'svg')!.getAttribute('aria-label')).toBe('SNR');
+  });
 });
 
 function dots(n: number, keys: string[], nullEvery = 0): DotPoint[] {
