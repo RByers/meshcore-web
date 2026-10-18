@@ -79,6 +79,11 @@ export class McNodePath extends AppElement {
         align-items: center;
         margin-block: 8px;
       }
+      input[type='search'] {
+        /* the browser default (~20 chars) truncates the placeholder */
+        width: 100%;
+        max-width: 24rem;
+      }
       ul.list.candidates {
         max-height: 18rem;
         overflow-y: auto;

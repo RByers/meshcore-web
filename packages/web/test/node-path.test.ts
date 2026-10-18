@@ -73,4 +73,15 @@ describe('node page Path tab', () => {
     await t.until(() => t.queryAll('[data-draft-hop]').length === 1, 3000, 'hop from map');
     expect(t.query('[data-draft-hop="0"]')!.textContent).toContain('Hilltop Repeater');
   });
+
+  it('the repeater search box is wide enough for its placeholder', async () => {
+    const { t } = await openPath();
+    const input = t.query<HTMLInputElement>('[data-field="path-search"]')!;
+    const cs = getComputedStyle(input);
+    const ctx = document.createElement('canvas').getContext('2d')!;
+    ctx.font = cs.font;
+    const textWidth = ctx.measureText(input.placeholder).width;
+    const inner = input.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    expect(inner).toBeGreaterThanOrEqual(textWidth);
+  });
 });
