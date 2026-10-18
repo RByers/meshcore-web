@@ -56,10 +56,10 @@ describe('node reference helpers', () => {
 
   it('tabs per identity kind, nodeTabFor falls back to info, entryTab', () => {
     const view = (typeName: 'chat' | 'room' | 'repeater' | 'sensor') => ({ kind: 'contact', key: 'aa', contact: { typeName } }) as unknown as NodeIdentity;
-    expect(nodeTabs(view('chat'))).toEqual(['info', 'messages', 'stats']);
-    expect(nodeTabs(view('room'))).toEqual(['info', 'messages', 'overview', 'telemetry', 'cli', 'tools', 'stats']);
-    expect(nodeTabs(view('repeater'))).toEqual(['info', 'messages', 'overview', 'telemetry', 'cli', 'tools', 'stats']);
-    expect(nodeTabs(view('sensor'))).toEqual(['info', 'messages', 'overview', 'telemetry', 'cli', 'tools', 'stats']);
+    expect(nodeTabs(view('chat'))).toEqual(['info', 'messages', 'path', 'stats']);
+    expect(nodeTabs(view('room'))).toEqual(['info', 'messages', 'path', 'overview', 'telemetry', 'cli', 'tools', 'stats']);
+    expect(nodeTabs(view('repeater'))).toEqual(['info', 'messages', 'path', 'overview', 'telemetry', 'cli', 'tools', 'stats']);
+    expect(nodeTabs(view('sensor'))).toEqual(['info', 'messages', 'path', 'overview', 'telemetry', 'cli', 'tools', 'stats']);
     const heard = { kind: 'heard', key: 'aa', heard: {} } as unknown as NodeIdentity;
     expect(nodeTabs(heard)).toEqual(['info', 'stats']);
     expect(nodeTabs({ kind: 'unknown', ref: 'aa', valid: true })).toEqual(['info']);
@@ -74,6 +74,8 @@ describe('node reference helpers', () => {
     expect(nodeTabFor(view('chat'), 'cli')).toBe('info'); // hidden for chat nodes
     expect(nodeTabFor(view('chat'), 'bogus')).toBe('info');
     expect(nodeTabFor(view('chat'))).toBe('info');
+    expect(nodeTabFor(view('chat'), 'path')).toBe('path');
+    expect(nodeTabFor(heard, 'path')).toBe('info'); // only contacts have a stored path
     expect(nodeTabFor(heard, 'stats')).toBe('stats');
     expect(nodeTabFor(null, 'stats')).toBe('info');
 
@@ -93,7 +95,7 @@ describe('NodeModel', () => {
     const full = await resolved(t, t.keys.alice);
     expect(full).toMatchObject({ kind: 'contact', key: t.keys.alice });
     expect(full.kind === 'contact' && full.contact.name).toBe('Alice');
-    expect(t.app.node(t.keys.alice).tabs.value).toEqual(['info', 'messages', 'stats']);
+    expect(t.app.node(t.keys.alice).tabs.value).toEqual(['info', 'messages', 'path', 'stats']);
     expect(t.app.node(t.keys.alice).canAddContact.value).toBe(false);
 
     const prefix = await resolved(t, t.keys.alice.slice(0, 8).toUpperCase());
@@ -101,9 +103,9 @@ describe('NodeModel', () => {
     expect(t.app.node(t.keys.alice.slice(0, 8))).toBe(t.app.node(` ${t.keys.alice.slice(0, 8).toUpperCase()} `)); // cached per normalised ref
 
     expect(await resolved(t, t.keys.repeater)).toMatchObject({ kind: 'contact', key: t.keys.repeater });
-    expect(t.app.node(t.keys.repeater).tabs.value).toEqual(['info', 'messages', 'overview', 'telemetry', 'cli', 'tools', 'stats']);
+    expect(t.app.node(t.keys.repeater).tabs.value).toEqual(['info', 'messages', 'path', 'overview', 'telemetry', 'cli', 'tools', 'stats']);
     expect(await resolved(t, t.keys.room)).toMatchObject({ kind: 'contact' });
-    expect(t.app.node(t.keys.room).tabs.value).toEqual(['info', 'messages', 'overview', 'telemetry', 'cli', 'tools', 'stats']);
+    expect(t.app.node(t.keys.room).tabs.value).toEqual(['info', 'messages', 'path', 'overview', 'telemetry', 'cli', 'tools', 'stats']);
   });
 
   it('keeps the most recently requested models and disposes evicted ones', async () => {
@@ -163,7 +165,7 @@ describe('NodeModel', () => {
     expect(rec).toMatchObject({ key: dave, name: 'Dave', type: ContactType.REPEATER, lastAdvert: 1_700_000_500 });
     const now = node.identity.value;
     expect(now).toMatchObject({ kind: 'contact', key: dave });
-    expect(node.tabs.value).toEqual(['info', 'messages', 'overview', 'telemetry', 'cli', 'tools', 'stats']);
+    expect(node.tabs.value).toEqual(['info', 'messages', 'path', 'overview', 'telemetry', 'cli', 'tools', 'stats']);
     expect(node.canAddContact.value).toBe(false);
   });
 

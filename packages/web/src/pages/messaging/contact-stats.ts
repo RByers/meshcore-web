@@ -16,6 +16,7 @@ import type { McTileMap } from '../../components/tile-map.js';
 import { usageLines } from '../../components/path-usage-lines.js';
 import '../../components/stats-range.js';
 import '../../components/tile-map.js';
+import { nodeHref } from '../../components/node-link.js';
 
 /** Paths that get their own colour in the signal plot (the rest are "Other"). */
 const TOP_PATHS = 8;
@@ -137,7 +138,7 @@ export class McContactStats extends AppElement {
       label: labels.get(p.pathKey) ?? p.pathKey,
       value: p.count,
       title: `last heard ${formatRelative(p.lastTs, now)}${p.meanSnr !== null ? `, mean SNR ${formatSnr(p.meanSnr)}` : ''}`,
-      ...(p.pathKey === curPath ? { href: hrefFor(`/path/${this.key}`) } : {}),
+      ...(p.pathKey === curPath ? { href: nodeHref(this.key, 'path') } : {}),
     }));
     // paths are count desc: the first 8 get slots, the rest fold into "Other"
     const pathPalette = assignSlots(

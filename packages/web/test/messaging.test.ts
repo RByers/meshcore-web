@@ -142,14 +142,18 @@ describe('contacts page', () => {
     expect(info.querySelector('[data-field="path"]')!.textContent!.toLowerCase()).toContain('direct');
   });
 
-  it('resets a contact\'s path from the Info tab\'s Contact section', async () => {
+  it('resets a contact\'s path from the Path tab (not the Info tab)', async () => {
     const t = await connected();
     const k = keys(t);
-    await t.go(`/node/${k.alice}`, '[data-section="contact"] [data-action="reset-path"]');
-    const path = () => t.query('mc-node-info')?.shadowRoot?.querySelector('[data-field="path"]')?.textContent ?? '';
-    await t.until(() => path().includes('1 hop'), 3000, '1 hop path');
-    await t.click('[data-section="contact"] [data-action="reset-path"]');
-    await t.until(() => path().toLowerCase().includes('flood'), 3000, 'flood path');
+    await t.go(`/node/${k.alice}`, '[data-section="contact"] [data-action="remove-contact"]');
+    expect(t.query('mc-node-info')!.shadowRoot!.querySelector('[data-action="reset-path"], [data-action="path"]')).toBeNull();
+    await t.click('nav [data-tab="path"]');
+    await t.until(() => t.query('mc-node-path') && t.query('[data-action="reset-path"]'), 3000, 'path tab');
+    const path = () => t.query('[data-field="current-path"]')?.textContent ?? '';
+    expect(path()).not.toContain('flood');
+    await t.click('[data-action="reset-path"]');
+    await t.until(() => path().includes('flood'), 3000, 'flood path');
+    expect(t.query('[data-action="reset-path"]')).toBeNull();
     await t.until(() => t.text().includes('Path reset; the next message floods'), 3000, 'toast');
   });
 });

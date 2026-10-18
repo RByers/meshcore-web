@@ -2,7 +2,8 @@
  * `<mc-node-page>`: `/node/:key` and `/node/:key/:tab`. One page per node — a stored contact, a
  * node only heard advertising (packet log), a bare path hash or key prefix with several
  * candidates, or nothing known — resolved by core `app.node(ref)` (NodeModel), which also decides
- * the tabs: Info (always first), Messages (chat & room contacts: the DM / room chat, embedded),
+ * the tabs: Info (always first), Messages (contacts: the DM / room chat, embedded), Path (contacts:
+ * routing and path editor),
  * Overview / Telemetry / CLI / Tools (repeater, room and sensor administration) and Stats.
  *
  * Test hooks: `[data-field="header"]` with `name` / `type` / `key-short` / `session`,
@@ -21,12 +22,14 @@ import { contactNote, nodeHref, pathLabelView } from '../../components/node-link
 import { loginLabel, type AdminTab } from './node-admin.js';
 import { identityKey } from './node-info.js';
 import './node-admin.js';
+import './node-path.js';
 import '../messaging/chat-page.js';
 import '../messaging/contact-stats.js';
 
 const TAB_LABEL: Record<NodeTab, string> = {
   info: 'Info',
   messages: 'Messages',
+  path: 'Path',
   overview: 'Overview',
   telemetry: 'Telemetry',
   cli: 'CLI',
@@ -184,6 +187,8 @@ export class McNodePage extends AppElement {
       case 'cli':
       case 'tools':
         return html`<mc-node-admin .key=${key} .tab=${tab satisfies AdminTab}></mc-node-admin>`;
+      case 'path':
+        return html`<mc-node-path .key=${key}></mc-node-path>`;
       case 'stats':
         return html`<mc-contact-stats .key=${key}></mc-contact-stats>`;
       default:

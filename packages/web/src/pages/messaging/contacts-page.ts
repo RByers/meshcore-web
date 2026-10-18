@@ -17,7 +17,6 @@ import {
 } from '@meshcore-web/core/app';
 import { AppElement } from '../../app-context.js';
 import { formatRelative, formatSnr } from '../../format.js';
-import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
 import { avatar, copyText, errorText, listStyles, unreadBadge } from './common.js';
 import { contactNote, nodeHref } from '../../components/node-link.js';
@@ -364,7 +363,7 @@ export class McContactsPage extends AppElement {
       <button class="menu-btn" popovertarget=${menuId} aria-label=${`Actions for ${v.name}`} data-menu=${v.key}>⋮</button>
       <div class="menu" id=${menuId} popover>
         <a data-action="info" href=${nodeHref(v.key)}>Info</a>
-        <button data-action="set-path" @click=${() => (location.hash = hrefFor(`/path/${v.key}`))}>Set path…</button>
+        <button data-action="set-path" @click=${() => (location.hash = nodeHref(v.key, 'path'))}>Set path…</button>
         <button data-action="reset-path" ?disabled=${!v.onDevice} @click=${() => void this.#act(v, 'reset')}>Reset path</button>
         <button data-action="share" ?disabled=${!v.onDevice} @click=${() => void this.#act(v, 'share')}>Share (zero hop)</button>
         <button data-action="export" ?disabled=${!v.onDevice} @click=${() => void this.#act(v, 'export')}>Export link…</button>

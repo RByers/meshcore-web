@@ -360,7 +360,7 @@ interface ContactStats {
 The tab shows: stat tiles (packets from the contact, via the contact as a forwarder, distinct
 paths, share heard directly, mean SNR); *Heard over time* (`mc-line-chart`, series by category);
 *Paths heard via* (`mc-bar-chart`: label = resolved hop names joined with " > ", or *direct*;
-value = count; footer "last heard" via tooltip; the label links to the path page `/path/:key`
+value = count; footer "last heard" via tooltip; the label links to the node page's Path tab `/node/:key/path`
 only for the contact's current out_path row, otherwise plain text; a *Map* button swaps the chart
 for `mc-tile-map` showing every path at once: `app.paths.usage()` (core `path-usage.ts`) lays
 each path out like the path dialog (contact → hops → this radio), merges stops by node (or hash +

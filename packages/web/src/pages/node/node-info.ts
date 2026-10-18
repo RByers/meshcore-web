@@ -5,12 +5,12 @@
  * packet log by source node) and a link to the packet log filtered to it.
  *
  * A contact gets a *Contact* section: local note, SMAZ (chat & room), favourite / not-on-radio,
- * path (set / reset) and a two-click *Remove contact*. A node only heard advertising gets
+ * and a two-click *Remove contact*. A node only heard advertising gets
  * *Add contact* (from its advert). Several candidates for a hash / prefix are listed as links.
  *
  * Test hooks: `dl.info` `[data-field="key|path|direct-signal|last-seen|heard|location"]`,
  * `[data-candidate="<key>"]`, `[data-section="contact|note|smaz"]`, `[data-field="contact-flags"]`,
- * `[data-action="path|reset-path|remove-contact|add-contact|node-packets"]` (`data-armed` while the
+ * `[data-action="remove-contact|add-contact|node-packets"]` (`data-armed` while the
  * remove button awaits its confirming click), `[data-field="activity"]`.
  */
 import { css, html, nothing, type TemplateResult } from 'lit';
@@ -307,8 +307,6 @@ export class McNodeInfo extends AppElement {
       ${v.typeName === 'chat' || v.typeName === 'room' ? this.#smazSetting(v) : nothing}
       <div class="card actions">
         <span class="muted" data-field="contact-flags">${flags}</span>
-        <a data-action="path" href=${hrefFor(`/path/${v.key}`)}>Path…</a>
-        <button data-action="reset-path" @click=${() => void this.#resetPath(v.key)}>Reset path</button>
         ${this.#removeButton(v)}
       </div>
     </section>`;
@@ -361,15 +359,6 @@ export class McNodeInfo extends AppElement {
       await this.app.contacts.setSmaz(key, on);
     } catch (err) {
       this.app.notifications.error('Could not change compression', err);
-    }
-  }
-
-  async #resetPath(key: string): Promise<void> {
-    try {
-      await this.app.contacts.resetPath(key);
-      this.app.notifications.info('Path reset; the next message floods');
-    } catch (err) {
-      this.app.notifications.error('Could not reset the path', err);
     }
   }
 

@@ -77,7 +77,7 @@ describe('contact Stats tab', () => {
     expect(rows[0]).toBe('Hilltop Repeater');
     expect(rows).toContain('direct');
     expect(rows.some((r) => r.includes(' > '))).toBe(true);
-    expect(within(pathsChart, '[data-label] a')[0]?.getAttribute('href')).toBe(`#/path/${alice}`);
+    expect(within(pathsChart, '[data-label] a')[0]?.getAttribute('href')).toBe(`#/node/${alice}/path`);
 
     // paths map: one line per hop segment, as thick as the packets that crossed it. With the
     // "approximate positions" setting off, hop 55 (unknown) is left off: Alice–Hilltop 3 (one of

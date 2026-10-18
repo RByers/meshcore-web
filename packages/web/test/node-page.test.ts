@@ -72,7 +72,7 @@ describe('node page', () => {
     const t = await connected();
     const rep = key(t, 'repeater');
     await t.go(`/node/${rep}`, 'nav[role="tablist"] a[data-tab="overview"]');
-    expect(tabs(t)).toEqual(['info', 'messages', 'overview', 'telemetry', 'cli', 'tools', 'stats']);
+    expect(tabs(t)).toEqual(['info', 'messages', 'path', 'overview', 'telemetry', 'cli', 'tools', 'stats']);
     expect(selected(t)).toBe('info');
     expect(t.query('mc-node-info')).not.toBeNull();
     expect(t.query('[data-field="header"] [data-field="name"]')!.textContent).toBe('Hilltop Repeater');
@@ -84,11 +84,11 @@ describe('node page', () => {
     const alice = key(t, 'alice');
     await t.go(`/node/${alice}`, 'nav[role="tablist"] a[data-tab="messages"]');
     await t.until(() => !t.query('nav[role="tablist"] a[data-tab="overview"]'), 3000, 'chat tabs');
-    expect(tabs(t)).toEqual(['info', 'messages', 'stats']);
+    expect(tabs(t)).toEqual(['info', 'messages', 'path', 'stats']);
     expect(t.query('[data-field="header"] [data-field="session"]')).toBeNull();
 
     await t.go(`/node/${key(t, 'room')}`, 'nav[role="tablist"] a[data-tab="overview"]');
-    expect(tabs(t)).toEqual(['info', 'messages', 'overview', 'telemetry', 'cli', 'tools', 'stats']);
+    expect(tabs(t)).toEqual(['info', 'messages', 'path', 'overview', 'telemetry', 'cli', 'tools', 'stats']);
 
     // a chat contact has no admin tabs; unknown tab names too → Info
     for (const tab of ['overview', 'bogus']) {
@@ -169,7 +169,7 @@ describe('node page', () => {
     await t.until(() => t.query('[data-section="contact"]'), 5000, 'contact section');
     expect(t.query('[data-action="add-contact"]')).toBeNull();
     expect(t.app.contacts.view(k)).toMatchObject({ name: 'Dave Relay', typeName: 'repeater' });
-    expect(tabs(t)).toEqual(['info', 'messages', 'overview', 'telemetry', 'cli', 'tools', 'stats']);
+    expect(tabs(t)).toEqual(['info', 'messages', 'path', 'overview', 'telemetry', 'cli', 'tools', 'stats']);
     await t.until(() => t.text().includes('Added Dave Relay'), 2000, 'toast');
     await t.go('/contacts', `[data-contact="${k}"]`);
   });

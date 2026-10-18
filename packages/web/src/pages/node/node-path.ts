@@ -1,7 +1,7 @@
 /**
- * `/path/:key`: a contact's routing (issue #6, after MeshCore Open's routing sheet and path
- * editor). Shows the current path with repeater names, a hop-list editor fed from the known
- * repeaters (searchable list, or tapping repeaters on the map), "Use flood", and the previously
+ * `<mc-node-path>`: the node page's Path tab — a contact's routing (issue #6, after MeshCore
+ * Open's routing sheet and path editor). Shows the current path with repeater names, a hop-list editor fed from the known
+ * repeaters (searchable list, or tapping repeaters on the map), "Use flood", "Reset path" and the previously
  * used paths with their delivery counts. State and actions live in `app.contactPaths` (core ContactPathsModel);
  * only the draft hop list is page state.
  */
@@ -13,9 +13,8 @@ import { AppElement } from '../../app-context.js';
 import type { McTileMap } from '../../components/tile-map.js';
 import '../../components/tile-map.js';
 import { formatDuration, formatRelative } from '../../format.js';
-import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
-import { avatar, errorText, listStyles } from './common.js';
+import { avatar, errorText, listStyles } from '../messaging/common.js';
 import { contactNote, nodeLink } from '../../components/node-link.js';
 
 interface DraftHop {
@@ -23,9 +22,10 @@ interface DraftHop {
   label: string;
 }
 
-export class McPathPage extends AppElement {
-  static override properties = { params: { attribute: false } };
-  declare params: Readonly<Record<string, string>> | undefined;
+export class McNodePath extends AppElement {
+  static override properties = { key: {} };
+  /** The contact's public key (hex). */
+  declare key: string;
 
   static override styles = [
     shared,
@@ -110,10 +110,6 @@ export class McPathPage extends AppElement {
   #error = '';
   #fitted = false;
 
-  get key(): string {
-    return (this.params?.['key'] ?? '').toLowerCase();
-  }
-
   get #hashSize(): number {
     return this.#draft[0]?.hash.length ?? this.app.contactPaths.defaultHashSize.value;
   }
@@ -171,6 +167,22 @@ export class McPathPage extends AppElement {
     } catch (err) {
       this.#error = errorText(err);
       this.app.notifications.error('Could not set path', err);
+    } finally {
+      this.#busy = false;
+      this.requestUpdate();
+    }
+  }
+
+  /** Forget the radio's path (out_path_len = -1): the next message floods and learns a new one. */
+  async #resetPath(): Promise<void> {
+    this.#busy = true;
+    this.requestUpdate();
+    try {
+      await this.app.contacts.resetPath(this.key);
+      this.#draftFor = '';
+      this.app.notifications.info('Path reset; the next message floods');
+    } catch (err) {
+      this.app.notifications.error('Could not reset the path', err);
     } finally {
       this.#busy = false;
       this.requestUpdate();
@@ -303,18 +315,15 @@ export class McPathPage extends AppElement {
     const history = paths.history(this.key);
     const draftHex = this.#draft.map((h) => toHex(h.hash)).join(',');
     const curHex = cur?.kind === 'hops' ? cur.hops.map((h) => h.hex).join(',') : cur?.kind === 'direct' ? '' : null;
-    const back = `/node/${contact.key}`;
     return html`
-      <div class="page-head">
-        <a href=${hrefFor(back)} aria-label="Back">←</a>
-        ${avatar(contact.typeName)}
-        <h2>Path to ${contact.name}${contactNote(contact.note)}</h2>
-      </div>
-
       <section>
         <h3>Current path</h3>
         <div data-field="current-path">${cur ? this.#pathText(cur) : nothing}</div>
-        ${cur?.kind === 'flood' ? html`<p class="muted">No known path: messages flood, and the radio learns a path from the reply.</p>` : nothing}
+        ${cur?.kind === 'flood'
+          ? html`<p class="muted">No known path: messages flood, and the radio learns a path from the reply.</p>`
+          : html`<div class="row">
+              <button data-action="reset-path" ?disabled=${this.#busy || !contact.onDevice} @click=${() => void this.#resetPath()}>Reset path</button>
+            </div>`}
       </section>
 
       <section>
@@ -372,10 +381,10 @@ export class McPathPage extends AppElement {
   }
 }
 
-customElements.define('mc-path-page', McPathPage);
+customElements.define('mc-node-path', McNodePath);
 
 declare global {
   interface HTMLElementTagNameMap {
-    'mc-path-page': McPathPage;
+    'mc-node-path': McNodePath;
   }
 }

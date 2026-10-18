@@ -117,8 +117,8 @@ with a **Disconnect** button; disconnect first to connect to a different radio.
   room, sensor), last heard, route (direct with hop count, or flood) and SNR. Search,
   filter by type or unread, and sort. The actions menu per contact offers chat, admin (for
   repeaters/rooms/sensors), share, set path, reset path and remove.
-- **Set path** (contacts menu, or **Path…** in a chat): shows the current route with repeater
-  names, lets you build a hop list from the known repeaters (search the list, or tap them on
+- **Set path** (contacts menu, or a contact's **Path** tab): shows the current route with repeater
+  names and a **Reset path** button, lets you build a hop list from the known repeaters (search the list, or tap them on
   the map) or switch to flood, and lists previously used paths with how many messages each
   delivered; **Use** switches back to one.
 - **Add a contact** from a `meshcore://` share link or a public key. Contacts also appear

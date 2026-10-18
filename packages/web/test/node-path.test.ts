@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { toHex } from '@meshcore-web/core/util/bytes';
 import '../src/mc-app.js';
 import '../src/pages/messaging/index.js';
+import '../src/pages/node/index.js';
 import { createHarness, type Harness } from '../src/testing/harness.js';
 
 let h: Harness | undefined;
@@ -18,13 +19,13 @@ async function openPath(): Promise<{ t: Harness; bob: string; repeaterHop: strin
   await t.mount();
   const k = t.emulatorScenario().keys;
   const bob = toHex(k.bob);
-  await t.connectEmulator(`/path/${bob}`);
+  await t.connectEmulator(`/node/${bob}/path`);
   await t.app.connection.capture!.idle();
   await t.until(() => t.query('[data-field="current-path"]')?.textContent?.includes('flood'), 5000, 'path page');
   return { t, bob, repeaterHop: toHex(k.repeater.subarray(0, 1)), room: toHex(k.room) };
 }
 
-describe('path page', () => {
+describe('node page Path tab', () => {
   it('builds a path from the repeater list, sets it, and lists it under previously used paths', async () => {
     const { t, bob, repeaterHop, room } = await openPath();
     expect(t.query('[data-field="no-history"]')).not.toBeNull();

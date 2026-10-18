@@ -162,13 +162,13 @@ adverts and messages, shown as "direct SNR" in the contacts list, the node page'
 node: a stored contact, a node only heard advertising (newest ADVERT in the packet log), a key
 prefix or path hash matching several nodes (candidate list), or nothing known. `:key` may be a
 full key, a prefix or a 1-byte hash. Tabs, Info first and the default: *Info*, *Messages* (every
-contact: the DM / room chat embedded; a repeater's or sensor's DMs hold its CLI replies), *Overview* / *Telemetry* / *CLI* / *Tools*
+contact: the DM / room chat embedded; a repeater's or sensor's DMs hold its CLI replies), *Path* (every
+contact: the path editor and *Reset path*, see Contact paths below), *Overview* / *Telemetry* / *CLI* / *Tools*
 (repeater, room and sensor admin) and *Stats*; an unknown or hidden tab falls back to Info. The
 header (every tab) shows name + note, type, short key, login state and a "Map" link; on Messages
 it adds the path · direct SNR · last seen line. *Info* shows key (or hash), path, direct signal,
 last seen / heard advert, location, packet activity and a link to the packet log; for contacts a
-*Contact* section holds the note, SMAZ compression, favourite / not-on-radio flags, *Path…* and
-*Reset path*, and a two-click *Remove contact* (the page stays, as a heard / unknown node). A
+*Contact* section holds the note, SMAZ compression, favourite / not-on-radio flags and a two-click *Remove contact* (the page stays, as a heard / unknown node). A
 heard node with an advert gets *Add contact* (`ContactsModel.addFromAdvert`, CMD_ADD_UPDATE_CONTACT
 so it works in manual-add mode). Contact list / map clicks open chat and room contacts on Messages,
 others on Info; a Messages-list conversation always opens on Messages. There are no `/contact/` or `/chat/` routes (they 404); `/channel/:key`
@@ -231,8 +231,8 @@ is a placeholder until the repository is published.
 
 ## Contact paths (issue #6)
 
-`/path/:key` (from "Path…" in the node page's Info *Contact* section and the contacts menu "Set path…") shows the
-contact's current path with hops resolved to repeater / room names (hop hash = public key
+The node page's *Path* tab (`/node/:key/path`, every contact; also the contacts menu "Set path…") shows the
+contact's current path (with "Reset path" when one is set) with hops resolved to repeater / room names (hop hash = public key
 prefix; ambiguous hops show "A | B", unknown ones the hex), a hop-list editor (searchable
 repeater list with add / reorder / remove, or tap repeaters on a `<mc-tile-map>`), "Use
 flood", and previously used paths with delivered / attempted counts, round trip, last use and

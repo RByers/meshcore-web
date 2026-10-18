@@ -13,10 +13,10 @@ import type { ContactKind } from './messaging.js';
 import { heardNodesIn, type HeardNode, type PacketLogModel } from './packet-log-model.js';
 import { computed, effect, signal, type ReadonlySignal } from './signal.js';
 
-export type NodeTab = 'info' | 'messages' | 'overview' | 'telemetry' | 'cli' | 'tools' | 'stats';
+export type NodeTab = 'info' | 'messages' | 'path' | 'overview' | 'telemetry' | 'cli' | 'tools' | 'stats';
 
 /** Every tab, in display order. */
-export const NODE_TAB_ORDER: readonly NodeTab[] = ['info', 'messages', 'overview', 'telemetry', 'cli', 'tools', 'stats'];
+export const NODE_TAB_ORDER: readonly NodeTab[] = ['info', 'messages', 'path', 'overview', 'telemetry', 'cli', 'tools', 'stats'];
 
 export type NodeIdentity =
   /** Exactly one stored contact's key starts with the reference. */
@@ -41,10 +41,10 @@ export function resolveContactRef(ref: string, views: readonly ContactView[]): C
 }
 
 const CONTACT_TABS: Record<ContactKind, readonly NodeTab[]> = {
-  chat: ['info', 'messages', 'stats'],
-  room: ['info', 'messages', 'overview', 'telemetry', 'cli', 'tools', 'stats'],
-  repeater: ['info', 'messages', 'overview', 'telemetry', 'cli', 'tools', 'stats'],
-  sensor: ['info', 'messages', 'overview', 'telemetry', 'cli', 'tools', 'stats'],
+  chat: ['info', 'messages', 'path', 'stats'],
+  room: ['info', 'messages', 'path', 'overview', 'telemetry', 'cli', 'tools', 'stats'],
+  repeater: ['info', 'messages', 'path', 'overview', 'telemetry', 'cli', 'tools', 'stats'],
+  sensor: ['info', 'messages', 'path', 'overview', 'telemetry', 'cli', 'tools', 'stats'],
 };
 
 /** The tabs shown for an identity (null = still resolving: Info only). */
