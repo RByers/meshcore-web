@@ -1,13 +1,19 @@
 /**
  * Contacts: search / filter / sort, per-contact actions, add by shared contact, and a selection
- * mode for bulk delete (select all visible, or the visible ones not heard from for a period —
- * core `contactsNotHeardSince`, favourites skipped — then `ContactsModel.removeMany`).
+ * mode for bulk delete (select all visible, the visible ones not heard from for a period — core
+ * `contactsNotHeardSince` — or farther than a distance from our own position — core
+ * `contactsFartherThan`; favourites skipped — then `ContactsModel.removeMany`).
  */
 import { css, html, nothing } from 'lit';
 import {
   CONTACT_FILTERS,
+  contactDistance,
   contactLastHeard,
+  contactsFartherThan,
   contactsNotHeardSince,
+  DISTANCE_PRESETS,
+  formatDistance,
+  hasLocation,
   entryTab,
   messagePreview,
   STALE_PERIODS,
@@ -170,6 +176,32 @@ export class McContactsPage extends AppElement {
     );
   }
 
+  /** Our own advertised position (null when the radio has none set). */
+  #selfLocation(): { lat: number; lon: number } | null {
+    const si = this.app.connection.selfInfo.value;
+    return si && hasLocation(si) ? { lat: si.lat, lon: si.lon } : null;
+  }
+
+  #selectFar(e: Event): void {
+    const sel = e.target as HTMLSelectElement;
+    const preset = DISTANCE_PRESETS[Number(sel.value)];
+    sel.value = '';
+    const me = this.#selfLocation();
+    if (!preset || !me) return;
+    const visible = this.app.contacts.visible.peek();
+    const far = contactsFartherThan(visible, me, preset.meters);
+    const favs = visible.filter((v) => v.favourite).length;
+    const noLoc = visible.filter((v) => !v.favourite && contactDistance(v, me) === undefined).length;
+    const skipped = [
+      noLoc ? `${noLoc} without a location skipped` : '',
+      favs ? `${favs} favourite${favs === 1 ? '' : 's'} skipped` : '',
+    ].filter(Boolean);
+    this.#select(
+      far.map((v) => v.key),
+      [`${far.length} farther than ${preset.label}`, ...skipped].join(' · '),
+    );
+  }
+
   /** Selected keys that still exist, in list order. */
   #selectedViews(): ContactView[] {
     return this.app.contacts.views.value.filter((v) => this.#selected.has(v.key));
@@ -312,7 +344,9 @@ export class McContactsPage extends AppElement {
     const now = this.app.clock.now();
     const path = this.app.contacts.outPathLabel(v, this.app.appSettings.pathNames.value);
     const heard = contactLastHeard(v);
+    const dist = this.#selecting ? contactDistance(v, this.#selfLocation()) : undefined;
     const meta = [
+      dist !== undefined ? `${formatDistance(dist)} away` : '',
       path.label,
       v.directSnr !== undefined ? `direct SNR ${formatSnr(v.directSnr)}` : '',
       heard ? `heard ${formatRelative(heard, now)}` : 'never heard',
@@ -375,6 +409,7 @@ export class McContactsPage extends AppElement {
   #selectBar(visible: readonly ContactView[], selected: readonly ContactView[]) {
     const busy = this.#deleting;
     const shown = new Set(visible.map((v) => v.key));
+    const me = this.#selfLocation();
     const hidden = selected.filter((v) => !shown.has(v.key)).length;
     return html`<div class="select-bar" data-field="select-bar">
       <span class="count" data-field="selected-count" role="status">
@@ -394,6 +429,18 @@ export class McContactsPage extends AppElement {
         <option value="" selected>Not heard in…</option>
         ${STALE_PERIODS.map((p, i) => html`<option value=${i}>${p.label}</option>`)}
       </select>
+      <select
+        data-field="far"
+        aria-label="Select contacts farther than a distance from you"
+        title=${me
+          ? 'Selects the listed contacts whose advertised location is farther than the distance from yours (favourites and contacts without a location are skipped)'
+          : 'Set your radio’s location (Settings › Identity) to select contacts by distance'}
+        ?disabled=${!!busy || !visible.length || !me}
+        @change=${(e: Event) => this.#selectFar(e)}
+      >
+        <option value="" selected>Farther than…</option>
+        ${DISTANCE_PRESETS.map((p, i) => html`<option value=${i}>${p.label}</option>`)}
+      </select>
       <button
         class="danger"
         data-action="bulk-delete"
@@ -403,7 +450,7 @@ export class McContactsPage extends AppElement {
         Delete ${selected.length || ''}
       </button>
       <button data-action="select-cancel" ?disabled=${!!busy} @click=${() => this.#setSelecting(false)}>Cancel</button>
-      <span class="hint" data-field="select-note">${this.#selectNote || 'Tap contacts to select them. “Not heard in…” skips favourites.'}</span>
+      <span class="hint" data-field="select-note">${this.#selectNote || 'Tap contacts to select them. “Not heard in…” and “Farther than…” skip favourites.'}</span>
     </div>`;
   }
 

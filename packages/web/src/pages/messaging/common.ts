@@ -143,6 +143,7 @@ export const listStyles = css`
   }
   .row-sub,
   .preview {
+    display: block;
     font-size: 0.85rem;
     color: var(--mc-text-muted);
     overflow: hidden;

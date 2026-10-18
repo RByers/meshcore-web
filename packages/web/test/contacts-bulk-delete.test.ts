@@ -1,8 +1,8 @@
-/** Contacts page selection mode: select by hand / all / not heard in a period, bulk delete. */
+/** Contacts page selection mode: select by hand / all / not heard in a period / farther than a distance, bulk delete. */
 import { afterEach, describe, expect, it } from 'vitest';
 import { page } from 'vitest/browser';
 import { toHex } from '@meshcore-web/core/util/bytes';
-import { contactLastHeard, STALE_PERIODS } from '@meshcore-web/core/app';
+import { contactLastHeard, DISTANCE_PRESETS, STALE_PERIODS } from '@meshcore-web/core/app';
 import '../src/mc-app.js';
 import '../src/pages/messaging/index.js';
 import { createHarness, type Harness } from '../src/testing/harness.js';
@@ -17,6 +17,7 @@ afterEach(async () => {
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const WEEK_INDEX = String(STALE_PERIODS.findIndex((p) => p.label === '1 week'));
+const distIndex = (label: string) => String(DISTANCE_PRESETS.findIndex((p) => p.label === label));
 
 /**
  * Connects, then rewrites each contact's last-heard inputs relative to the harness clock so the
@@ -115,6 +116,40 @@ describe('contacts bulk delete', () => {
     expect(t.query('[data-field="selected-count"]')!.textContent).toContain('1 selected');
     await t.click('[data-action="select-all"]');
     expect(t.query('[data-field="selected-count"]')!.textContent).toContain('3 selected');
+  });
+
+  it('selects the visible contacts farther than a distance from us, skipping favourites and contacts without a location', async () => {
+    // basicScenario: self in Seattle; Alice (favourite) ~0.4 km away, the repeater ~2 km; the rest have no location
+    const { t, k } = await seeded();
+    await t.click('[data-action="select-mode"]');
+    expect(t.query(`[data-contact="${k.repeater}"] [data-field="meta"]`)!.textContent).toMatch(/^2\.\d km away · /);
+    expect(t.query(`[data-contact="${k.bob}"] [data-field="meta"]`)!.textContent).not.toContain('away');
+
+    await t.click(`[data-contact="${k.bob}"] label`);
+    await t.fill('[data-field="far"]', distIndex('1 km'));
+    // replaces the selection
+    expect(selectedKeys(t)).toEqual([k.repeater]);
+    expect(t.query('[data-field="select-note"]')!.textContent).toContain('1 farther than 1 km · 4 without a location skipped · 1 favourite skipped');
+    expect(t.query<HTMLSelectElement>('[data-field="far"]')!.value).toBe('');
+
+    await t.fill('[data-field="far"]', distIndex('5 km'));
+    expect(selectedKeys(t)).toEqual([]);
+    expect(t.query('[data-field="select-note"]')!.textContent).toContain('0 farther than 5 km');
+
+    // only the visible (filtered) contacts are considered
+    await t.fill('[data-field="filter"]', 'chat');
+    await t.until(() => t.queryAll('[data-contact]').length === 3, 2000, 'users only');
+    await t.fill('[data-field="far"]', distIndex('1 km'));
+    expect(selectedKeys(t)).toEqual([]);
+  });
+
+  it('disables "Farther than…" when our own location is not set', async () => {
+    const { t } = await seeded();
+    await t.click('[data-action="select-mode"]');
+    expect(t.query<HTMLSelectElement>('[data-field="far"]')!.disabled).toBe(false);
+    await t.app.deviceSettings.setLocation(0, 0);
+    await t.until(() => t.query<HTMLSelectElement>('[data-field="far"]')!.disabled, 3000, 'disabled without a location');
+    expect(t.query('[data-field="far"]')!.getAttribute('title')).toContain('Settings › Identity');
   });
 
   it('deletes the selection from the list and the radio after confirming', async () => {

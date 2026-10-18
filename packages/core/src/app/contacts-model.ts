@@ -11,6 +11,7 @@ import type { RadioStore } from '../store/radio-store.js';
 import type { ContactRecord, MessageRecord } from '../store/schema.js';
 import { fromHex, toHex } from '../util/bytes.js';
 import { StoreBoundModel } from './store-bound.js';
+import { haversineMeters, hasLocation, type LatLon } from './geo.js';
 import { computed, signal, type ReadonlySignal } from './signal.js';
 import {
   contactShareUrl,
@@ -129,6 +130,48 @@ export function contactsNotHeardSince(
   opts: NotHeardSinceOptions = {},
 ): ContactView[] {
   return views.filter((v) => (opts.includeFavourites || !v.favourite) && contactLastHeard(v) < cutoffMs);
+}
+
+/** Preset distances for bulk-selecting far-away contacts (nearest first). */
+export const DISTANCE_PRESETS: readonly { label: string; meters: number }[] = [
+  { label: '1 km', meters: 1_000 },
+  { label: '5 km', meters: 5_000 },
+  { label: '10 km', meters: 10_000 },
+  { label: '25 km', meters: 25_000 },
+  { label: '50 km', meters: 50_000 },
+  { label: '100 km', meters: 100_000 },
+  { label: '250 km', meters: 250_000 },
+  { label: '500 km', meters: 500_000 },
+  { label: '1000 km', meters: 1_000_000 },
+];
+
+/** Distance in metres from `from` to the contact's advertised location (undefined when either has none). */
+export function contactDistance(v: Pick<ContactView, 'record'>, from: LatLon | null | undefined): number | undefined {
+  const at = { lat: v.record.lat, lon: v.record.lon };
+  return hasLocation(from) && hasLocation(at) ? haversineMeters(from, at) : undefined;
+}
+
+export interface FartherThanOptions {
+  /** Include favourites (default false: favourites are never selected). */
+  includeFavourites?: boolean;
+}
+
+/**
+ * Contacts whose advertised location is strictly more than `meters` from `from` (our own
+ * position). Contacts without a location are never selected (their distance is unknown), and
+ * nothing is selected when `from` has no location. Keeps the input order.
+ */
+export function contactsFartherThan(
+  views: readonly ContactView[],
+  from: LatLon | null | undefined,
+  meters: number,
+  opts: FartherThanOptions = {},
+): ContactView[] {
+  return views.filter((v) => {
+    if (!opts.includeFavourites && v.favourite) return false;
+    const d = contactDistance(v, from);
+    return d !== undefined && d > meters;
+  });
 }
 
 export interface RemoveOptions {

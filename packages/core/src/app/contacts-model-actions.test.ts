@@ -1,4 +1,4 @@
-/** ContactsModel actions not covered by messaging-models.test.ts: favourites, notes, share, refreshOne, remove keeping history, bulk remove and stale selection. */
+/** ContactsModel actions not covered by messaging-models.test.ts: favourites, notes, share, refreshOne, remove keeping history, bulk remove, stale and far-away selection. */
 
 import { describe, expect, it, vi } from 'vitest';
 import { bytesEqual, toHex } from '../util/bytes.js';
@@ -7,7 +7,16 @@ import { parseAdvertPayload } from '../packet/payloads.js';
 import { PayloadType, RouteType } from '../packet/constants.js';
 import type { AirPacket } from '../emulator/virtual-mesh.js';
 import { connectedApp } from './testing.js';
-import { contactLastHeard, contactsNotHeardSince, STALE_PERIODS, type ContactView } from './contacts-model.js';
+import {
+  contactDistance,
+  contactLastHeard,
+  contactsFartherThan,
+  contactsNotHeardSince,
+  DISTANCE_PRESETS,
+  STALE_PERIODS,
+  type ContactView,
+} from './contacts-model.js';
+import { destinationPoint } from './geo.js';
 import type { MessageRecord } from '../store/schema.js';
 import { ContactType, PATH_LEN_UNKNOWN } from '../protocol/constants.js';
 import { scenarioKey } from '../emulator/scenarios.js';
@@ -206,6 +215,43 @@ describe('stale contact selection', () => {
       'onlySentTo',
       'favNever',
     ]);
+  });
+});
+
+describe('far-away contact selection', () => {
+  const ME = { lat: 47.6062, lon: -122.3321 };
+  function view(key: string, at: { lat: number; lon: number } | null, favourite = false): ContactView {
+    return { key, favourite, record: { lat: at?.lat ?? 0, lon: at?.lon ?? 0 } } as ContactView;
+  }
+  const north = (m: number) => destinationPoint(ME, 0, m);
+
+  it('DISTANCE_PRESETS are ascending presets from 1 km to 1000 km', () => {
+    expect(DISTANCE_PRESETS[0]).toEqual({ label: '1 km', meters: 1_000 });
+    expect(DISTANCE_PRESETS.at(-1)).toEqual({ label: '1000 km', meters: 1_000_000 });
+    for (let i = 1; i < DISTANCE_PRESETS.length; i++) expect(DISTANCE_PRESETS[i]!.meters).toBeGreaterThan(DISTANCE_PRESETS[i - 1]!.meters);
+  });
+
+  it('distance is to the advertised location; unknown when either side has none (0,0 = none)', () => {
+    expect(contactDistance(view('a', north(12_000)), ME)).toBeCloseTo(12_000, 0);
+    expect(contactDistance(view('a', null), ME)).toBeUndefined();
+    expect(contactDistance(view('a', north(5)), null)).toBeUndefined();
+    expect(contactDistance(view('a', north(5)), { lat: 0, lon: 0 })).toBeUndefined();
+  });
+
+  it('selects contacts strictly farther than the distance, skipping no-location and (by default) favourites', () => {
+    const vs = [
+      view('near', north(9_000)),
+      view('far', north(11_000)),
+      view('noLoc', null),
+      view('veryFar', north(800_000)),
+      view('favFar', north(50_000), true),
+    ];
+    expect(contactsFartherThan(vs, ME, 10_000).map((v) => v.key)).toEqual(['far', 'veryFar']);
+    expect(contactsFartherThan(vs, ME, 10_000, { includeFavourites: true }).map((v) => v.key)).toEqual(['far', 'veryFar', 'favFar']);
+    expect(contactsFartherThan(vs, ME, 100_000).map((v) => v.key)).toEqual(['veryFar']);
+    // without our own position nothing is selected
+    expect(contactsFartherThan(vs, null, 10_000)).toEqual([]);
+    expect(contactsFartherThan(vs, { lat: 0, lon: 0 }, 10_000)).toEqual([]);
   });
 });
 
