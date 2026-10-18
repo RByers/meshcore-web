@@ -68,8 +68,8 @@ interface StatPacket {
   category: TrafficCategory;
   channel: string | null; // GRP_TXT / GRP_DATA: channel name when the hash matches a known channel, else `channel xx`
   source: NodeRef | null; // who originated the packet (see 1.3); null when unattributable
-  lastHop: NodeRef | null;// last forwarder (see 1.3); null when unknown
-  direct: boolean;        // path is empty (heard straight from the source)
+  lastHop: NodeRef | null;// the node this radio heard transmit it (see 1.3); null when unknown
+  direct: boolean;        // flood with an empty path (heard straight from the source)
   distanceM: number | null; // see 1.4
   airtimeMs: number | null; // see 1.5
   compression: 'smaz' | 'plain' | 'unknown' | null; // text messages only, see below
@@ -113,10 +113,15 @@ Packets do not carry a full source identity, so attribution is best effort and m
 | GRP_TXT without key, ACK, TRACE, CONTROL, MULTIPART, RAW_CUSTOM, unknown | `null` |
 | any `direction: 'out'` | self |
 
-`lastHop`: the last entry of the packet's path (`viewPacket(...).path` is ordered oldest → newest
-forwarder, see mesh-packet-format.md §1.3) resolved with `resolveHop` (repeaters / rooms
-preferred). When the path is empty the packet was heard directly: `direct = true` and `lastHop =
-source` (may be `null`). TRACE packets' path holds SNRs, not hashes: `lastHop = null`.
+`lastHop`: the node whose transmission this radio heard, so the received packet's `snr` / `rssi`
+measure the link from it to this radio. For a flood it is the last entry of the packet's path
+(`viewPacket(...).path` is ordered oldest → newest forwarder, see mesh-packet-format.md §1.3)
+resolved with `resolveHop` (repeaters / rooms preferred). When a flood's path is empty the packet
+was heard directly: `direct = true` and `lastHop = source` (may be `null`). TRACE packets' path
+holds SNRs, not hashes: `lastHop = null`. DIRECT / TRANSPORT_DIRECT packets carry the route still
+to travel and each forwarder removes itself from it, so the transmitter is not recorded:
+`lastHop = null` and `direct = false` (even with no hops left: the sender may have been the source
+or a forwarder). An unknown route type is read as a flood.
 
 ### 1.4 Distance
 
@@ -144,6 +149,12 @@ computed by hand for a couple of (SF, BW, CR, length) combinations, with the for
 summary: { packets, bytes, airtimeMs, airtimeFraction /* airtime / range span, null if unknown */, sources /* unique resolved + unresolved labels */, spanMs }
 bySource: { top: { node: NodeRef; count: number; bytes: number; airtimeMs: number }[] /* top 50, count desc */, unattributed: number, others: number /* beyond the top 50 */ }
 pathStarts / pathEnds: same shape as bySource (nodeStats), per first / last `path` entry (path order, oldest forwarder first); `unattributed` = packets with no path
+lastHops: LastHopStats   // signal per last hop (lastHopSignalStats), received packets only:
+  // { top: LastHopSignal[] /* top 50, count desc, then label */, unattributed /* received, lastHop null: TRACE, direct routes, unattributed zero-hop */, others, othersPackets }
+  // LastHopSignal = SnrSummary & { node: NodeRef; lastTs; direct /* zero hop: the node is the source */; relayed /* count − direct */ }
+  // SnrSummary = { count, snrCount /* with an SNR */, meanSnr, minSnr, maxSnr /* null when no SNR */, meanRssi /* over those with an RSSI */ }
+  // Grouped by nodeId(lastHop), so an ambiguous hop hash (resolveHop label `a3?`) is a row of its own
+  // rather than being dropped or split: it is still one radio link, just not attributable to one contact.
 timeline: { binMs: number; bins: { t: number; series: Record<string, number> }[]; series: string[] }
    // series (non-empty only, by count desc, 'Other' last): one per known channel name (GRP_TXT/GRP_DATA), 'Unknown channels', 'DMs' (TXT_MSG), 'Adverts', 'ACKs', 'Paths', 'Traces', 'Requests' (REQ/RESPONSE/ANON_REQ), 'Control', 'Other' (MULTIPART, RAW_CUSTOM, unknown). Bin size picked from the span: aim for 60–150 bins on round steps (1 min … 1 day). Expose `setBin(ms | 'auto')` too.
 utilization: {
@@ -314,8 +325,15 @@ is not shown; the inspector split is hidden). The Stats panel, top to bottom:
    the first node is the repeater nearest the source and the final one is the repeater this radio
    heard; for a direct packet they are the next and last hops still to travel. A bar filters by that
    node (chips "First in path: X" / "Last in path: X").
+10. **Signal by last hop** (`data-section="last-hops"`, `lastHops`), right after the first / final
+   path node charts: how well this radio hears each neighbour. An `mc-bar-chart` with a bar per last
+   hop (top 50 by packet count, contact links like the source chart, `a3?` rows for ambiguous
+   hashes), the bar value = mean SNR (dB; nodes whose packets carried no SNR show no value), tooltip
+   with the packet count (direct / relayed), min–max SNR, mean RSSI and last heard; footer "n
+   received packets had no last hop, m more nodes". A bar filters by that last hop (chip "Last hop:
+   X", field `lastHop`).
 
-**Drill-down** (model side in §6): clicking a source bar, a channel bar, a hop-count bar, a first / final path node bar, or a breakdown segment /
+**Drill-down** (model side in §6): clicking a source bar, a channel bar, a hop-count bar, a first / final path node bar, a last-hop signal bar, or a breakdown segment /
 legend entry (type, route, direction, category, channel, compression) adds a filter for that value; clicking the
 active value again removes it. On source bars the *bar* filters and the *label* stays the contact
 link. Charts opt in per item with a `key` (`<mc-bar-chart>` dispatches `bar-select`, keyed rows
@@ -324,7 +342,7 @@ segments and from legend `<button>`s), with `selected` marking the active value;
 key (e.g. the contact Stats tab) stay plain. The filter is **shared with the Packets tab** (§6):
 switching tabs never clears it. Drill-downs show in the shared filter area above the tabs: in its
 controls (direction, a single type, a single route) or, for the fields it has no control for
-(source, category, channel, hops, compression, path start / end), as removable chips ("Source: Alice ✕", removed with
+(source, category, channel, hops, compression, path start / end, last hop), as removable chips ("Source: Alice ✕", removed with
 `packetLog.removeFilterChip(key)`); its *Reset* clears everything, the range included. Filters
 matching nothing → "No packets match these filters." with the "Showing 0 of Y" line kept.
 Active-segment highlighting reads `stats.filters`.
@@ -371,8 +389,15 @@ interface ContactStats {
   paths: { pathKey: string; hops: readonly NodeRef[]; count: number; lastTs: number; meanSnr: number | null; share: number }[] // count desc; pathKey '' = direct
   signal: { ts: number; snr: number | null; rssi: number | null; hops: number | null; pathKey: string; id: number }[] // from, ascending
   hops: { hops: number; count: number }[]
+  lastHopOf: readonly StatPacket[]   // received packets whose lastHop.key === key, whatever their source (ascending)
+  lastHopSignal: { ts: number; snr: number | null; rssi: number | null; direct: boolean /* zero hop from this node */; id: number }[] // lastHopOf, ascending
+  lastHopSummary: SnrSummary         // { count, snrCount, meanSnr, minSnr, maxSnr, meanRssi } over lastHopOf
 }
 ```
+
+`lastHopOf` is "how well our radio hears this node": every packet whose final transmission came
+from it, its own (zero hop) and the ones it relayed. It matters most for repeaters, which rarely
+originate packets but relay many.
 
 The tab shows: stat tiles (packets from the contact, via the contact as a forwarder, distinct
 paths, share heard directly, mean SNR); *Heard over time* (`mc-line-chart`, series by category);
@@ -388,7 +413,11 @@ the "approximate positions" setting is on (a checkbox under the map, as in the p
 otherwise the segment skips them. A segment is dashed only when every packet over it had an
 estimated end or skipped a hop); *Signal over time*
 (`mc-dot-plot`: x time, y SNR (selector SNR / RSSI / Hops), colour = path (top 8 paths, rest
-Other), dot size = bytes); *Hop count* distribution. Browser test in
+Other), dot size = bytes); *Hop count* distribution; *Heard via this node (last hop)*
+(`data-section="last-hop"`, shown when `lastHopOf` is non-empty): tiles from `lastHopSummary`
+(packets, mean SNR, min / max SNR) and an SNR-over-time `mc-dot-plot` of `lastHopSignal`
+(x time, y SNR, colour = *Direct* (zero hop from this node) / *Relayed*; points without an SNR
+left out). Browser test in
 `packages/web/test/contact-stats.test.ts`: the tab appears, the paths chart lists the direct row
 and a repeated path from the emulator scenario, the timeline renders.
 
@@ -401,7 +430,7 @@ survive range changes). The stats model reads and writes it through `PacketLogMo
 (`PacketStatsDeps.filter`); `stats.filters` is a computed drill-down view of it:
 
 ```ts
-type StatsFilterField = 'source' | 'type' | 'route' | 'direction' | 'category' | 'channel' | 'hops' | 'compression' | 'pathStart' | 'pathEnd';
+type StatsFilterField = 'source' | 'type' | 'route' | 'direction' | 'category' | 'channel' | 'hops' | 'compression' | 'pathStart' | 'pathEnd' | 'lastHop';
 interface StatsFilter { field: StatsFilterField; value: string; label: string /* chip text, from the caller */ }
 filters: ReadonlySignal<readonly StatsFilter[]>
 addFilter(f) / removeFilter(field) / clearFilters()
@@ -416,10 +445,11 @@ matchesFilter(p, f) / filterKey(p, field) / filterPoints(points, filters)   // p
   category, channel → the channel name (channel packets only), hops → `String(hops)` (packets with
   unknown hops never match), compression → `'smaz'` / `'plain'` / `'unknown'` (non-text packets
   never match), pathStart / pathEnd → `nodeId` of the first / last `path` entry (packets with no
-  path never match).
+  path never match), lastHop → `nodeId(lastHop)` (sent packets and those with no last hop never
+  match; chip label "Last hop").
 - Filters AND together; at most one per field — adding one on a field that already has one
   replaces it.
-- `summary`, `bySource`, `pathStarts`, `pathEnds`, `timeline`, `utilization`, `hops` and `compression` count the filtered `points`.
+- `summary`, `bySource`, `pathStarts`, `pathEnds`, `lastHops`, `timeline`, `utilization`, `hops` and `compression` count the filtered `points`.
   `window` (and so the bins and `summary.spanMs`) comes from the range and `allPoints`, so axes
   don't move while drilling down.
 - `forContact()` reads `allPoints`: the packets page's filters don't leak into the node page's Stats tab.

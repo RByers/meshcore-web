@@ -46,6 +46,9 @@ import {
   nodeStats,
   filterKey,
   filterPoints,
+  lastHopSignalStats,
+  snrSummary,
+  TOP_SOURCES,
   type NodeRef,
   MAP_PACKET_LIMIT,
   packetRoutes,
@@ -1038,5 +1041,122 @@ describe('path start / end nodes', () => {
     expect(pts.map((p) => filterKey(p, 'pathStart'))).toEqual([null, hill.key, hill.key, '#55']);
     expect(pts.map((p) => filterKey(p, 'pathEnd'))).toEqual([null, hill.key, hill.key, hill.key]);
     expect(filterPoints(pts, [{ field: 'pathStart', value: '#55', label: '55' }]).map((p) => p.id)).toEqual([3]);
+  });
+});
+
+describe('PacketStatsModel — signal by last hop (§1.6, §5)', () => {
+  function noSignal(bytes: Uint8Array, ts: number): PacketInput {
+    return { direction: 'rx', bytes, ts, source: 'logRxData' };
+  }
+  async function lastHopHarness(): Promise<Harness> {
+    return harness([
+      // Hilltop heard zero-hop (its own advert), then relaying twice (once without SNR / RSSI)
+      rx(advert(key32(0x7e), { nodeType: 2, name: 'Hilltop' }), T, { snr: 10, rssi: -80 }),
+      rx(datagram(PayloadType.TXT_MSG, 0xb2, 0x01, [0x7e]), T + 1000, { snr: 4, rssi: -100 }),
+      noSignal(ack([0x22, 0x7e]), T + 2000),
+      // ambiguous c3: heard zero-hop as the source, and as the last forwarder → one 'c3?' row
+      rx(datagram(PayloadType.TXT_MSG, 0xc3, 0x01), T + 3000, { snr: -2 }),
+      rx(datagram(PayloadType.TXT_MSG, 0xa1, 0x01, [0xc3]), T + 4000, { snr: -6 }),
+      // no last hop: unattributed zero-hop ACK, TRACE, DIRECT routes (forwarders remove themselves)
+      rx(ack(), T + 5000),
+      rx(buildTracePayload({ tag: 1, authCode: 2, hashes: Uint8Array.of(0x7e) }), T + 6000, { format: 'payload', source: 'traceData', payloadType: PayloadType.TRACE, routeType: RouteType.DIRECT, pathLen: 1 }),
+      rx(datagram(PayloadType.TXT_MSG, 0xa1, 0x01, [0x7e], RouteType.DIRECT), T + 7000),
+      rx(datagram(PayloadType.PATH, 0x7e, 0x01, [], RouteType.DIRECT), T + 7500),
+      // sent (zero-hop flood → last hop = this radio): not counted
+      { direction: 'tx', bytes: await grpTxt(PSK, 'Me', 'out'), ts: T + 8000 },
+    ]);
+  }
+
+  it('summarises SNR / RSSI per last hop of the received packets', async () => {
+    const { model } = await lastHopHarness();
+    const pts = model.points.value;
+    expect(byTs(pts, T + 7000)).toMatchObject({ lastHop: null, direct: false });
+    expect(byTs(pts, T + 7500)).toMatchObject({ lastHop: null, direct: false });
+    expect(byTs(pts, T + 7500).source?.label).toBe('Hilltop');
+    expect(byTs(pts, T + 8000).lastHop?.self).toBe(true);
+
+    const s = model.lastHops.value;
+    expect(s.top.map((r) => r.node.label)).toEqual(['Hilltop', 'c3?']);
+    expect(s.top[0]).toEqual({
+      node: expect.objectContaining({ key: HILL.key, label: 'Hilltop', resolved: true }),
+      count: 3,
+      snrCount: 2,
+      meanSnr: 7,
+      minSnr: 4,
+      maxSnr: 10,
+      meanRssi: -90,
+      lastTs: T + 2000,
+      direct: 1,
+      relayed: 2,
+    });
+    expect(s.top[1]).toMatchObject({ node: { hash: 'c3', label: 'c3?', resolved: false }, count: 2, snrCount: 2, meanSnr: -4, minSnr: -6, maxSnr: -2, direct: 1, relayed: 1, lastTs: T + 4000 });
+    expect(s).toMatchObject({ unattributed: 4, others: 0, othersPackets: 0 });
+  });
+
+  it('drills down by last hop (received packets only)', async () => {
+    const { model } = await lastHopHarness();
+    const pts = model.allPoints.value;
+    expect(filterKey(byTs(pts, T + 8000), 'lastHop')).toBeNull();
+    expect(filterKey(byTs(pts, T + 3000), 'lastHop')).toBe('#c3');
+    await model.addFilter({ field: 'lastHop', value: HILL.key, label: 'Hilltop' });
+    expect(model.filters.value).toEqual([{ field: 'lastHop', value: HILL.key, label: 'Hilltop' }]);
+    expect(model.points.value.map((p) => p.ts)).toEqual([T, T + 1000, T + 2000]);
+    expect(model.lastHops.value.top.map((r) => [r.node.label, r.count])).toEqual([['Hilltop', 3]]);
+    await model.removeFilter('lastHop');
+    expect(model.points.value).toHaveLength(10);
+  });
+
+  it('forContact: the packets heard with the contact as last hop', async () => {
+    const { model } = await lastHopHarness();
+    const hill = model.forContact(HILL.key).value;
+    expect(hill.lastHopOf.map((p) => p.ts)).toEqual([T, T + 1000, T + 2000]);
+    expect(hill.lastHopSignal).toEqual([
+      { ts: T, snr: 10, rssi: -80, direct: true, id: hill.lastHopOf[0]!.id },
+      { ts: T + 1000, snr: 4, rssi: -100, direct: false, id: hill.lastHopOf[1]!.id },
+      { ts: T + 2000, snr: null, rssi: null, direct: false, id: hill.lastHopOf[2]!.id },
+    ]);
+    expect(hill.lastHopSummary).toEqual({ count: 3, snrCount: 2, meanSnr: 7, minSnr: 4, maxSnr: 10, meanRssi: -90 });
+    // Alice is never the last hop (her DIRECT-routed DM has none)
+    const alice = model.forContact(ALICE.key).value;
+    expect(alice.lastHopOf).toEqual([]);
+    expect(alice.lastHopSummary).toEqual({ count: 0, snrCount: 0, meanSnr: null, minSnr: null, maxSnr: null, meanRssi: null });
+  });
+
+  it('keeps the top last hops and counts the rest', () => {
+    const base: StatPacket = {
+      id: 0,
+      ts: 0,
+      direction: 'in',
+      bytes: 10,
+      payloadType: PayloadType.ACK,
+      typeName: 'ACK',
+      routeType: RouteType.FLOOD,
+      routeName: 'FLOOD',
+      hops: 1,
+      snr: 1,
+      rssi: null,
+      category: 'ack',
+      channel: null,
+      source: null,
+      lastHop: null,
+      direct: false,
+      path: [],
+      pathKey: '',
+      destHash: null,
+      distanceM: null,
+      airtimeMs: null,
+      compression: null,
+      textBytes: null,
+    };
+    const pts: StatPacket[] = Array.from({ length: TOP_SOURCES + 2 }, (_, i) => {
+      const hash = i.toString(16).padStart(2, '0');
+      return { ...base, id: i, lastHop: { hash, label: hash, resolved: false } };
+    });
+    pts.push({ ...pts[0]!, id: 99, snr: null });
+    const s = lastHopSignalStats(pts);
+    expect(s.top).toHaveLength(TOP_SOURCES);
+    expect(s.top[0]).toMatchObject({ node: { hash: '00' }, count: 2, snrCount: 1, meanSnr: 1, meanRssi: null, relayed: 2, direct: 0 });
+    expect(s).toMatchObject({ unattributed: 0, others: 2, othersPackets: 2 });
+    expect(snrSummary([])).toEqual({ count: 0, snrCount: 0, meanSnr: null, minSnr: null, maxSnr: null, meanRssi: null });
   });
 });

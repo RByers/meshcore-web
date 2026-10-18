@@ -104,9 +104,13 @@ export interface StatPacket {
   channel: string | null;
   /** Who originated the packet (best effort, docs/packet-stats.md §1.3); null when unattributable. */
   source: NodeRef | null;
-  /** The last forwarder; the source when heard directly; null when unknown. */
+  /**
+   * The node whose transmission this radio heard (docs/packet-stats.md §1.3): a flood's last path
+   * entry, the source when heard zero-hop; null when unknown (TRACE, and DIRECT / TRANSPORT_DIRECT
+   * routes, whose forwarders remove themselves from the path).
+   */
   lastHop: NodeRef | null;
-  /** The path is empty (heard straight from the source). */
+  /** Flood-routed with an empty path: heard straight from the source. */
   direct: boolean;
   /** Every path entry resolved (forwarders preferred), oldest forwarder first; [] when direct / TRACE / unknown. */
   path: readonly NodeRef[];
@@ -241,14 +245,15 @@ export interface CompressionStats extends CompressionCounts {
 export type BinSetting = number | 'auto';
 
 /** A packet field the stats can be drilled down by (docs/packet-stats.md §6). */
-export type StatsFilterField = 'source' | 'type' | 'route' | 'direction' | 'category' | 'channel' | 'hops' | 'compression' | 'pathStart' | 'pathEnd';
+export type StatsFilterField = 'source' | 'type' | 'route' | 'direction' | 'category' | 'channel' | 'hops' | 'compression' | 'pathStart' | 'pathEnd' | 'lastHop';
 
 /**
  * One drill-down filter. `value` is the key the aggregations produce for the field: source →
  * `nodeId(source)` ('' = unattributed), type → typeName, route → routeName ('unknown' when
  * not known), direction → 'in' / 'out', category, channel → channel name (channel packets only),
  * hops → `String(hops)`, compression → 'smaz' / 'plain' / 'unknown' (text messages only),
- * pathStart / pathEnd → `nodeId` of the first / last path entry (packets with a path only).
+ * pathStart / pathEnd → `nodeId` of the first / last path entry (packets with a path only),
+ * lastHop → `nodeId` of {@link StatPacket.lastHop} (received packets with a last hop only).
  * `label` is the caller's display text (chips).
  */
 export interface StatsFilter {
@@ -269,6 +274,7 @@ export const STATS_FIELD_LABEL: Readonly<Record<StatsFilterField, string>> = {
   compression: 'Compression',
   pathStart: 'First in path',
   pathEnd: 'Last in path',
+  lastHop: 'Last hop',
 };
 
 const DIRECTION_FILTER_LABEL: Readonly<Record<StatDirection, string>> = { in: 'Received', out: 'Sent' };
@@ -368,6 +374,8 @@ export function filterKey(p: StatPacket, field: StatsFilterField): string | null
       const last = p.path[p.path.length - 1];
       return last ? nodeId(last) : null;
     }
+    case 'lastHop':
+      return p.direction === 'in' && p.lastHop ? nodeId(p.lastHop) : null;
   }
 }
 
@@ -393,6 +401,53 @@ export interface ContactPathStats {
   share: number;
 }
 
+/** SNR / RSSI summary of a set of received packets; the means / extremes are null when none had a value. */
+export interface SnrSummary {
+  /** Packets. */
+  count: number;
+  /** Of `count`, with an SNR. */
+  snrCount: number;
+  meanSnr: number | null;
+  minSnr: number | null;
+  maxSnr: number | null;
+  /** Mean over the packets with an RSSI. */
+  meanRssi: number | null;
+}
+
+/** One received packet heard from a last hop ({@link ContactStats.lastHopSignal}). */
+export interface LastHopSignalPoint {
+  ts: number;
+  snr: number | null;
+  rssi: number | null;
+  /** Heard straight from its source (zero-hop flood; {@link StatPacket.direct}), else relayed. */
+  direct: boolean;
+  /** PacketRecord.id. */
+  id: number;
+}
+
+/** How this radio hears one last-hop node ({@link lastHopSignalStats}). */
+export interface LastHopSignal extends SnrSummary {
+  node: NodeRef;
+  /** ts of the newest packet. */
+  lastTs: number;
+  /** Of `count`, heard straight from the source (zero hop: the node is the source). */
+  direct: number;
+  /** Of `count`, relayed (the node is the last forwarder). */
+  relayed: number;
+}
+
+/** Received packets per last hop ({@link PacketStatsModel.lastHops}). */
+export interface LastHopStats {
+  /** Top {@link TOP_SOURCES} last hops, count desc. */
+  top: LastHopSignal[];
+  /** Received packets without a last hop (TRACE, direct routes, unattributed zero-hop). */
+  unattributed: number;
+  /** Last hops beyond the top list. */
+  others: number;
+  /** Packets from those last hops. */
+  othersPackets: number;
+}
+
 /** Per-contact statistics for the contact page's Stats tab (docs/packet-stats.md §5). */
 export interface ContactStats {
   /** Packets whose source is the contact. */
@@ -406,6 +461,15 @@ export interface ContactStats {
   /** `from`, ascending ts. */
   signal: { ts: number; snr: number | null; rssi: number | null; hops: number | null; pathKey: string; id: number }[];
   hops: HopCount[];
+  /**
+   * Received packets whose last hop ({@link StatPacket.lastHop}) is the contact, whatever their
+   * source: how well this radio hears the contact (relayed traffic for a repeater). Ascending ts.
+   */
+  lastHopOf: readonly StatPacket[];
+  /** `lastHopOf`, ascending ts. */
+  lastHopSignal: LastHopSignalPoint[];
+  /** SNR / RSSI over `lastHopOf`. */
+  lastHopSummary: SnrSummary;
 }
 
 export const SERIES_DMS = 'DMs';
@@ -849,10 +913,13 @@ function toStat(raw: RawPoint, R: Resolver, channels: Channels, radio: LoraParam
   const source = src?.ref ?? null;
 
   const isTrace = payloadType === PayloadType.TRACE;
-  const direct = !isTrace && view.hops === 0;
+  // a DIRECT path is the route still to travel and each forwarder removes itself from it
+  // (mesh-packet-format.md §1.3), so the transmitter this radio heard is not recorded
+  const directRoute = isDirectRoute(rec.routeType);
+  const direct = !isTrace && !directRoute && view.hops === 0;
   const path = isTrace ? [] : view.path.map((h) => R.hop(h, true).ref);
   const lastEntry = path[path.length - 1];
-  const lastHop = isTrace ? null : (lastEntry ?? (direct ? source : null));
+  const lastHop = isTrace || directRoute ? null : (lastEntry ?? (direct ? source : null));
 
   let distanceM: number | null = null;
   const self = R.self;
@@ -1053,6 +1120,80 @@ export function nodeStats(pts: readonly StatPacket[], pick: (p: StatPacket) => N
   return { top: all.slice(0, TOP_SOURCES), unattributed, others: rest.length, othersPackets: rest.reduce((n, s) => n + s.count, 0) };
 }
 
+/** Accumulates an {@link SnrSummary}. */
+class SnrAcc {
+  count = 0;
+  snrN = 0;
+  snrSum = 0;
+  min = Infinity;
+  max = -Infinity;
+  rssiN = 0;
+  rssiSum = 0;
+
+  add(p: Pick<StatPacket, 'snr' | 'rssi'>): void {
+    this.count++;
+    if (p.snr !== null) {
+      this.snrN++;
+      this.snrSum += p.snr;
+      this.min = Math.min(this.min, p.snr);
+      this.max = Math.max(this.max, p.snr);
+    }
+    if (p.rssi !== null) {
+      this.rssiN++;
+      this.rssiSum += p.rssi;
+    }
+  }
+
+  summary(): SnrSummary {
+    const any = this.snrN > 0;
+    return {
+      count: this.count,
+      snrCount: this.snrN,
+      meanSnr: any ? this.snrSum / this.snrN : null,
+      minSnr: any ? this.min : null,
+      maxSnr: any ? this.max : null,
+      meanRssi: this.rssiN ? this.rssiSum / this.rssiN : null,
+    };
+  }
+}
+
+/** SNR / RSSI summary of `pts` (every packet counts; the means skip missing values). */
+export function snrSummary(pts: readonly Pick<StatPacket, 'snr' | 'rssi'>[]): SnrSummary {
+  const acc = new SnrAcc();
+  for (const p of pts) acc.add(p);
+  return acc.summary();
+}
+
+/**
+ * Signal per last hop over the received packets of `pts` (docs/packet-stats.md §1.6): the radio's
+ * SNR / RSSI measure the link from the last hop to this radio. Grouped by `nodeId`, so an
+ * ambiguous hop hash is its own row (`a3?`). Sent packets are skipped; received ones without a
+ * last hop are `unattributed`. By count desc, then label; top {@link TOP_SOURCES}.
+ */
+export function lastHopSignalStats(pts: readonly StatPacket[]): LastHopStats {
+  const m = new Map<string, { node: NodeRef; acc: SnrAcc; lastTs: number; direct: number }>();
+  let unattributed = 0;
+  for (const p of pts) {
+    if (p.direction !== 'in') continue;
+    const node = p.lastHop;
+    if (!node) {
+      unattributed++;
+      continue;
+    }
+    const id = nodeId(node);
+    let e = m.get(id);
+    if (!e) m.set(id, (e = { node, acc: new SnrAcc(), lastTs: p.ts, direct: 0 }));
+    e.acc.add(p);
+    e.lastTs = Math.max(e.lastTs, p.ts);
+    if (p.direct) e.direct++;
+  }
+  const all = [...m.values()]
+    .map((e): LastHopSignal => ({ node: e.node, ...e.acc.summary(), lastTs: e.lastTs, direct: e.direct, relayed: e.acc.count - e.direct }))
+    .sort((a, b) => b.count - a.count || a.node.label.localeCompare(b.node.label));
+  const rest = all.slice(TOP_SOURCES);
+  return { top: all.slice(0, TOP_SOURCES), unattributed, others: rest.length, othersPackets: rest.reduce((n, s) => n + s.count, 0) };
+}
+
 function hopCounts(pts: readonly StatPacket[]): HopCount[] {
   const m = new Map<number, number>();
   for (const p of pts) if (p.hops !== null) m.set(p.hops, (m.get(p.hops) ?? 0) + 1);
@@ -1137,6 +1278,8 @@ export class PacketStatsModel extends StoreBoundModel implements DrillSource {
   readonly pathStarts: ReadonlySignal<SourceStats>;
   /** Packets per last path entry (for a received flood, the forwarder this radio heard); no path → `unattributed`. */
   readonly pathEnds: ReadonlySignal<SourceStats>;
+  /** Signal (SNR / RSSI) of the received `points` per last hop ({@link lastHopSignalStats}). */
+  readonly lastHops: ReadonlySignal<LastHopStats>;
   readonly timeline: ReadonlySignal<Timeline>;
   readonly utilization: ReadonlySignal<Utilization>;
   readonly hops: ReadonlySignal<HopCount[]>;
@@ -1253,6 +1396,7 @@ export class PacketStatsModel extends StoreBoundModel implements DrillSource {
     this.bySource = computed(() => nodeStats(this.points.value, (p) => p.source));
     this.pathStarts = computed(() => nodeStats(this.points.value, (p) => p.path[0]));
     this.pathEnds = computed(() => nodeStats(this.points.value, (p) => p.path[p.path.length - 1]));
+    this.lastHops = computed(() => lastHopSignalStats(this.points.value));
 
     const binning = (this.#binning = computed((): Binning | null => {
       const w = this.window.value;
@@ -1312,9 +1456,11 @@ export class PacketStatsModel extends StoreBoundModel implements DrillSource {
   #contactStatsOf(key: string): ContactStats {
     const from: StatPacket[] = [];
     const via: StatPacket[] = [];
+    const lastHopOf: StatPacket[] = [];
     for (const p of this.allPoints.value) {
       if (p.source?.key === key) from.push(p);
       else if (p.path.some((n) => n.key === key)) via.push(p);
+      if (p.direction === 'in' && p.lastHop?.key === key) lastHopOf.push(p);
     }
     const byPath = new Map<string, { pathKey: string; hops: readonly NodeRef[]; count: number; lastTs: number; snrSum: number; snrN: number }>();
     for (const p of from) {
@@ -1340,6 +1486,9 @@ export class PacketStatsModel extends StoreBoundModel implements DrillSource {
       paths,
       signal: from.map((p) => ({ ts: p.ts, snr: p.snr, rssi: p.rssi, hops: p.hops, pathKey: p.pathKey, id: p.id })),
       hops: hopCounts(from),
+      lastHopOf,
+      lastHopSignal: lastHopOf.map((p) => ({ ts: p.ts, snr: p.snr, rssi: p.rssi, direct: p.direct, id: p.id })),
+      lastHopSummary: snrSummary(lastHopOf),
     };
   }
 
