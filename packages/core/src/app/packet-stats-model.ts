@@ -147,10 +147,11 @@ export interface SourceCount {
   airtimeMs: number;
 }
 
+/** Packets per node (sources, or the first / last node of the path): see {@link nodeStats}. */
 export interface SourceStats {
-  /** Top {@link TOP_SOURCES} sources, count desc. */
+  /** Top {@link TOP_SOURCES} nodes, count desc. */
   top: SourceCount[];
-  /** Packets without a source. */
+  /** Packets without a node (no source; for path ends, no path). */
   unattributed: number;
   /** Nodes beyond the top list. */
   others: number;
@@ -240,13 +241,14 @@ export interface CompressionStats extends CompressionCounts {
 export type BinSetting = number | 'auto';
 
 /** A packet field the stats can be drilled down by (docs/packet-stats.md §6). */
-export type StatsFilterField = 'source' | 'type' | 'route' | 'direction' | 'category' | 'channel' | 'hops' | 'compression';
+export type StatsFilterField = 'source' | 'type' | 'route' | 'direction' | 'category' | 'channel' | 'hops' | 'compression' | 'pathStart' | 'pathEnd';
 
 /**
  * One drill-down filter. `value` is the key the aggregations produce for the field: source →
  * `nodeId(source)` ('' = unattributed), type → typeName, route → routeName ('unknown' when
  * not known), direction → 'in' / 'out', category, channel → channel name (channel packets only),
- * hops → `String(hops)`, compression → 'smaz' / 'plain' / 'unknown' (text messages only).
+ * hops → `String(hops)`, compression → 'smaz' / 'plain' / 'unknown' (text messages only),
+ * pathStart / pathEnd → `nodeId` of the first / last path entry (packets with a path only).
  * `label` is the caller's display text (chips).
  */
 export interface StatsFilter {
@@ -265,6 +267,8 @@ export const STATS_FIELD_LABEL: Readonly<Record<StatsFilterField, string>> = {
   channel: 'Channel',
   hops: 'Hops',
   compression: 'Compression',
+  pathStart: 'First in path',
+  pathEnd: 'Last in path',
 };
 
 const DIRECTION_FILTER_LABEL: Readonly<Record<StatDirection, string>> = { in: 'Received', out: 'Sent' };
@@ -358,6 +362,12 @@ export function filterKey(p: StatPacket, field: StatsFilterField): string | null
       return p.hops === null ? null : String(p.hops);
     case 'compression':
       return p.compression;
+    case 'pathStart':
+      return p.path[0] ? nodeId(p.path[0]) : null;
+    case 'pathEnd': {
+      const last = p.path[p.path.length - 1];
+      return last ? nodeId(last) : null;
+    }
   }
 }
 
@@ -1018,6 +1028,31 @@ export function channelMessageCounts(pts: readonly StatPacket[]): ChannelMessage
   return [...m.values()].sort((a, b) => b.count - a.count || a.channel.localeCompare(b.channel));
 }
 
+/**
+ * Packets per node `pick` attributes them to (by count desc, then bytes, then label): the top
+ * {@link TOP_SOURCES}, the packets with no node (`pick` → null) and the nodes beyond the top.
+ */
+export function nodeStats(pts: readonly StatPacket[], pick: (p: StatPacket) => NodeRef | null | undefined): SourceStats {
+  const m = new Map<string, SourceCount>();
+  let unattributed = 0;
+  for (const p of pts) {
+    const node = pick(p);
+    if (!node) {
+      unattributed++;
+      continue;
+    }
+    const id = nodeId(node);
+    let s = m.get(id);
+    if (!s) m.set(id, (s = { node, count: 0, bytes: 0, airtimeMs: 0 }));
+    s.count++;
+    s.bytes += p.bytes;
+    s.airtimeMs += p.airtimeMs ?? 0;
+  }
+  const all = [...m.values()].sort((a, b) => b.count - a.count || b.bytes - a.bytes || a.node.label.localeCompare(b.node.label));
+  const rest = all.slice(TOP_SOURCES);
+  return { top: all.slice(0, TOP_SOURCES), unattributed, others: rest.length, othersPackets: rest.reduce((n, s) => n + s.count, 0) };
+}
+
 function hopCounts(pts: readonly StatPacket[]): HopCount[] {
   const m = new Map<number, number>();
   for (const p of pts) if (p.hops !== null) m.set(p.hops, (m.get(p.hops) ?? 0) + 1);
@@ -1098,6 +1133,10 @@ export class PacketStatsModel extends StoreBoundModel implements DrillSource {
   readonly window: ReadonlySignal<{ from: number; to: number } | null>;
   readonly summary: ReadonlySignal<StatsSummary>;
   readonly bySource: ReadonlySignal<SourceStats>;
+  /** Packets per first path entry (the forwarder nearest the start of the path); no path → `unattributed`. */
+  readonly pathStarts: ReadonlySignal<SourceStats>;
+  /** Packets per last path entry (for a received flood, the forwarder this radio heard); no path → `unattributed`. */
+  readonly pathEnds: ReadonlySignal<SourceStats>;
   readonly timeline: ReadonlySignal<Timeline>;
   readonly utilization: ReadonlySignal<Utilization>;
   readonly hops: ReadonlySignal<HopCount[]>;
@@ -1211,25 +1250,9 @@ export class PacketStatsModel extends StoreBoundModel implements DrillSource {
       };
     });
 
-    this.bySource = computed(() => {
-      const m = new Map<string, SourceCount>();
-      let unattributed = 0;
-      for (const p of this.points.value) {
-        if (!p.source) {
-          unattributed++;
-          continue;
-        }
-        const id = nodeId(p.source);
-        let s = m.get(id);
-        if (!s) m.set(id, (s = { node: p.source, count: 0, bytes: 0, airtimeMs: 0 }));
-        s.count++;
-        s.bytes += p.bytes;
-        s.airtimeMs += p.airtimeMs ?? 0;
-      }
-      const all = [...m.values()].sort((a, b) => b.count - a.count || b.bytes - a.bytes || a.node.label.localeCompare(b.node.label));
-      const rest = all.slice(TOP_SOURCES);
-      return { top: all.slice(0, TOP_SOURCES), unattributed, others: rest.length, othersPackets: rest.reduce((n, s) => n + s.count, 0) };
-    });
+    this.bySource = computed(() => nodeStats(this.points.value, (p) => p.source));
+    this.pathStarts = computed(() => nodeStats(this.points.value, (p) => p.path[0]));
+    this.pathEnds = computed(() => nodeStats(this.points.value, (p) => p.path[p.path.length - 1]));
 
     const binning = (this.#binning = computed((): Binning | null => {
       const w = this.window.value;

@@ -1,12 +1,12 @@
 /**
  * `<mc-packet-stats>`: the Stats tab of `/packets` (docs/packet-stats.md §3). Renders the core
- * `PacketStatsModel` (`app.packetStats`) as tiles and charts: a "Packet paths" map (on demand: each
- * hop's line as thick as the packets that crossed it, each node's dot sized by use), packets per source node, packets
- * over time (dot plot with y / colour selectors), packet rate, network utilisation, text compression and the hop
- * count distribution. The bin size lives in the model (`<mc-stats-range parts="bin">`); only
+ * `PacketStatsModel` (`app.packetStats`) as tiles and charts: packets per source node, packets
+ * over time (dot plot with y / colour selectors), packet rate, network utilisation, text compression, the hop
+ * count distribution, then the paths: a "Packet paths" map (on demand: each hop's line as thick as the packets
+ * that crossed it, each node's dot sized by use) and the most common first and final nodes in the path. The bin size lives in the model (`<mc-stats-range parts="bin">`); only
  * the chart selectors are local state. Everything here maps model output to chart props.
  *
- * Drill-down (§6): clicking a source bar, hop-count bar or breakdown segment adds a model filter
+ * Drill-down (§6): clicking a source bar, first / final path node bar, hop-count bar or breakdown segment adds a model filter
  * for that value (clicking the active one again removes it). The filter, date range included, is
  * shared with the Packets tab (owned by the packet log) and edited in the filter area above the
  * tabs (`<mc-packet-filters>`); here a "Showing X of Y packets" line notes when it narrows the range.
@@ -193,8 +193,17 @@ export function sourceItems(s: SourceStats, active?: string): BarItem[] {
 
 /** "n packets could not be attributed, m more nodes" (empty when both are 0). */
 export function sourceFooter(s: SourceStats): string {
+  return nodeFooter(s, (n) => `${n} ${n === 1 ? 'packet' : 'packets'} could not be attributed`);
+}
+
+/** "n packets had no path, m more nodes" for the first / last path node charts (empty when both are 0). */
+export function pathNodeFooter(s: SourceStats): string {
+  return nodeFooter(s, (n) => `${n} ${n === 1 ? 'packet' : 'packets'} had no path`);
+}
+
+function nodeFooter(s: SourceStats, none: (n: number) => string): string {
   const parts: string[] = [];
-  if (s.unattributed > 0) parts.push(`${s.unattributed} ${s.unattributed === 1 ? 'packet' : 'packets'} could not be attributed`);
+  if (s.unattributed > 0) parts.push(none(s.unattributed));
   if (s.others > 0) parts.push(`${s.others} more ${s.others === 1 ? 'node' : 'nodes'} (${s.othersPackets} packets)`);
   return parts.join(', ');
 }
@@ -541,6 +550,26 @@ export class McPacketStats extends AppElement {
     this.#toggle('source', e.detail.key, node?.label ?? e.detail.key);
   };
 
+  #onPathStart = (e: CustomEvent<BarSelectDetail>): void => {
+    const node = this.app.packetStats.pathStarts.value.top.find((s) => nodeId(s.node) === e.detail.key)?.node;
+    this.#toggle('pathStart', e.detail.key, node?.label ?? e.detail.key);
+  };
+
+  #onPathEnd = (e: CustomEvent<BarSelectDetail>): void => {
+    const node = this.app.packetStats.pathEnds.value.top.find((s) => nodeId(s.node) === e.detail.key)?.node;
+    this.#toggle('pathEnd', e.detail.key, node?.label ?? e.detail.key);
+  };
+
+  /** A bar chart of packets per path node (first or last entry), with its footer line. */
+  #pathNodes(id: string, title: string, s: SourceStats, active: string | undefined, onSelect: (e: CustomEvent<BarSelectDetail>) => void): TemplateResult {
+    const footer = pathNodeFooter(s);
+    return html`<section class="card" data-section=${id}>
+      <h3>${title}</h3>
+      <mc-bar-chart class="sources" .items=${sourceItems(s, active)} empty-text="No packets with a path in the shown packets." @bar-select=${onSelect}></mc-bar-chart>
+      ${footer ? html`<p class="note muted" data-field=${`${id}-footer`}>${footer}</p>` : nothing}
+    </section>`;
+  }
+
   #onChannel = (e: CustomEvent<BarSelectDetail>): void => {
     this.#toggle('channel', e.detail.key, e.detail.key);
   };
@@ -638,8 +667,6 @@ export class McPacketStats extends AppElement {
         <mc-stat-tile data-tile="sources" label="Unique sources" .value=${s.sources}></mc-stat-tile>
         <mc-stat-tile data-tile="span" label="Span" .value=${formatDuration(s.spanMs)}></mc-stat-tile>
       </div>
-
-      ${this.#pathsCard(stats.routes.value)}
 
       <section class="card" data-section="sources">
         <h3>Packets per source node</h3>
@@ -769,7 +796,11 @@ export class McPacketStats extends AppElement {
       <section class="card" data-section="hops">
         <h3>Hop count</h3>
         <mc-bar-chart .items=${hopItems(stats.hops.value, active('hops'))} @bar-select=${this.#onHops}></mc-bar-chart>
-      </section>`;
+      </section>
+
+      ${this.#pathsCard(stats.routes.value)}
+      ${this.#pathNodes('path-starts', 'Most common first nodes in path', stats.pathStarts.value, active('pathStart'), this.#onPathStart)}
+      ${this.#pathNodes('path-ends', 'Most common final nodes in path', stats.pathEnds.value, active('pathEnd'), this.#onPathEnd)}`;
   }
 }
 

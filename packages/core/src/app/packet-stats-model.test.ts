@@ -43,6 +43,10 @@ import {
   matchesFilter,
   nodeEndpoint,
   nodeId,
+  nodeStats,
+  filterKey,
+  filterPoints,
+  type NodeRef,
   MAP_PACKET_LIMIT,
   packetRoutes,
   recentPacketRoutes,
@@ -984,5 +988,55 @@ describe('timelineSeriesDescription', () => {
     ];
     for (const [key, types] of fixed) for (const t of types) expect(timelineSeriesDescription(key), key).toContain(t);
     expect(timelineSeriesDescription('Public')).toBe('GRP_TXT and GRP_DATA: channel messages and data on Public.');
+  });
+});
+
+describe('path start / end nodes', () => {
+  const node = (hash: string, key?: string): NodeRef => ({ hash, label: key ? `N${hash}` : hash, resolved: !!key, ...(key ? { key } : {}) });
+  const hill = node('aa', 'aa'.repeat(32));
+  const relay = node('55');
+  const base: StatPacket = {
+    id: 0,
+    ts: 0,
+    direction: 'in',
+    bytes: 10,
+    payloadType: PayloadType.ADVERT,
+    typeName: 'ADVERT',
+    routeType: RouteType.FLOOD,
+    routeName: 'FLOOD',
+    hops: 0,
+    snr: null,
+    rssi: null,
+    category: 'advert',
+    channel: null,
+    source: null,
+    lastHop: null,
+    direct: true,
+    path: [],
+    pathKey: '',
+    destHash: null,
+    distanceM: null,
+    airtimeMs: null,
+    compression: null,
+    textBytes: null,
+  };
+  const pts: StatPacket[] = [base, { ...base, id: 1, path: [hill] }, { ...base, id: 2, path: [hill] }, { ...base, id: 3, path: [relay, hill], bytes: 20 }];
+
+  it('counts packets per first and last path entry; packets without a path are unattributed', () => {
+    const first = nodeStats(pts, (p) => p.path[0]);
+    expect(first.top.map((s) => [s.node.label, s.count])).toEqual([
+      ['Naa', 2],
+      ['55', 1],
+    ]);
+    expect(first.unattributed).toBe(1);
+    const last = nodeStats(pts, (p) => p.path[p.path.length - 1]);
+    expect(last.top.map((s) => [s.node.label, s.count, s.bytes])).toEqual([['Naa', 3, 40]]);
+    expect(last.unattributed).toBe(1);
+  });
+
+  it('filters by the first / last path entry', () => {
+    expect(pts.map((p) => filterKey(p, 'pathStart'))).toEqual([null, hill.key, hill.key, '#55']);
+    expect(pts.map((p) => filterKey(p, 'pathEnd'))).toEqual([null, hill.key, hill.key, hill.key]);
+    expect(filterPoints(pts, [{ field: 'pathStart', value: '#55', label: '55' }]).map((p) => p.id)).toEqual([3]);
   });
 });

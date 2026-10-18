@@ -612,4 +612,30 @@ describe('/packets Stats packet paths map', () => {
     expect(card.querySelector('[data-field="paths-summary"]')).not.toBeNull();
     expect(button.getAttribute('aria-pressed')).toBe('false');
   });
+
+  it('sits below hop count, followed by charts of the most common first and final path nodes; a bar filters by it', async () => {
+    const { t, el, hill } = await openWithPaths();
+    const order = [...el.shadowRoot!.querySelectorAll('[data-section]')].map((s) => s.getAttribute('data-section'));
+    expect(order.slice(-4)).toEqual(['hops', 'paths', 'path-starts', 'path-ends']);
+    expect(el.shadowRoot!.querySelector('[data-section="path-starts"] h3')!.textContent).toBe('Most common first nodes in path');
+    expect(el.shadowRoot!.querySelector('[data-section="path-ends"] h3')!.textContent).toBe('Most common final nodes in path');
+
+    const bars = (section: string): [string, string][] =>
+      inChart(el, section, 'mc-bar-chart', 'rect[role="button"]').map((r) => [r.getAttribute('data-key')!, r.getAttribute('aria-label')!.split(': ').pop()!]);
+    // Alice ×2 and Bob via Hilltop, Alice once via 55 then Hilltop; the direct advert has no path
+    expect(bars('path-starts')).toEqual([
+      [hill, '3'],
+      ['#55', '1'],
+    ]);
+    expect(bars('path-ends')).toEqual([[hill, '4']]);
+    expect(el.shadowRoot!.querySelector('[data-field="path-starts-footer"]')!.textContent).toBe('1 packet had no path');
+
+    inChart(el, 'path-starts', 'mc-bar-chart', 'rect[data-key="#55"]')[0]!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await t.until(() => chips(t).length > 0, 3000, 'path start chip');
+    await settle(t, el);
+    expect(t.app.packetStats.filters.value).toEqual([expect.objectContaining({ field: 'pathStart', value: '#55' })]);
+    expect(chips(t)[0]).toMatch(/^First in path: /);
+    expect(t.app.packetStats.points.value.map((p) => p.path.length)).toEqual([2]);
+    expect(bars('path-ends')).toEqual([[hill, '1']]);
+  });
 });

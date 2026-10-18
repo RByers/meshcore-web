@@ -143,6 +143,7 @@ computed by hand for a couple of (SF, BW, CR, length) combinations, with the for
 ```ts
 summary: { packets, bytes, airtimeMs, airtimeFraction /* airtime / range span, null if unknown */, sources /* unique resolved + unresolved labels */, spanMs }
 bySource: { top: { node: NodeRef; count: number; bytes: number; airtimeMs: number }[] /* top 50, count desc */, unattributed: number, others: number /* beyond the top 50 */ }
+pathStarts / pathEnds: same shape as bySource (nodeStats), per first / last `path` entry (path order, oldest forwarder first); `unattributed` = packets with no path
 timeline: { binMs: number; bins: { t: number; series: Record<string, number> }[]; series: string[] }
    // series (non-empty only, by count desc, 'Other' last): one per known channel name (GRP_TXT/GRP_DATA), 'Unknown channels', 'DMs' (TXT_MSG), 'Adverts', 'ACKs', 'Paths', 'Traces', 'Requests' (REQ/RESPONSE/ANON_REQ), 'Control', 'Other' (MULTIPART, RAW_CUSTOM, unknown). Bin size picked from the span: aim for 60–150 bins on round steps (1 min … 1 day). Expose `setBin(ms | 'auto')` too.
 utilization: {
@@ -265,7 +266,34 @@ is not shown; the inspector split is hidden). The Stats panel, top to bottom:
    stats model, not in the URL), and, while any criterion other than the range is active,
    "Showing X of Y packets" (`data-field="filter-count"`). A line of stat tiles: packets, bytes, airtime %
    (with the radio params in the tooltip, "—" when unknown), unique sources, span.
-2. **Packet paths** (`data-section="paths"`, from `routes`, §1.7): hidden by default behind a
+2. **Packets per source node** (`mc-bar-chart`, top 50, count desc): the label links to
+   `/node/:key` (via `hrefFor`) when the node resolved to a contact, plain text for self /
+   unresolved; footer line "n packets could not be attributed, m more nodes".
+   **Group messages per channel** (`mc-bar-chart`, `channelMessages`): one bar per channel, by
+   name or `channel xx` (hash) when the PSK is unknown; tooltip "n received, m sent · bytes".
+3. **Packets over time** (`mc-dot-plot`): x = time (range or log bounds), y selector
+   (*SNR* default, *RSSI*, *Distance*, *Hops*, *Size*), colour selector (*Packet type* default,
+   *Route type*, *Last hop*, *Source*, *Channel*, *Direction*, *Compression*), dot area ∝ bytes. Clicking a dot
+   navigates to `/packets/:id`. Payload types get a fixed slot map (TXT_MSG 1, GRP_TXT 2, ADVERT 3,
+   ACK 4, PATH 5, TRACE 6, REQ/RESPONSE 7, CONTROL 8, rest Other); for node / channel colourings
+   the top 8 by count in the current points take slots in count order, rest "Other". *Compression*
+   uses fixed slots (Compressed 1, Plain 2, Not decrypted / non-text packets "Other").
+4. **Packet rate** (`mc-line-chart`): the `timeline` series (per channel, unknown channels, DMs,
+   adverts, ACKs, paths, traces, requests, control); the 8 biggest get a line, the rest are summed into *Other*; hovering a legend entry lists the payload types it counts (`timelineSeriesDescription`; a folded *Other* lists the series it sums); toggle *stacked*.
+5. **Network utilisation**: `mc-line-chart` of airtime fraction over time (single series, %), then
+   `mc-breakdown` rows for payload type, route type, direction, channel / category — each showing
+   airtime share (with packet count in the tooltip). When airtime is unknown, fall back to bytes
+   and say so.
+6. **Text compression** (`compression`, §1.6): a summary line ("X% of decrypted text messages
+   compressed · N B saved (Y%) across M compressed messages · S senders using compression"), a
+   muted "n messages could not be decrypted (no key)" note when any are `'unknown'`, then
+   `mc-breakdown` rows of message counts — all text, DMs, Channels, Sent, Received (rows with no
+   text omitted) — each with segments *Compressed* / *Plain* / *Not decrypted* (grey; its legend
+   tooltip says why: no channel PSK, or no stored private key / unknown contact for DMs). Every
+   segment is keyed by the compression filter value (chip "Compression: Compressed"). No text
+   messages in the shown packets → one-line empty state.
+7. **Hop count** distribution (`mc-bar-chart`, vertical-ish is fine as horizontal rows 0,1,2…).
+8. **Packet paths** (`data-section="paths"`, from `routes`, §1.7): hidden by default behind a
    *Map* / *Hide map* toggle (`aria-pressed`); while hidden, one line "N packets with a known
    route, M distinct paths". Shown, it is an `<mc-tile-map>` of
    `app.paths.routesUsage(routes, { directed: true })` drawn like the contact "paths heard via" map
@@ -280,35 +308,14 @@ is not shown; the inspector split is hidden). The Stats panel, top to bottom:
    (shown when estimating or anything is incomplete); nothing placeable → a one-line empty state.
    The map fits its bounds when opened, when the checkbox changes and when the routes change
    (range / filters), and follows the §6 filters like every other chart.
-3. **Packets per source node** (`mc-bar-chart`, top 50, count desc): the label links to
-   `/node/:key` (via `hrefFor`) when the node resolved to a contact, plain text for self /
-   unresolved; footer line "n packets could not be attributed, m more nodes".
-   **Group messages per channel** (`mc-bar-chart`, `channelMessages`): one bar per channel, by
-   name or `channel xx` (hash) when the PSK is unknown; tooltip "n received, m sent · bytes".
-4. **Packets over time** (`mc-dot-plot`): x = time (range or log bounds), y selector
-   (*SNR* default, *RSSI*, *Distance*, *Hops*, *Size*), colour selector (*Packet type* default,
-   *Route type*, *Last hop*, *Source*, *Channel*, *Direction*, *Compression*), dot area ∝ bytes. Clicking a dot
-   navigates to `/packets/:id`. Payload types get a fixed slot map (TXT_MSG 1, GRP_TXT 2, ADVERT 3,
-   ACK 4, PATH 5, TRACE 6, REQ/RESPONSE 7, CONTROL 8, rest Other); for node / channel colourings
-   the top 8 by count in the current points take slots in count order, rest "Other". *Compression*
-   uses fixed slots (Compressed 1, Plain 2, Not decrypted / non-text packets "Other").
-5. **Packet rate** (`mc-line-chart`): the `timeline` series (per channel, unknown channels, DMs,
-   adverts, ACKs, paths, traces, requests, control); the 8 biggest get a line, the rest are summed into *Other*; hovering a legend entry lists the payload types it counts (`timelineSeriesDescription`; a folded *Other* lists the series it sums); toggle *stacked*.
-6. **Network utilisation**: `mc-line-chart` of airtime fraction over time (single series, %), then
-   `mc-breakdown` rows for payload type, route type, direction, channel / category — each showing
-   airtime share (with packet count in the tooltip). When airtime is unknown, fall back to bytes
-   and say so.
-7. **Text compression** (`compression`, §1.6): a summary line ("X% of decrypted text messages
-   compressed · N B saved (Y%) across M compressed messages · S senders using compression"), a
-   muted "n messages could not be decrypted (no key)" note when any are `'unknown'`, then
-   `mc-breakdown` rows of message counts — all text, DMs, Channels, Sent, Received (rows with no
-   text omitted) — each with segments *Compressed* / *Plain* / *Not decrypted* (grey; its legend
-   tooltip says why: no channel PSK, or no stored private key / unknown contact for DMs). Every
-   segment is keyed by the compression filter value (chip "Compression: Compressed"). No text
-   messages in the shown packets → one-line empty state.
-8. **Hop count** distribution (`mc-bar-chart`, vertical-ish is fine as horizontal rows 0,1,2…).
+9. **Most common first nodes in path** (`data-section="path-starts"`, `pathStarts`) and **Most common
+   final nodes in path** (`data-section="path-ends"`, `pathEnds`): `mc-bar-chart`s like the source
+   chart (top 50, contact links), footer "n packets had no path, m more nodes". For a received flood
+   the first node is the repeater nearest the source and the final one is the repeater this radio
+   heard; for a direct packet they are the next and last hops still to travel. A bar filters by that
+   node (chips "First in path: X" / "Last in path: X").
 
-**Drill-down** (model side in §6): clicking a source bar, a channel bar, a hop-count bar, or a breakdown segment /
+**Drill-down** (model side in §6): clicking a source bar, a channel bar, a hop-count bar, a first / final path node bar, or a breakdown segment /
 legend entry (type, route, direction, category, channel, compression) adds a filter for that value; clicking the
 active value again removes it. On source bars the *bar* filters and the *label* stays the contact
 link. Charts opt in per item with a `key` (`<mc-bar-chart>` dispatches `bar-select`, keyed rows
@@ -317,7 +324,7 @@ segments and from legend `<button>`s), with `selected` marking the active value;
 key (e.g. the contact Stats tab) stay plain. The filter is **shared with the Packets tab** (§6):
 switching tabs never clears it. Drill-downs show in the shared filter area above the tabs: in its
 controls (direction, a single type, a single route) or, for the fields it has no control for
-(source, category, channel, hops, compression), as removable chips ("Source: Alice ✕", removed with
+(source, category, channel, hops, compression, path start / end), as removable chips ("Source: Alice ✕", removed with
 `packetLog.removeFilterChip(key)`); its *Reset* clears everything, the range included. Filters
 matching nothing → "No packets match these filters." with the "Showing 0 of Y" line kept.
 Active-segment highlighting reads `stats.filters`.
@@ -394,7 +401,7 @@ survive range changes). The stats model reads and writes it through `PacketLogMo
 (`PacketStatsDeps.filter`); `stats.filters` is a computed drill-down view of it:
 
 ```ts
-type StatsFilterField = 'source' | 'type' | 'route' | 'direction' | 'category' | 'channel' | 'hops' | 'compression';
+type StatsFilterField = 'source' | 'type' | 'route' | 'direction' | 'category' | 'channel' | 'hops' | 'compression' | 'pathStart' | 'pathEnd';
 interface StatsFilter { field: StatsFilterField; value: string; label: string /* chip text, from the caller */ }
 filters: ReadonlySignal<readonly StatsFilter[]>
 addFilter(f) / removeFilter(field) / clearFilters()
@@ -408,10 +415,11 @@ matchesFilter(p, f) / filterKey(p, field) / filterPoints(points, filters)   // p
   unattributed), type → `typeName`, route → `routeName || 'unknown'`, direction → `'in'`/`'out'`,
   category, channel → the channel name (channel packets only), hops → `String(hops)` (packets with
   unknown hops never match), compression → `'smaz'` / `'plain'` / `'unknown'` (non-text packets
-  never match).
+  never match), pathStart / pathEnd → `nodeId` of the first / last `path` entry (packets with no
+  path never match).
 - Filters AND together; at most one per field — adding one on a field that already has one
   replaces it.
-- `summary`, `bySource`, `timeline`, `utilization`, `hops` and `compression` count the filtered `points`.
+- `summary`, `bySource`, `pathStarts`, `pathEnds`, `timeline`, `utilization`, `hops` and `compression` count the filtered `points`.
   `window` (and so the bins and `summary.spanMs`) comes from the range and `allPoints`, so axes
   don't move while drilling down.
 - `forContact()` reads `allPoints`: the packets page's filters don't leak into the node page's Stats tab.
@@ -422,7 +430,7 @@ Mapping onto `PacketFilter` (`statsFiltersOf` / `withStatsFilter` / `withoutStat
   from the Packets tab's date inputs reloads `allPoints` too).
 - direction → `direction` (`'in'` ↔ `'rx'`, `'out'` ↔ `'tx'`); type → `payloadTypes: [n]`; route →
   `routeTypes: [n]` — so the Packets tab's selects show them. A type / route key with no number
-  (`'UNKNOWN'` / `'unknown'`) and every other field (source, category, channel, hops, compression)
+  (`'UNKNOWN'` / `'unknown'`) and every other field (source, category, channel, hops, compression, path start / end)
   go to `PacketFilter.drill` (at most one entry per field). `filters` lists direction, a single
   type, a single route, then `drill`; several types / routes picked on the Packets tab have no
   drill-down equivalent (no segment is highlighted) but still narrow `points`.

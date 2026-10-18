@@ -82,7 +82,7 @@ export interface PacketFilter {
   src?: string;
   /**
    * Packet statistics drill-downs (docs/packet-stats.md §6) on the fields the log has no native
-   * criterion for (source, category, channel, hops, compression; and type / route when the key
+   * criterion for (source, category, channel, hops, compression, path start / end; and type / route when the key
    * maps to no number, e.g. 'UNKNOWN'), at most one per field. Matched against the stats model's
    * derived point of the record (see {@link PacketLogModel.attachStats}); a record without a
    * derived point never matches.
