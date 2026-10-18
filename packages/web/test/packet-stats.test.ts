@@ -325,9 +325,15 @@ describe('/packets filters shared by the Packets and Stats tabs', () => {
   it('a Stats drill-down filters the Packets tab, where its chip removes it from both', async () => {
     const { t, el } = await openStats();
     const stats = t.app.packetStats;
+    const direction = () => t.query('select[data-filter="direction"]')!.getBoundingClientRect();
+    const before = direction();
     const hit = inChart(el, 'sources', 'mc-bar-chart', 'rect[role="button"]').find((r) => r.getAttribute('aria-label')!.startsWith('Alice:'))!;
     hit.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await t.until(() => chips(t).length > 0, 3000, 'drill chip');
+    // the chip gets its own row below the controls rather than pushing them right
+    expect(direction().left).toBe(before.left);
+    expect(direction().top).toBe(before.top);
+    expect(t.query('[data-filter="drill-source"]')!.getBoundingClientRect().top).toBeGreaterThanOrEqual(direction().bottom);
     const filters = t.query('mc-packet-filters');
 
     await t.click('[data-tab="packets"]');

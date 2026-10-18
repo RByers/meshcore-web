@@ -269,7 +269,8 @@ reopened in the same session (e.g. back from `/packets/:id`) shows the tab it la
 route, node, text, removable chips for criteria with no control of their own (the
 `/packets/node/:key` source, `data-filter="src"`, and Stats drill-downs, `data-filter="drill-<field>"`
 / `data-chip="<field>"`), and *Reset* (`data-action="clear-filters"`), which clears everything, the
-range included. On the Frames tab the area is hidden: frames keep their own filter row in the
+range included. The chips sit on their own row after the controls (`data-filter-chips`), so adding
+one never shifts the controls. On the Frames tab the area is hidden: frames keep their own filter row in the
 Frames panel, since the packet filter does not apply to them.
 
 `LogTab` gains `'stats'`; the packets page renders `<mc-packet-stats>` for it (the list toolbar

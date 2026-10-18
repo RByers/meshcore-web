@@ -3,7 +3,8 @@
  * tabs (docs/packet-stats.md §3, §6). Renders the packet log's filter (`app.packetLog.packets.filter`):
  * the date range (`<mc-stats-range parts="range">`: presets and one From / To pair), direction,
  * types, route, node and text, removable chips for criteria with no control of their own (the
- * `/packets/node/:key` source and Stats drill-downs), and Reset, which clears everything.
+ * `/packets/node/:key` source and Stats drill-downs), and Reset, which clears everything. The chips
+ * get their own row after the controls, so new ones never push the controls right.
  */
 import { css, html, nothing, type TemplateResult } from 'lit';
 import { packetFilterChips, type PacketFilter } from '@meshcore-web/core/app';
@@ -48,6 +49,13 @@ export class McPacketFilters extends AppElement {
       }
       mc-stats-range {
         flex-basis: 100%;
+      }
+      /* chips get their own row after the controls, so adding one never shifts the controls */
+      .chips {
+        flex-basis: 100%;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
       }
       label {
         display: flex;
@@ -155,8 +163,10 @@ export class McPacketFilters extends AppElement {
     if (this.nodeRoute) location.hash = hrefFor('/packets');
   }
 
-  #chips(f: PacketFilter): TemplateResult {
-    return html`${f.src
+  #chips(f: PacketFilter): TemplateResult | typeof nothing {
+    const drills = packetFilterChips(f).filter((c) => c.key.startsWith('drill-'));
+    if (!f.src && drills.length === 0) return nothing;
+    return html`<div class="chips" data-filter-chips>${f.src
       ? html`<span class="chip" data-filter="src" data-chip="src" title=${`Packets originated by ${f.src}`}
           >From ${this.app.contacts.view(f.src)?.name ?? `${f.src.slice(0, 8)}…`}${contactNote(this.app.contacts.noteFor(f.src))}
           <button
@@ -169,15 +179,13 @@ export class McPacketFilters extends AppElement {
           >✕</button></span
         >`
       : nothing}
-    ${packetFilterChips(f)
-      .filter((c) => c.key.startsWith('drill-'))
-      .map(
+    ${drills.map(
         // Stats drill-downs with no control of their own (§6)
         (c) => html`<span class="chip" data-filter=${c.key} data-chip=${chipHook(c.key)} title="Filter set from a Stats chart"
           >${c.label}
           <button data-action="remove-chip" data-remove-filter=${chipHook(c.key)} aria-label=${`Remove ${c.name} filter`} @click=${() => void this.#log.removeFilterChip(c.key)}>✕</button></span
         >`,
-      )}`;
+      )}</div>`;
   }
 
   override render(): TemplateResult {
@@ -185,7 +193,6 @@ export class McPacketFilters extends AppElement {
     const types = new Set(f.payloadTypes ?? []);
     return html`<div class="filters" role="search" aria-label="Packet filters" data-packet-filters>
       <mc-stats-range parts="range"></mc-stats-range>
-      ${this.#chips(f)}
       <label
         >Direction
         <select data-filter="direction" @change=${(e: Event) => this.#set({ direction: ((e.target as HTMLSelectElement).value || undefined) as PacketFilter['direction'] })}>
@@ -241,6 +248,7 @@ export class McPacketFilters extends AppElement {
             }}
           >Reset</button>`
         : nothing}
+      ${this.#chips(f)}
     </div>`;
   }
 }
