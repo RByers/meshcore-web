@@ -12,6 +12,7 @@ import { basicScenario, type BasicScenario, type BasicScenarioOptions } from '..
 import { systemClock, type Clock } from '../util/clock.js';
 import { ChannelsModel } from './channels-model.js';
 import { ChatModel, type ChatModelOptions } from './chat-model.js';
+import { NodeModel, normalizeNodeRef } from './node-model.js';
 import {
   ConnectionModel,
   memoryPreferences,
@@ -110,6 +111,7 @@ export class AppModel {
   #contactPaths: ContactPathsModel | undefined;
   #storage: StorageModel | undefined;
   readonly #chats = new Map<string, ChatModel>();
+  readonly #nodes = new Map<string, NodeModel>();
   #offs: Array<() => void> = [];
 
   constructor(opts: AppModelOptions = {}) {
@@ -279,6 +281,17 @@ export class AppModel {
     return m;
   }
 
+  /** The node page model for a node reference (key, key prefix or hash; cached per normalised ref). */
+  node(ref: string): NodeModel {
+    const id = normalizeNodeRef(ref) ?? ref.trim().toLowerCase();
+    let m = this.#nodes.get(id);
+    if (!m) {
+      m = new NodeModel(id, { connection: this.connection, contacts: this.contacts, packetLog: this.packetLog });
+      this.#nodes.set(id, m);
+    }
+    return m;
+  }
+
   /** Disconnects and releases everything (tests; page unload). The next load may still resume. */
   async dispose(): Promise<void> {
     await this.connection.disconnect({ keepResume: true });
@@ -288,6 +301,8 @@ export class AppModel {
     this.#deviceSettings?.dispose();
     this.#appSettings?.dispose();
     this.#chats.clear();
+    for (const m of this.#nodes.values()) m.dispose();
+    this.#nodes.clear();
     this.notifications.clear();
     const repo = await this.#devicesRepo;
     repo?.close();

@@ -9,6 +9,8 @@ import type { AirPacket } from '../emulator/virtual-mesh.js';
 import { connectedApp } from './testing.js';
 import { contactLastHeard, contactsNotHeardSince, STALE_PERIODS, type ContactView } from './contacts-model.js';
 import type { MessageRecord } from '../store/schema.js';
+import { ContactType, PATH_LEN_UNKNOWN } from '../protocol/constants.js';
+import { scenarioKey } from '../emulator/scenarios.js';
 
 async function connected() {
   const { app, scenario: s } = await connectedApp({ scenario: { defaultAckDelayMs: 0 } });
@@ -204,5 +206,32 @@ describe('stale contact selection', () => {
       'onlySentTo',
       'favNever',
     ]);
+  });
+});
+
+describe('ContactsModel.addFromAdvert', () => {
+  it('adds a heard node with ADD_UPDATE_CONTACT even in manual-add mode, keeping its advert fields', async () => {
+    const { app, m, store } = await connected();
+    const client = app.connection.client.value!;
+    await client.setManualAddContacts(true);
+    expect(client.selfInfo?.manualAddContacts ?? 0).toBe(1);
+
+    const key = toHex(scenarioKey('dave'));
+    expect(m.view(key)).toBeUndefined();
+    const rec = await m.addFromAdvert({ key, name: ' Dave ', type: ContactType.ROOM, lat: 51.5, lon: -0.12, advertTimestamp: 1_700_000_123 });
+    expect(rec).toMatchObject({ key, name: 'Dave', type: ContactType.ROOM, lastAdvert: 1_700_000_123, outPathLen: PATH_LEN_UNKNOWN, onDevice: true });
+    expect(rec.lat).toBeCloseTo(51.5, 5);
+    expect(rec.lon).toBeCloseTo(-0.12, 5);
+    expect((await store.contacts.get(key))!.name).toBe('Dave');
+    expect(m.view(key)).toMatchObject({ name: 'Dave', typeName: 'room' });
+    expect(client.findContact(scenarioKey('dave'))).toBeDefined();
+  });
+
+  it('names a nameless advert by its key prefix', async () => {
+    const { m } = await connected();
+    const key = toHex(scenarioKey('erin'));
+    const rec = await m.addFromAdvert({ key, name: '', type: ContactType.CHAT, advertTimestamp: 5 });
+    expect(rec.name).toBe(key.slice(0, 12));
+    expect(rec).toMatchObject({ lat: 0, lon: 0 });
   });
 });

@@ -448,6 +448,28 @@ export class PacketLog extends TimeLog<PacketRecord, PacketQuery> {
     });
   }
 
+  /**
+   * The newest logged ADVERT of each distinct node whose public key starts with `node` (key or
+   * key prefix hex, at least one byte), newest first. Adverts carry the full key, so nodes sharing
+   * a prefix stay apart. One reverse `srcHash_ts` index scan.
+   */
+  async latestAdverts(node: string): Promise<PacketRecord[]> {
+    const n = PacketLog.srcQuery(node);
+    if (!n) return [];
+    const range = this.tsRange([n.slice(0, 2)], {});
+    return this.db.transaction(this.storeName, 'readonly', async (t) => {
+      const seen = new Set<string>();
+      const out: PacketRecord[] = [];
+      await t.store<PacketRecord>(this.storeName).each({ index: INDEX.packets.srcHashTs, query: range, direction: 'prev' }, (r) => {
+        const key = r.srcKey;
+        if (r.payloadType !== PayloadType.ADVERT || key === undefined || !key.startsWith(n) || seen.has(key)) return;
+        seen.add(key);
+        out.push(r);
+      });
+      return out;
+    });
+  }
+
   protected plan(q: PacketQuery): QueryPlan<PacketRecord> {
     const { direction, routeType, source, payloadType } = q;
     const dirF = direction === undefined ? undefined : (r: PacketRecord) => r.direction === direction;

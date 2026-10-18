@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import 'fake-indexeddb/auto';
 import { sha256 } from '../packet/crypto.js';
 import { PayloadType, RouteType } from '../packet/constants.js';
-import { buildTracePayload } from '../packet/payloads.js';
+import { buildTracePayload, encodeAdvertAppData } from '../packet/payloads.js';
+import { buildPacket } from '../packet/packet.js';
 import { concatBytes, fromHex, toHex } from '../util/bytes.js';
 import type { DeviceFrame } from '../protocol/types.js';
 import { packetInputFromCommand, packetInputFromFrame } from './packet-log.js';
@@ -310,6 +311,51 @@ describe('log queries with a residual `match` predicate', () => {
     expect(await s.frames.count({ match: (r) => r.size === 2 })).toBe(1);
     expect(await s.frames.count({ match: (r) => r.size === 2, direction: 'in' })).toBe(0);
     expect(await s.frames.count({ match: (r) => r.size === 2, code: 0x16 })).toBe(1);
+    s.close();
+  });
+});
+
+describe('PacketLog.latestAdverts', () => {
+  /** §3.5 ADVERT payload: pubkey(32) ‖ timestamp u32 ‖ signature(64) ‖ app data. */
+  function advertFrom(key: string, ts: number, name: string): Uint8Array {
+    const stamp = new Uint8Array(4);
+    new DataView(stamp.buffer).setUint32(0, ts, true);
+    const payload = concatBytes(fromHex(key), stamp, new Uint8Array(64), encodeAdvertAppData({ nodeType: 1, name }));
+    return buildPacket({ routeType: RouteType.FLOOD, payloadType: PayloadType.ADVERT, payload });
+  }
+  /** §3.0 TXT_MSG: dest_hash ‖ src_hash ‖ MAC(2) ‖ ciphertext — a hash-only source. */
+  function txtFrom(src: number): Uint8Array {
+    const payload = concatBytes(Uint8Array.of(0x10, src, 0xee, 0xff), new Uint8Array(16).fill(0x99));
+    return buildPacket({ routeType: RouteType.FLOOD, payloadType: PayloadType.TXT_MSG, payload });
+  }
+
+  it('returns the newest advert per distinct key matching a prefix, newest first', async () => {
+    const s = await openStore();
+    const a = `a7${'01'.repeat(31)}`;
+    const b = `a7${'02'.repeat(31)}`;
+    const c = `c3${'01'.repeat(31)}`;
+    const rx = (bytes: Uint8Array, ts: number) => s.packets.append({ direction: 'rx', source: 'logRxData', bytes, ts });
+    await rx(advertFrom(a, 1, 'A old'), 100);
+    await rx(advertFrom(b, 2, 'B'), 200);
+    await rx(advertFrom(a, 3, 'A new'), 300);
+    await rx(txtFrom(0xa7), 400); // hash-only source: excluded
+    await rx(advertFrom(c, 4, 'C'), 500);
+
+    // two keys share the first byte → both, newest first, the newest copy of A
+    const both = await s.packets.latestAdverts('A7');
+    expect(both.map((r) => [r.srcKey, r.ts])).toEqual([
+      [a, 300],
+      [b, 200],
+    ]);
+    expect(both.every((r) => r.payloadType === PayloadType.ADVERT)).toBe(true);
+    // a longer prefix or the full key narrows to one
+    expect((await s.packets.latestAdverts(a.slice(0, 4))).map((r) => r.ts)).toEqual([300]);
+    expect((await s.packets.latestAdverts(b)).map((r) => r.ts)).toEqual([200]);
+    expect((await s.packets.latestAdverts('c3')).map((r) => r.srcKey)).toEqual([c]);
+    // no match / invalid refs
+    expect(await s.packets.latestAdverts('d4')).toEqual([]);
+    expect(await s.packets.latestAdverts('a')).toEqual([]);
+    expect(await s.packets.latestAdverts('zz')).toEqual([]);
     s.close();
   });
 });

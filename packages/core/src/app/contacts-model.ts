@@ -6,7 +6,7 @@
  */
 
 import { ContactFlag, ContactType, PATH_LEN_UNKNOWN } from '../protocol/constants.js';
-import type { Contact } from '../protocol/types.js';
+import type { Contact, ContactInput } from '../protocol/types.js';
 import type { RadioStore } from '../store/radio-store.js';
 import type { ContactRecord, MessageRecord } from '../store/schema.js';
 import { fromHex, toHex } from '../util/bytes.js';
@@ -25,6 +25,7 @@ import {
   resolveSenderName,
   type SenderTarget,
 } from './messaging.js';
+import type { HeardNode } from './packet-log-model.js';
 import { pathLabel, resolvePath, type PathLabel, type ResolvedHop, type ResolvePathOptions } from './path-resolver.js';
 
 export type ContactSort = 'recent' | 'name';
@@ -389,6 +390,36 @@ export class ContactsModel extends StoreBoundModel {
         throw new Error('The radio did not add the contact (manual-add mode or invalid advert?)');
       }
     }
+    await this.#persisted();
+    const rec = await this.store?.contacts.get(key);
+    if (!rec) throw new Error('Contact was not stored');
+    return rec;
+  }
+
+  /**
+   * Adds a node heard advertising (a {@link HeardNode} from the packet log) as a contact with
+   * ADD_UPDATE_CONTACT and the advert's fields, out path unknown (the next send floods). Unlike
+   * IMPORT_CONTACT this also works when the radio is in manual-add mode: the firmware runs an
+   * imported advert through the normal receive path, which only reports it as discovered then
+   * (MyMesh.cpp CMD_ADD_UPDATE_CONTACT / CMD_IMPORT_CONTACT, BaseChatMesh::onAdvertRecv). An
+   * existing contact is updated. Resolves with the stored record.
+   */
+  async addFromAdvert(h: Pick<HeardNode, 'key' | 'name' | 'type' | 'lat' | 'lon' | 'advertTimestamp'>): Promise<ContactRecord> {
+    const client = this.#client();
+    const key = h.key.toLowerCase();
+    const input: ContactInput = {
+      pubKey: fromHex(key),
+      type: h.type,
+      flags: 0,
+      outPathLen: PATH_LEN_UNKNOWN,
+      name: h.name.trim() || key.slice(0, 12),
+      lastAdvert: h.advertTimestamp,
+    };
+    if (h.lat !== undefined && h.lon !== undefined) {
+      input.lat = h.lat;
+      input.lon = h.lon;
+    }
+    await client.addOrUpdateContact(input);
     await this.#persisted();
     const rec = await this.store?.contacts.get(key);
     if (!rec) throw new Error('Contact was not stored');

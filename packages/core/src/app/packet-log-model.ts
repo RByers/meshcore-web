@@ -12,7 +12,9 @@
 import { fromHex, toHex } from '../util/bytes.js';
 import { annotatePacket, annotatePayload, type AnnotateKeys, type Annotation } from '../packet/annotate.js';
 import { calcSharedSecret } from '../packet/crypto.js';
-import { channelHash } from '../packet/payloads.js';
+import { channelHash, parseAdvertPayload } from '../packet/payloads.js';
+import { parsePacket } from '../packet/packet.js';
+import { PayloadType } from '../packet/constants.js';
 import { annotateFrame } from '../protocol/annotate-frame.js';
 import { PRIVATE_KEY_SIZE } from '../protocol/constants.js';
 import { payloadTypeName, routeTypeName } from '../packet/constants.js';
@@ -36,6 +38,7 @@ import {
   type PacketView,
   type SummaryContext,
 } from './packet-summary.js';
+import { contactTypeName, type ContactKind } from './messaging.js';
 import { ACTIVITY_RANGES, bucketActivity, type ActivityRange, type NodeActivity } from './node-activity.js';
 import { STATS_FIELD_LABEL, filterKey, type StatPacket, type StatsFilter } from './packet-stats-model.js';
 import { StoreBoundModel } from './store-bound.js';
@@ -106,6 +109,74 @@ export interface PacketRow {
   path: readonly string[];
   /** Decoded one-line summary (with decrypted channel text when a PSK is known). */
   summary: string;
+}
+
+/** A node known only from a logged ADVERT (its newest one), see {@link PacketLogModel.heardNodes}. */
+export interface HeardNode {
+  /** Full public key hex. */
+  key: string;
+  /** Advertised name ('' when the advert has none). */
+  name: string;
+  /** ADV_TYPE (= contact type: 1 chat, 2 repeater, 3 room, 4 sensor). */
+  type: number;
+  typeName: ContactKind;
+  /** Degrees, when the advert carries a location. */
+  lat?: number;
+  lon?: number;
+  /** The advert's own timestamp, epoch seconds (a contact's `lastAdvert`). */
+  advertTimestamp: number;
+  /** When the packet was logged, epoch ms. */
+  heardAt: number;
+  /** The packet record's id. */
+  packetId: number;
+  snr?: number;
+  /** Path hop count; null for a record without the packet envelope. */
+  hops: number | null;
+}
+
+/** Builds a {@link HeardNode} from a logged ADVERT record; null when it does not parse. */
+export function heardNodeFromRecord(r: PacketRecord): HeardNode | null {
+  try {
+    let payload = r.bytes;
+    let hops: number | null = null;
+    if (r.format === 'packet') {
+      const p = parsePacket(r.bytes);
+      if (p.payloadType !== PayloadType.ADVERT) return null;
+      payload = p.payload;
+      hops = p.pathHashCount;
+    } else if (r.format !== 'payload' || r.payloadType !== PayloadType.ADVERT) {
+      return null;
+    }
+    const a = parseAdvertPayload(payload);
+    const node: HeardNode = {
+      key: toHex(a.publicKey),
+      name: a.app.name ?? '',
+      type: a.app.nodeType,
+      typeName: contactTypeName(a.app.nodeType),
+      advertTimestamp: a.timestamp,
+      heardAt: r.ts,
+      packetId: r.id,
+      hops,
+    };
+    if (a.app.latitude !== undefined && a.app.longitude !== undefined) {
+      node.lat = a.app.latitude;
+      node.lon = a.app.longitude;
+    }
+    if (r.snr !== undefined) node.snr = r.snr;
+    return node;
+  } catch {
+    return null;
+  }
+}
+
+/** {@link PacketLogModel.heardNodes} against a given store. */
+export async function heardNodesIn(store: RadioStore, ref: string): Promise<HeardNode[]> {
+  const out: HeardNode[] = [];
+  for (const r of await store.packets.latestAdverts(ref)) {
+    const h = heardNodeFromRecord(r);
+    if (h) out.push(h);
+  }
+  return out;
 }
 
 export interface FrameRow {
@@ -693,6 +764,15 @@ export class PacketLogModel extends StoreBoundModel {
     const from = Math.floor(now / bucketMs) * bucketMs + bucketMs - spanMs;
     const sightings = store ? await store.packets.sourceActivity(key, { from }) : [];
     return bucketActivity(sightings, range, now);
+  }
+
+  /**
+   * Nodes heard advertising whose public key starts with `ref` (key or key prefix hex, at least
+   * one byte): the newest logged ADVERT of each, newest first. Unparsable adverts are skipped.
+   */
+  async heardNodes(ref: string): Promise<HeardNode[]> {
+    const store = this.store;
+    return store ? heardNodesIn(store, ref) : [];
   }
 
   // ---- inspection ----
