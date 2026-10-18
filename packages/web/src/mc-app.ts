@@ -238,8 +238,18 @@ export class McApp extends AppElement {
           font-size: 0.7rem;
           text-align: center;
         }
+        /* Icons mix emoji and text glyphs (⚙, #) from fonts with different line heights; a fixed
+           box keeps every label on the same baseline. */
         nav .icon {
           font-size: 1.2rem;
+          width: auto;
+          height: 1.5rem;
+          line-height: 1.5rem;
+        }
+        nav .label {
+          flex: none;
+          line-height: 1.2;
+          white-space: nowrap;
         }
         nav .count {
           position: absolute;

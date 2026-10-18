@@ -289,6 +289,9 @@ describe('connect flows', () => {
       const main = t.query('main')!.getBoundingClientRect();
       expect(r.top).toBeGreaterThanOrEqual(main.top);
       expect(t.queryAll('nav a').length).toBe(8);
+      // emoji and text-glyph icons have different line heights; labels must still line up
+      const labelTops = t.queryAll('nav .label').map((l) => Math.round(l.getBoundingClientRect().top));
+      expect(new Set(labelTops).size).toBe(1);
     } finally {
       await page.viewport(1280, 800);
     }
