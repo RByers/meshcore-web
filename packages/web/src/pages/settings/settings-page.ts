@@ -1017,6 +1017,12 @@ export class McSettingsPage extends AppElement {
         >
         <p class="hint">Off by default. Turning it off deletes a stored key of the connected radio.</p>
         <label class="check"
+          ><input type="checkbox" name="showFrames" .checked=${s.showFrames.value}
+            @change=${(e: Event) => s.setShowFrames((e.target as HTMLInputElement).checked)} />
+          Show the Frames tab on the Packets page (host ↔ radio frames, for debugging radio communication)</label
+        >
+        <p class="hint">Off by default. Frames are logged either way, so turning it on shows earlier ones too.</p>
+        <label class="check"
           ><input type="checkbox" name="smazAutoEnable" .checked=${s.smazAutoEnable.value}
             @change=${(e: Event) => s.setSmazAutoEnable((e.target as HTMLInputElement).checked)} />
           Turn on compression for a contact when they send a compressed message</label

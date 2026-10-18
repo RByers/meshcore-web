@@ -3,13 +3,13 @@
  * `PacketStatsModel` (`app.packetStats`) as tiles and charts: a "Packet paths" map (on demand: each
  * hop's line as thick as the packets that crossed it, each node's dot sized by use), packets per source node, packets
  * over time (dot plot with y / colour selectors), packet rate, network utilisation, text compression and the hop
- * count distribution. The date range and bin size live in the model (`<mc-stats-range>`); only
+ * count distribution. The bin size lives in the model (`<mc-stats-range parts="bin">`); only
  * the chart selectors are local state. Everything here maps model output to chart props.
  *
  * Drill-down (§6): clicking a source bar, hop-count bar or breakdown segment adds a model filter
- * for that value (clicking the active one again removes it). The filter is shared with the Packets
- * tab (owned by the packet log); a sticky filter bar under the range shows each of its criteria
- * as a removable chip with "Clear filters" and the filtered / total count.
+ * for that value (clicking the active one again removes it). The filter, date range included, is
+ * shared with the Packets tab (owned by the packet log) and edited in the filter area above the
+ * tabs (`<mc-packet-filters>`); here a "Showing X of Y packets" line notes when it narrows the range.
  */
 import { css, html, nothing, type TemplateResult } from 'lit';
 import {
@@ -17,7 +17,6 @@ import {
   nodeId,
   timelineSeriesDescription,
   packetFilterChips,
-  type PacketFilterChip,
   type Breakdown,
   type CompressionCounts,
   type CompressionStats,
@@ -406,57 +405,9 @@ export class McPacketStats extends AppElement {
       mc-bar-chart.sources {
         --mc-bar-label-width: 40%;
       }
-      .filterbar {
-        position: sticky;
-        top: 64px;
-        z-index: 1;
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 8px;
-        padding: 8px 12px;
-        border: 1px solid var(--mc-accent);
-        border-radius: var(--mc-radius);
-        background: var(--mc-accent-soft);
-        box-shadow: 0 2px 8px rgb(0 0 0 / 0.12);
-        font-size: 14px;
-      }
-      .filterbar .title {
-        font-weight: 600;
-      }
-      .chips {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
-        list-style: none;
+      .count {
         margin: 0;
-        padding: 0;
-      }
-      .chip {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        padding: 2px 4px 2px 10px;
-        border-radius: 999px;
-        background: var(--mc-surface);
-        border: 1px solid var(--mc-accent);
-      }
-      .chip button {
-        min-height: 0;
-        padding: 0 6px;
-        border: 0;
-        border-radius: 999px;
-        background: transparent;
-        font-size: 16px;
-        line-height: 1.4;
-      }
-      .filterbar .count {
-        color: var(--mc-text-muted);
-      }
-      .filterbar button.clear {
-        margin-inline-start: auto;
-        min-height: 2rem;
-        padding-block: 0.25em;
+        font-size: 14px;
       }
     `,
   ];
@@ -636,39 +587,22 @@ export class McPacketStats extends AppElement {
     </section>`;
   }
 
-  #filterBar(chips: readonly PacketFilterChip[], shown: number, total: number): TemplateResult {
-    const stats = this.app.packetStats;
-    const log = this.app.packetLog;
-    return html`<div class="filterbar" role="region" aria-label="Active filters" data-filterbar>
-      <span class="title">Filtered:</span>
-      <ul class="chips">
-        ${chips.map(
-          (c) => html`<li class="chip" data-chip=${chipHook(c.key)}>
-            <span>${c.name}: <strong>${c.value}</strong></span>
-            <button type="button" data-remove-filter=${chipHook(c.key)} aria-label=${`Remove ${c.name} filter`} title="Remove filter" @click=${() => void log.removeFilterChip(c.key)}>
-              ×
-            </button>
-          </li>`,
-        )}
-      </ul>
-      <span class="count" data-field="filter-count">Showing ${formatNumber(shown, 0)} of ${formatNumber(total, 0)} packets</span>
-      <button type="button" class="primary clear" data-action="clear-filters" @click=${() => void stats.clearFilters()}>Clear filters</button>
-    </div>`;
-  }
-
   override render(): TemplateResult {
     const stats = this.app.packetStats;
     const points = stats.points.value;
     const filters = stats.filters.value;
-    // every criterion of the filter shared with the Packets tab, the date range aside
-    const chips = packetFilterChips(this.app.packetLog.packets.filter.value, { srcLabel: (k) => this.app.contacts.view(k)?.name ?? `${k.slice(0, 8)}…` });
+    // any criterion of the shared filter other than the date range narrows the points
+    const filtered = packetFilterChips(this.app.packetLog.packets.filter.value).length > 0;
     const total = stats.unfilteredCount.value;
     let body: TemplateResult;
     if (points.length > 0) body = this.#content(points, filters);
-    else if (chips.length > 0 && total > 0) body = html`<p class="muted" data-empty="filtered">No packets match these filters.</p>`;
+    else if (filtered && total > 0) body = html`<p class="muted" data-empty="filtered">No packets match these filters.</p>`;
     else body = html`<p class="muted" data-empty>${stats.loading.value ? 'Loading…' : 'No packets logged in this range.'}</p>`;
-    return html`<mc-stats-range></mc-stats-range>
-      ${chips.length > 0 ? this.#filterBar(chips, points.length, total) : nothing} ${body}`;
+    return html`<mc-stats-range parts="bin"></mc-stats-range>
+      ${filtered
+        ? html`<p class="count muted" data-field="filter-count" role="status">Showing ${formatNumber(points.length, 0)} of ${formatNumber(total, 0)} packets</p>`
+        : nothing}
+      ${body}`;
   }
 
   #content(points: readonly StatPacket[], filters: readonly StatsFilter[]): TemplateResult {

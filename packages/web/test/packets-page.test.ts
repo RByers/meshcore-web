@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 import type { AnnotationNode } from '@meshcore-web/core/packet';
 import { toHex } from '@meshcore-web/core/util/bytes';
+import { PayloadType, RouteType, buildPacket } from '@meshcore-web/core/packet';
 import '../src/mc-app.js';
 import '../src/pages/packets/index.js';
 import { createHarness, type Harness } from '../src/testing/harness.js';
@@ -135,6 +136,7 @@ describe('/packets page', () => {
     expect(t.query('[data-name="channel_hash"]')!.classList.contains('sel')).toBe(true);
 
     // the inspector belongs to the packets tab: hidden on the frames tab, back on return
+    t.app.appSettings.setShowFrames(true);
     await t.click('[data-tab="frames"]');
     await t.until(() => !t.query('aside mc-packet-inspector'), 2000, 'hidden on frames tab');
     await t.click('[data-tab="packets"]');
@@ -258,6 +260,7 @@ describe('/packets page', () => {
     expect(tip().textContent).toContain('SHA256(channel PSK)');
 
     // frames: the code byte explains what the command is for
+    t.app.appSettings.setShowFrames(true);
     await t.click('[data-tab="frames"]');
     await t.until(() => t.query('tr[data-name="APP_START"]'), 3000, 'frames');
     await t.click('tr[data-name="APP_START"]');
@@ -349,7 +352,11 @@ describe('/packets page', () => {
 
   it('frames tab shows the handshake frames and inspects them', async () => {
     const t = await openLog();
+    t.app.appSettings.setShowFrames(true);
     await t.click('[data-tab="frames"]');
+    // the shared packet filter does not apply to frames: only the frame filters show
+    await t.until(() => t.query('mc-packet-filters')?.hidden, 2000, 'packet filters hidden');
+    expect(t.query('select[data-filter="frame-direction"]')).not.toBeNull();
     await t.until(() => t.query('tr[data-name="SELF_INFO"]'), 3000, 'frames');
     for (const name of ['DEVICE_QUERY', 'DEVICE_INFO', 'APP_START', 'SELF_INFO']) expect(t.query(`tr[data-name="${name}"]`), name).not.toBeNull();
     expect(t.query('tr[data-name="SELF_INFO"]')!.textContent).toContain('"Emulator"');
@@ -364,6 +371,73 @@ describe('/packets page', () => {
       const rows = t.queryAll('tr[data-frame-id]');
       return rows.length > 0 && rows.every((r) => r.dataset['name'] === 'DEVICE_QUERY');
     }, 3000, 'only DEVICE_QUERY');
+  });
+
+  it('hides the Frames tab unless the showFrames setting is on, falling back to Packets when it is turned off', async () => {
+    const t = await openLog();
+    expect(t.app.appSettings.showFrames.value).toBe(false);
+    expect(t.queryAll('[role="tab"]').map((b) => b.dataset['tab'])).toEqual(['packets', 'stats']);
+    t.app.appSettings.setShowFrames(true);
+    await t.until(() => t.query('[data-tab="frames"]'), 2000, 'frames tab');
+    expect(t.queryAll('[role="tab"]').map((b) => b.dataset['tab'])).toEqual(['packets', 'stats', 'frames']);
+    await t.click('[data-tab="frames"]');
+    await t.until(() => t.query('tr[data-frame-id]'), 3000, 'frames');
+    t.app.appSettings.setShowFrames(false);
+    await t.until(() => !t.query('[data-tab="frames"]'), 2000, 'frames tab gone');
+    expect(t.query('[data-tab="packets"]')!.getAttribute('aria-selected')).toBe('true');
+    expect(t.query('table[data-table="packets"]')).not.toBeNull();
+    expect(t.query('mc-packet-filters')!.hidden).toBe(false);
+  });
+
+  it('the top filter area stays mounted with its values across Packets ⇄ Stats', async () => {
+    const t = await openLog();
+    await traffic(t);
+    const filters = t.query('mc-packet-filters')!;
+    await t.fill('select[data-filter="direction"]', 'rx');
+    await t.fill('input[data-filter="node"]', 'abcd');
+    await t.click('[data-tab="stats"]');
+    await t.until(() => t.query('mc-packet-stats'), 2000, 'stats tab');
+    expect(t.query('mc-packet-filters')).toBe(filters);
+    expect(t.query<HTMLSelectElement>('select[data-filter="direction"]')!.value).toBe('rx');
+    expect(t.query<HTMLInputElement>('input[data-filter="node"]')!.value).toBe('abcd');
+    // the bin size lives in the Stats panel, the date range in the top area
+    const bin = t.query('mc-packet-stats')!.shadowRoot!.querySelector('mc-stats-range')!;
+    expect(bin.getAttribute('parts')).toBe('bin');
+    expect(bin.shadowRoot!.querySelector('select[data-bin]')).not.toBeNull();
+    expect(bin.shadowRoot!.querySelector('input[data-range="from"]')).toBeNull();
+    expect(t.queryAll('input[data-range="from"]')).toHaveLength(1);
+    expect(t.query('mc-stats-range[parts="range"]')).not.toBeNull();
+    await t.click('[data-tab="packets"]');
+    await t.until(() => t.query('table[data-table="packets"]'), 2000, 'packets tab');
+    expect(t.query('mc-packet-filters')).toBe(filters);
+    expect(t.query<HTMLInputElement>('input[data-filter="node"]')!.value).toBe('abcd');
+  });
+
+  it('a range preset in the top area narrows both the Packets rows and the Stats count', async () => {
+    const t = await openLog();
+    await traffic(t);
+    // one packet logged three hours ago: inside "All", outside "Last hour"
+    const store = t.app.connection.store.value!;
+    const bytes = buildPacket({ routeType: RouteType.FLOOD, payloadType: PayloadType.ACK, path: new Uint8Array(0), payload: new Uint8Array(4).fill(7) });
+    const old = (await store.packets.append({ direction: 'rx', source: 'logRxData', bytes, ts: t.clock.now() - 3 * 3_600_000, snr: 4, rssi: -95 })).id;
+    const stats = t.app.packetStats;
+    const statsHasOld = () => stats.points.value.some((p) => p.id === old);
+    await t.until(() => t.query(`tr[data-packet-id="${old}"]`) && statsHasOld(), 3000, 'old packet listed and counted');
+
+    await t.click('[data-preset="1h"]');
+    await t.until(() => !t.query(`tr[data-packet-id="${old}"]`) && t.query('tr[data-packet-id]'), 3000, 'old packet filtered out');
+    expect(t.query('[data-preset="1h"]')!.getAttribute('aria-pressed')).toBe('true');
+    expect(t.query<HTMLInputElement>('input[data-range="from"]')!.value).not.toBe('');
+    await stats.settled();
+    expect(statsHasOld()).toBe(false);
+    await t.click('[data-tab="stats"]');
+    await t.until(() => t.query('mc-stat-tile[data-tile="packets"]'), 3000, 'stats tiles');
+    expect(t.query('[data-preset="1h"]')!.getAttribute('aria-pressed')).toBe('true');
+
+    // Reset clears the range too
+    await t.click('[data-action="clear-filters"]');
+    await t.until(() => t.query('[data-preset="all"]')!.getAttribute('aria-pressed') === 'true', 2000, 'All again');
+    await t.until(statsHasOld, 3000, 'old packet counted again');
   });
 
   it('export produces a JSON packet log', async () => {

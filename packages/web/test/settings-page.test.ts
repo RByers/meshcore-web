@@ -47,6 +47,20 @@ describe('settings page', () => {
     expect(t.query('[data-section="radio"]')).toBeNull();
   });
 
+  it('the Frames tab setting is off by default and the checkbox turns it on', async () => {
+    const t = (h = createHarness());
+    await t.mount();
+    location.hash = '#/settings';
+    await t.until(() => t.query('input[name="showFrames"]'), 2000, 'showFrames checkbox');
+    const box = t.query<HTMLInputElement>('input[name="showFrames"]')!;
+    expect(box.checked).toBe(false);
+    expect(box.closest('label')!.textContent).toContain('Show the Frames tab on the Packets page');
+    await t.click('input[name="showFrames"]');
+    expect(t.app.appSettings.showFrames.value).toBe(true);
+    await t.click('input[name="showFrames"]');
+    expect(t.app.appSettings.showFrames.value).toBe(false);
+  });
+
   it('changing the name updates the emulator and the header', async () => {
     const t = await openSettings();
     setValue(t, '[data-form="name"] input[name="name"]', 'Base Camp');

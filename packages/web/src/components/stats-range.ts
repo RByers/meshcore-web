@@ -1,7 +1,8 @@
 /**
- * `<mc-stats-range>`: the date-range / bin-size filter row shared by the packet log Stats tab and
- * the contact Stats tab (docs/packet-stats.md §3, §5). Bound to `app.packetStats`: presets
- * (*All* = the whole log, the default), a custom `from` / `to` pair, and the timeline bin size.
+ * `<mc-stats-range>`: the date-range / bin-size filter row (docs/packet-stats.md §3, §5). Bound to
+ * `app.packetStats`: presets (*All* = the whole log, the default), a custom `from` / `to` pair (the
+ * packet log's shared filter range), and the timeline bin size. `parts` picks what renders: `all`
+ * (the contact Stats tab), `range` (the /packets top filter area) or `bin` (the /packets Stats panel).
  */
 import { css, html, nothing, type TemplateResult } from 'lit';
 import { signal } from '@meshcore-web/core/app';
@@ -54,7 +55,18 @@ export function fromLocalInput(v: string): number | null {
  */
 const activePreset = signal<string>('all');
 
+export type StatsRangeParts = 'all' | 'range' | 'bin';
+
 export class McStatsRange extends AppElement {
+  static override properties = {
+    parts: { reflect: true },
+  };
+  declare parts: StatsRangeParts;
+
+  constructor() {
+    super();
+    this.parts = 'all';
+  }
 
   static override styles = [
     shared,
@@ -115,6 +127,15 @@ export class McStatsRange extends AppElement {
     const bin = stats.bin.value;
     const bounds = stats.bounds.value;
     const preset = range.from === null && range.to === null ? 'all' : activePreset.value;
+    const showRange = this.parts !== 'bin';
+    const showBin = this.parts !== 'range';
+    const binSelect = html`<label
+      >Bin
+      <select data-bin @change=${(e: Event) => stats.setBin(parseBin((e.target as HTMLSelectElement).value))}>
+        ${BIN_OPTIONS.map((o) => html`<option value=${String(o.value)} ?selected=${bin === o.value}>${o.label}</option>`)}
+      </select>
+    </label>`;
+    if (!showRange) return html`<div class="row" data-stats-range>${binSelect}</div>`;
     return html`<div class="row" data-stats-range>
       <span class="presets" role="group" aria-label="Date range">
         ${RANGE_PRESETS.map(
@@ -148,12 +169,7 @@ export class McStatsRange extends AppElement {
           @change=${(e: Event) => void this.#applyCustom('to', (e.target as HTMLInputElement).value)}
         />
       </label>
-      <label
-        >Bin
-        <select data-bin @change=${(e: Event) => stats.setBin(parseBin((e.target as HTMLSelectElement).value))}>
-          ${BIN_OPTIONS.map((o) => html`<option value=${String(o.value)} ?selected=${bin === o.value}>${o.label}</option>`)}
-        </select>
-      </label>
+      ${showBin ? binSelect : nothing}
       ${stats.loading.value ? html`<span class="muted" data-loading>Loading…</span>` : nothing}
     </div>`;
   }

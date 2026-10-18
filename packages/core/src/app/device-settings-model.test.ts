@@ -19,7 +19,7 @@ import {
   validatePin,
 } from './device-settings-model.js';
 import { RADIO_PRESETS, findRadioPreset } from './radio-presets.js';
-import { PREF_APPROXIMATE_POSITIONS, PREF_PACKET_RETENTION_DAYS, PREF_PATH_NAMES, PREF_SMAZ_AUTO_ENABLE, PREF_THEME, AppSettingsModel } from './app-settings-model.js';
+import { PREF_APPROXIMATE_POSITIONS, PREF_PACKET_RETENTION_DAYS, PREF_PATH_NAMES, PREF_SHOW_FRAMES, PREF_SMAZ_AUTO_ENABLE, PREF_THEME, AppSettingsModel } from './app-settings-model.js';
 
 /** Hex with spaces removed (layouts written as in docs/companion-protocol.md §4). */
 const h = (s: string): string => s.replace(/\s+/g, '');
@@ -376,6 +376,9 @@ describe('AppSettingsModel', () => {
     expect(s.smazAutoEnable.value).toBe(false);
     s.setSmazAutoEnable(true);
     expect(prefs.getItem(PREF_SMAZ_AUTO_ENABLE)).toBe('true');
+    expect(s.showFrames.value).toBe(false); // Frames tab hidden by default
+    s.setShowFrames(true);
+    expect(prefs.getItem(PREF_SHOW_FRAMES)).toBe('true');
 
     expect(s.packetRetentionDays.value).toBeNull(); // default: keep forever
     const store = app.connection.store.value!;
@@ -401,6 +404,7 @@ describe('AppSettingsModel', () => {
     expect(again.pathNames.value).toBe(true);
     expect(again.approximatePositions.value).toBe(true);
     expect(again.smazAutoEnable.value).toBe(true);
+    expect(again.showFrames.value).toBe(true);
     again.dispose();
   });
 });

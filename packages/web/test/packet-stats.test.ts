@@ -59,6 +59,14 @@ function inChart(el: McPacketStats, section: string, chart: string, sel: string)
   return host ? [...host.shadowRoot!.querySelectorAll<HTMLElement>(sel)] : [];
 }
 
+/** Chips in the shared filter area above the tabs (criteria with no control of their own). */
+function chips(t: Harness): string[] {
+  const root = t.query('mc-packet-filters')!.shadowRoot!;
+  return [...root.querySelectorAll('[data-chip]')].map((c) => c.textContent!.replace('✕', '').replace(/\s+/g, ' ').trim());
+}
+
+const filterCount = (t: Harness): HTMLElement | null => t.query('[data-field="filter-count"]');
+
 function select(el: Element, value: string): void {
   const s = el as HTMLSelectElement;
   s.value = value;
@@ -192,16 +200,13 @@ describe('/packets Stats drill-down filters', () => {
     return hit;
   }
 
-  function chips(t: Harness): string[] {
-    return t.queryAll('[data-chip]').map((c) => c.textContent!.replace('×', '').replace(/\s+/g, ' ').trim());
-  }
 
-  it('clicking a source bar filters every chart to that source; chips remove it, Clear filters clears all', async () => {
+  it('clicking a source bar filters every chart to that source; its chip in the top area removes it, Reset clears all', async () => {
     const { t, el } = await openStats();
-    expect(t.query('[data-filterbar]')).toBeNull();
+    expect(filterCount(t)).toBeNull();
 
     bar(el, 'sources', 'Alice').dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await t.until(() => t.query('[data-filterbar]'), 3000, 'filter bar');
+    await t.until(() => chips(t).length > 0, 3000, 'drill chip in the top filter area');
     await settle(t, el);
     expect(t.app.packetStats.filters.value.map((f) => f.field)).toEqual(['source']);
     expect(chips(t)).toEqual(['Source: Alice']);
@@ -223,23 +228,26 @@ describe('/packets Stats drill-down filters', () => {
     const typeChart = el.shadowRoot!.querySelector('mc-breakdown[data-breakdown="type"]')!;
     typeChart.shadowRoot!.querySelector<HTMLElement>('[data-mark="segment"][data-key="ADVERT"]')!.click();
     await settle(t, el);
-    // the type drill-down is the packet log's own type filter, so its chip comes first
-    expect(chips(t)).toEqual(['Type: ADVERT', 'Source: Alice']);
+    // the type drill-down is the packet log's own type filter: the Types control shows it, no chip
+    expect(chips(t)).toEqual(['Source: Alice']);
+    expect(t.query('[data-filter="types"]')!.textContent).toContain('(1)');
+    expect(t.query<HTMLInputElement>('input[data-type="ADVERT"]')!.checked).toBe(true);
 
     // × on the source chip leaves the type filter
     await t.click('[data-remove-filter="source"]');
     await settle(t, el);
-    expect(chips(t)).toEqual(['Type: ADVERT']);
+    expect(chips(t)).toEqual([]);
+    expect(t.query('[data-filter="types"]')!.textContent).toContain('(1)');
     expect(Number(tileValue(t, 'packets'))).toBe(t.app.packetStats.summary.value.packets);
 
     await t.click('[data-action="clear-filters"]');
     await settle(t, el);
     expect(t.app.packetStats.filters.value).toEqual([]);
-    expect(t.query('[data-filterbar]')).toBeNull();
+    expect(filterCount(t)).toBeNull();
     expect(Number(tileValue(t, 'packets'))).toBe(t.app.packetStats.unfilteredCount.value);
   });
 
-  it('breakdown legend buttons are focusable and toggle the filter; direction chips say Received', async () => {
+  it('breakdown legend buttons are focusable and toggle the filter; Received sets the direction control to rx', async () => {
     const { t, el } = await openStats();
     const dir = el.shadowRoot!.querySelector('mc-breakdown[data-breakdown="direction"]')!;
     const btn = (): HTMLButtonElement => dir.shadowRoot!.querySelector<HTMLButtonElement>('[data-legend] button[data-key="in"]')!;
@@ -247,12 +255,13 @@ describe('/packets Stats drill-down filters', () => {
     expect(dir.shadowRoot!.activeElement).toBe(btn());
     btn().click();
     await settle(t, el);
-    expect(chips(t)).toEqual(['Direction: Received']);
+    expect(t.query<HTMLSelectElement>('select[data-filter="direction"]')!.value).toBe('rx');
     expect(btn().getAttribute('aria-pressed')).toBe('true');
     // clicking the active value again removes the filter
     btn().click();
     await settle(t, el);
-    expect(t.query('[data-filterbar]')).toBeNull();
+    expect(filterCount(t)).toBeNull();
+    expect(t.query<HTMLSelectElement>('select[data-filter="direction"]')!.value).toBe('');
   });
 
   it('a hop-count bar filters from the keyboard', async () => {
@@ -287,12 +296,13 @@ describe('/packets Stats drill-down filters', () => {
     expect(inChart(el, 'channels', 'mc-bar-chart', '[data-empty]')[0]!.textContent).toContain('No group messages');
   });
 
-  it('shows an empty state but keeps the filter bar when nothing matches', async () => {
+  it('shows an empty state but keeps the count and chip when nothing matches', async () => {
     const { t, el } = await openStats();
     t.app.packetStats.addFilter({ field: 'hops', value: '99', label: '99' });
     await settle(t, el);
     expect(t.query('[data-empty="filtered"]')!.textContent).toContain('No packets match these filters');
-    expect(t.query('[data-filterbar]')).not.toBeNull();
+    expect(filterCount(t)!.textContent).toMatch(/^Showing 0 of \d+ packets$/);
+    expect(chips(t)).toEqual(['Hops: 99']);
     expect(t.query('[data-tiles]')).toBeNull();
     await t.click('[data-action="clear-filters"]');
     await settle(t, el);
@@ -302,18 +312,17 @@ describe('/packets Stats drill-down filters', () => {
 });
 
 describe('/packets filters shared by the Packets and Stats tabs', () => {
-  function chips(t: Harness): string[] {
-    return t.queryAll('[data-chip]').map((c) => c.textContent!.replace('×', '').replace(/\s+/g, ' ').trim());
-  }
 
   it('a Stats drill-down filters the Packets tab, where its chip removes it from both', async () => {
     const { t, el } = await openStats();
     const stats = t.app.packetStats;
     const hit = inChart(el, 'sources', 'mc-bar-chart', 'rect[role="button"]').find((r) => r.getAttribute('aria-label')!.startsWith('Alice:'))!;
     hit.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    await t.until(() => t.query('[data-filterbar]'), 3000, 'filter bar');
+    await t.until(() => chips(t).length > 0, 3000, 'drill chip');
+    const filters = t.query('mc-packet-filters');
 
     await t.click('[data-tab="packets"]');
+    expect(t.query('mc-packet-filters')).toBe(filters); // one filter area, not one per tab
     // the log has reloaded with the drill-down (its query waits for the stats load)
     const log = t.app.packetLog.packets;
     await t.until(() => !log.loading.value, 3000, 'packet log reloaded');
@@ -335,10 +344,10 @@ describe('/packets filters shared by the Packets and Stats tabs', () => {
 
     await t.click('[data-tab="stats"]');
     await t.until(() => t.query('[data-tiles]'), 3000, 'stats tiles');
-    expect(t.query('[data-filterbar]')).toBeNull();
+    expect(filterCount(t)).toBeNull();
   });
 
-  it('a Packets-tab filter narrows the Stats tab and shows as a chip there', async () => {
+  it('a text filter set on the Packets tab narrows the Stats tab, which shows the filtered count', async () => {
     const { t } = await openStats();
     const stats = t.app.packetStats;
     await t.click('[data-tab="packets"]');
@@ -346,8 +355,8 @@ describe('/packets filters shared by the Packets and Stats tabs', () => {
     await t.until(() => t.app.packetLog.packets.filter.value.text === 'hello from bob', 3000, 'text filter');
 
     await t.click('[data-tab="stats"]');
-    await t.until(() => t.query('[data-filterbar]'), 3000, 'filter bar');
-    expect(chips(t)).toEqual(['Text: hello from bob']);
+    await t.until(() => filterCount(t), 3000, 'filter count');
+    expect(t.query<HTMLInputElement>('input[data-filter="text"]')!.value).toBe('hello from bob');
     await t.until(() => stats.points.value.length > 0 && stats.points.value.every((p) => p.typeName === 'GRP_TXT'), 3000, 'only matching points');
     expect(stats.points.value.length).toBeLessThan(stats.unfilteredCount.value);
     await t.until(
@@ -356,27 +365,31 @@ describe('/packets filters shared by the Packets and Stats tabs', () => {
       'filter count',
     );
 
-    // Clear filters on Stats clears the Packets tab's text too
+    // Reset (shown on both tabs) clears the text for both
     await t.click('[data-action="clear-filters"]');
-    await t.until(() => t.query('[data-filterbar]') === null, 3000, 'no filter bar');
+    await t.until(() => filterCount(t) === null, 3000, 'no filter count');
     expect(t.app.packetLog.packets.filter.value).toEqual({});
   });
 
-  it("a Stats date preset is the Packets tab's From; Reset there clears it", async () => {
+  it('the date preset and From input are one pair for both tabs; Reset clears them', async () => {
     const { t } = await openStats();
     const stats = t.app.packetStats;
     await t.click('[data-preset="1h"]');
     await t.until(() => stats.range.value.from !== null, 3000, 'range set');
     const from = stats.range.value.from!;
-    // the range is not a chip
-    expect(t.query('[data-filterbar]')).toBeNull();
+    // the range is not a chip and does not count as "filtered"
+    expect(chips(t)).toEqual([]);
+    expect(filterCount(t)).toBeNull();
+    expect(t.queryAll('input[data-range="from"]')).toHaveLength(1);
 
     await t.click('[data-tab="packets"]');
-    await t.until(() => t.query<HTMLInputElement>('input[data-filter="from"]'), 3000, 'from input');
-    expect(t.query<HTMLInputElement>('input[data-filter="from"]')!.value).toBe(toDatetimeLocal(from));
+    await t.until(() => t.query('table[data-table="packets"]'), 3000, 'packets tab');
+    expect(t.queryAll('input[data-range="from"]')).toHaveLength(1);
+    expect(t.query<HTMLInputElement>('input[data-range="from"]')!.value).toBe(toDatetimeLocal(from));
+    expect(t.query('[data-preset="1h"]')!.getAttribute('aria-pressed')).toBe('true');
     await t.click('[data-action="clear-filters"]');
     await t.until(() => stats.range.value.from === null, 3000, 'range cleared');
-    await t.until(() => t.query<HTMLInputElement>('input[data-filter="from"]')!.value === '', 3000, 'from input cleared');
+    await t.until(() => t.query<HTMLInputElement>('input[data-range="from"]')!.value === '', 3000, 'from input cleared');
   });
 });
 
@@ -437,9 +450,9 @@ describe('/packets Stats text compression', () => {
     const stats = t.app.packetStats;
     const b = el.shadowRoot!.querySelector('mc-breakdown[data-breakdown="compression-all"]')!;
     b.shadowRoot!.querySelector<HTMLElement>('[data-mark="segment"][data-key="smaz"]')!.click();
-    await t.until(() => t.query('[data-filterbar]'), 3000, 'filter bar');
+    await t.until(() => chips(t).length > 0, 3000, 'drill chip');
     await settle(t, el);
-    expect(t.queryAll('[data-chip]').map((c) => c.textContent!.replace('×', '').replace(/\s+/g, ' ').trim())).toEqual(['Compression: Compressed']);
+    expect(chips(t)).toEqual(['Compression: Compressed']);
     await t.until(() => Number(tileValue(t, 'packets')) === stats.summary.value.packets, 3000, 'filtered tile');
     expect(stats.points.value.length).toBeGreaterThan(0);
     expect(stats.points.value.every((p) => p.compression === 'smaz')).toBe(true);
@@ -450,7 +463,7 @@ describe('/packets Stats text compression', () => {
     // clicking again removes it
     (seg as HTMLElement).click();
     await settle(t, el);
-    expect(t.query('[data-filterbar]')).toBeNull();
+    expect(filterCount(t)).toBeNull();
   });
 
   it('shows a one-line empty state when no text messages are shown', async () => {

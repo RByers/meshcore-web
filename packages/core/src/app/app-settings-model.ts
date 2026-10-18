@@ -2,7 +2,8 @@
  * App-level (local, not sent to the radio) settings: theme, time format, packet log retention
  * whether an exported private key may be kept for decrypting DMs in the packet inspector and
  * whether paths are shown as node names, whether the map approximates unknown positions and
- * whether SMAZ compression is turned on for a contact that sends a compressed DM.
+ * whether SMAZ compression is turned on for a contact that sends a compressed DM, and whether the
+ * Packets page shows its Frames tab (host ↔ radio frames, for debugging).
  * Stored in the global PreferencesStore (localStorage in the browser).
  */
 
@@ -24,6 +25,7 @@ export const PREF_STORE_PRIVATE_KEY = 'meshcore-web.storePrivateKey';
 export const PREF_PATH_NAMES = 'meshcore-web.pathNames';
 export const PREF_APPROXIMATE_POSITIONS = 'meshcore-web.approximatePositions';
 export const PREF_SMAZ_AUTO_ENABLE = 'meshcore-web.smazAutoEnable';
+export const PREF_SHOW_FRAMES = 'meshcore-web.showFrames';
 
 export const MAX_PACKET_RETENTION_DAYS = 3650;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -48,6 +50,7 @@ export class AppSettingsModel {
   readonly #pathNames: Signal<boolean>;
   readonly #approximatePositions: Signal<boolean>;
   readonly #smazAutoEnable: Signal<boolean>;
+  readonly #showFrames: Signal<boolean>;
 
   readonly theme: ReadonlySignal<ThemePreference>;
   readonly timeFormat: ReadonlySignal<TimeFormatPreference>;
@@ -73,6 +76,11 @@ export class AppSettingsModel {
    * set that contact's compression explicitly (feature-inventory.md §2.4a). Default off.
    */
   readonly smazAutoEnable: ReadonlySignal<boolean>;
+  /**
+   * Show the Frames tab on the Packets page: every host ↔ radio frame, for debugging radio
+   * communication. Frames are logged either way. Default off.
+   */
+  readonly showFrames: ReadonlySignal<boolean>;
 
   #offs: Array<() => void> = [];
 
@@ -97,6 +105,8 @@ export class AppSettingsModel {
     this.approximatePositions = this.#approximatePositions.readonly;
     this.#smazAutoEnable = signal(prefs.getItem(PREF_SMAZ_AUTO_ENABLE) === 'true');
     this.smazAutoEnable = this.#smazAutoEnable.readonly;
+    this.#showFrames = signal(prefs.getItem(PREF_SHOW_FRAMES) === 'true');
+    this.showFrames = this.#showFrames.readonly;
 
     // apply a user-chosen retention whenever a radio's store opens (unlimited needs no prune)
     this.#offs.push(
@@ -164,6 +174,11 @@ export class AppSettingsModel {
   setSmazAutoEnable(on: boolean): void {
     this.#smazAutoEnable.value = on;
     this.prefs.setItem(PREF_SMAZ_AUTO_ENABLE, on ? 'true' : 'false');
+  }
+
+  setShowFrames(on: boolean): void {
+    this.#showFrames.value = on;
+    this.prefs.setItem(PREF_SHOW_FRAMES, on ? 'true' : 'false');
   }
 
   /** Formats epoch ms as a clock time following the time-format preference. */

@@ -1,36 +1,34 @@
 /**
- * `/packets`: the packet log (over-the-air packets the radio reported) and the frame log (every
- * host ↔ device frame), with filters, live tail, infinite scroll, export / import / clear, and the
- * inspector in a side panel (wide) or on its own page `/packets/:id` (narrow).
+ * `/packets`: the packet log (over-the-air packets the radio reported) with live tail, infinite
+ * scroll, export / import / clear, and the inspector in a side panel (wide) or on its own page
+ * `/packets/:id` (narrow); its Stats; and, with the "Show the Frames tab" setting
+ * (`appSettings.showFrames`, off by default), the frame log (every host ↔ device frame).
  * `/packets/node/:key` opens the packet log filtered to the packets that node originated (linked
  * from the contact page; the filter uses the packet log's source index).
- * The Packets and Stats tabs share one filter (the packet log's): Stats drill-downs with no control
- * here show as removable chips. State and logic live in the core PacketLogModel; this component
- * renders and forwards intents.
+ * The Packets and Stats tabs share one filter (the packet log's), rendered once above the tab row
+ * by `<mc-packet-filters>`; the Frames tab has its own. State and logic live in the core
+ * PacketLogModel; this component renders and forwards intents.
  */
 import { css, html, nothing, type PropertyValues, type TemplateResult } from 'lit';
 import { repeat } from 'lit/directives/repeat.js';
-import { packetFilterChips, resolvedPathTitle, sendOutcomeLabel, type FrameRow, type LogView, type PacketFilter, type PacketRow } from '@meshcore-web/core/app';
-import { PayloadType, RouteType, payloadTypeName } from '@meshcore-web/core/packet';
+import { resolvedPathTitle, sendOutcomeLabel, type FrameRow, type LogView, type PacketRow } from '@meshcore-web/core/app';
 import { CMD, PUSH, RESP } from '@meshcore-web/core/protocol';
 import { AppElement } from '../../app-context.js';
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
-import { formatLogTime, frameInspectorProps, fromDatetimeLocal, packetInspectorProps, toDatetimeLocal, type InspectorProps } from './inspection.js';
+import { formatLogTime, frameInspectorProps, packetInspectorProps, type InspectorProps } from './inspection.js';
 import { jsonReplacer } from './packet-inspector.js';
 import { hopsLink } from '../../components/path-dialog.js';
-import { contactNote, pathHops } from '../../components/node-link.js';
+import { pathHops } from '../../components/node-link.js';
 import './packet-inspector.js';
 import './packet-stats.js';
+import './packet-filters.js';
 
-/** The list tabs plus the Stats tab (docs/packet-stats.md §3). */
+/** The list tabs plus the Stats tab (docs/packet-stats.md §3); Frames only with `showFrames`. */
 export type LogTab = 'packets' | 'frames' | 'stats';
 
 /** Below this host width the inspector opens as its own page. */
 export const WIDE_MIN_PX = 900;
-
-const PAYLOAD_TYPES = Object.values(PayloadType);
-const ROUTE_TYPES = Object.entries(RouteType) as [string, number][];
 
 /** Fired before a download starts (tests and integrations can observe exports). */
 export interface ExportEventDetail {
@@ -60,7 +58,10 @@ export class McPacketsPage extends AppElement {
   #io: IntersectionObserver | undefined;
   #sentinel: Element | null = null;
   #sentinelRows: unknown = null;
+  /** Height of the sticky filter area, so the sticky inspector sits below it. */
+  #filtersRo: ResizeObserver | undefined;
   #textTimer: ReturnType<typeof setTimeout> | undefined;
+  #observedFilters: Element | null = null;
   #loadSeq = 0;
   /** `send` of the packet the inspector shows (JSON), to refresh it when the outcome changes. */
   #inspectedSend = '';
@@ -118,10 +119,23 @@ export class McPacketsPage extends AppElement {
       }
       aside.card {
         position: sticky;
-        top: 72px;
+        top: calc(72px + var(--mc-filters-h, 0px));
         align-self: start;
-        max-height: calc(100dvh - 96px);
+        max-height: calc(100dvh - 96px - var(--mc-filters-h, 0px));
         overflow: auto;
+      }
+      mc-packet-filters {
+        padding-block: 8px;
+        margin-block-end: 4px;
+        background: var(--mc-bg);
+      }
+      /* wide: the shared filters stay in view under the app header (narrow: they would eat the screen) */
+      @media (min-width: 900px) {
+        mc-packet-filters {
+          position: sticky;
+          top: 60px; /* under the app header (61px) */
+          z-index: 2;
+        }
       }
       .filters {
         display: flex;
@@ -149,40 +163,6 @@ export class McPacketsPage extends AppElement {
       }
       input[type='search'] {
         min-width: 12rem;
-      }
-      details.types {
-        position: relative;
-      }
-      details.types summary {
-        list-style: none;
-        cursor: pointer;
-        border: 1px solid var(--mc-border);
-        border-radius: 8px;
-        padding: 0.35em 0.75em;
-        min-height: 2.25rem;
-        display: flex;
-        align-items: center;
-        color: var(--mc-text);
-      }
-      details.types .menu {
-        position: absolute;
-        z-index: 2;
-        inset-block-start: calc(100% + 4px);
-        background: var(--mc-surface);
-        border: 1px solid var(--mc-border);
-        border-radius: 8px;
-        padding: 8px;
-        display: grid;
-        grid-template-columns: repeat(2, max-content);
-        gap: 4px 16px;
-        box-shadow: 0 6px 20px rgb(0 0 0 / 0.15);
-      }
-      details.types .menu label {
-        flex-direction: row;
-        align-items: center;
-        gap: 6px;
-        color: var(--mc-text);
-        font-size: 0.875rem;
       }
       .toolbar {
         display: flex;
@@ -292,22 +272,6 @@ export class McPacketsPage extends AppElement {
         align-items: center;
         flex-wrap: wrap;
       }
-      .chip {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        align-self: end;
-        padding: 4px 4px 4px 10px;
-        border: 1px solid var(--mc-accent);
-        border-radius: 999px;
-        font-size: 0.85rem;
-      }
-      .chip button {
-        min-height: 0;
-        padding: 0 6px;
-        border: 0;
-        background: none;
-      }
       .visually-hidden {
         position: absolute;
         width: 1px;
@@ -327,11 +291,6 @@ export class McPacketsPage extends AppElement {
     }
   }
 
-  #clearSrc(): void {
-    void this.#log.packets.setFilter({ src: undefined });
-    if (this.params['key']) location.hash = hrefFor('/packets');
-  }
-
   override connectedCallback(): void {
     super.connectedCallback();
     this.#ro = new ResizeObserver((entries) => {
@@ -346,6 +305,10 @@ export class McPacketsPage extends AppElement {
       },
       { rootMargin: '0px 0px 600px 0px' },
     );
+    this.#filtersRo = new ResizeObserver((entries) => {
+      const h = entries[0]?.borderBoxSize[0]?.blockSize ?? 0;
+      this.style.setProperty('--mc-filters-h', `${Math.ceil(h)}px`);
+    });
   }
 
   override disconnectedCallback(): void {
@@ -353,6 +316,7 @@ export class McPacketsPage extends AppElement {
     this.#ro?.disconnect();
     this.#io?.disconnect();
     this.#sentinel = null;
+    this.#filtersRo?.disconnect();
     clearTimeout(this.#textTimer);
   }
 
@@ -367,11 +331,19 @@ export class McPacketsPage extends AppElement {
   override willUpdate(changed: PropertyValues<this>): void {
     super.willUpdate(changed);
     this.#applyRouteFilter(changed);
+    // the Frames tab was turned off in Settings while it was showing
+    if (this.tab === 'frames' && !this.app.appSettings.showFrames.peek()) this.tab = 'packets';
     this.#anchor = this.#findAnchor();
   }
 
   override updated(changed: PropertyValues<this>): void {
     super.updated(changed);
+    const filters = this.renderRoot.querySelector('mc-packet-filters');
+    if (filters !== this.#observedFilters) {
+      if (this.#observedFilters) this.#filtersRo?.unobserve(this.#observedFilters);
+      if (filters) this.#filtersRo?.observe(filters);
+      this.#observedFilters = filters;
+    }
     this.#keepAnchor();
     this.#refreshInspector();
     this.#watchSentinel();
@@ -480,20 +452,9 @@ export class McPacketsPage extends AppElement {
     return (this.tab === 'packets' ? this.#log.packets : this.#log.frames) as unknown as LogView<{ id: number }, object, { id: number }>;
   }
 
-  #setPacketFilter(patch: Partial<PacketFilter>): void {
-    void this.#log.packets.setFilter(patch);
-  }
-
   #debouncedText(apply: () => void): void {
     clearTimeout(this.#textTimer);
     this.#textTimer = setTimeout(apply, 250);
-  }
-
-  #toggleType(t: number, on: boolean): void {
-    const cur = new Set(this.#log.packets.filter.peek().payloadTypes ?? []);
-    if (on) cur.add(t);
-    else cur.delete(t);
-    this.#setPacketFilter({ payloadTypes: [...cur].sort((a, b) => a - b) });
   }
 
   async #export(): Promise<void> {
@@ -564,92 +525,6 @@ export class McPacketsPage extends AppElement {
   }
 
   // ---- rendering ----
-
-  #packetFilters(): TemplateResult {
-    const f = this.#log.packets.filter.value;
-    const types = new Set(f.payloadTypes ?? []);
-    return html`<div class="filters" role="search" aria-label="Packet filters">
-      ${f.src
-        ? html`<span class="chip" data-filter="src" title=${`Packets originated by ${f.src}`}
-            >From ${this.app.contacts.view(f.src)?.name ?? `${f.src.slice(0, 8)}…`}${contactNote(this.app.contacts.noteFor(f.src))}
-            <button data-action="clear-src" aria-label="Show packets from every node" @click=${() => this.#clearSrc()}>✕</button></span
-          >`
-        : nothing}
-      ${packetFilterChips(f)
-        .filter((c) => c.key.startsWith('drill-'))
-        .map(
-          // Stats-tab drill-downs with no control of their own (the filter is shared, §6)
-          (c) => html`<span class="chip" data-filter=${c.key} title="Filter set on the Stats tab"
-            >${c.label}
-            <button data-action="remove-chip" aria-label=${`Remove ${c.name} filter`} @click=${() => void this.#log.removeFilterChip(c.key)}>✕</button></span
-          >`,
-        )}
-      <label
-        >Direction
-        <select data-filter="direction" @change=${(e: Event) => this.#setPacketFilter({ direction: ((e.target as HTMLSelectElement).value || undefined) as PacketFilter['direction'] })}>
-          <option value="" ?selected=${!f.direction}>All</option>
-          <option value="rx" ?selected=${f.direction === 'rx'}>↓ rx (received)</option>
-          <option value="tx" ?selected=${f.direction === 'tx'}>↑ tx (sent)</option>
-        </select>
-      </label>
-      <details class="types">
-        <summary data-filter="types">Types${types.size ? ` (${types.size})` : ': all'}</summary>
-        <div class="menu">
-          ${PAYLOAD_TYPES.map(
-            (t) => html`<label
-              ><input type="checkbox" data-type=${payloadTypeName(t)} .checked=${types.has(t)}
-                @change=${(e: Event) => this.#toggleType(t, (e.target as HTMLInputElement).checked)} />${payloadTypeName(t)}</label
-            >`,
-          )}
-        </div>
-      </details>
-      <label
-        >Route
-        <select data-filter="route" @change=${(e: Event) => {
-          const v = (e.target as HTMLSelectElement).value;
-          this.#setPacketFilter({ routeTypes: v === '' ? undefined : [Number(v)] });
-        }}>
-          <option value="" ?selected=${!f.routeTypes?.length}>Any</option>
-          ${ROUTE_TYPES.map(([n, v]) => html`<option value=${v} ?selected=${f.routeTypes?.length === 1 && f.routeTypes[0] === v}>${n}</option>`)}
-        </select>
-      </label>
-      <label
-        >Node
-        <input data-filter="node" class="mono" size="10" placeholder="hash / key" .value=${f.node ?? ''}
-          @input=${(e: Event) => {
-            const v = (e.target as HTMLInputElement).value.trim();
-            this.#debouncedText(() => this.#setPacketFilter({ node: v || undefined }));
-          }} />
-      </label>
-      <label
-        >From
-        <input type="datetime-local" data-filter="from" .value=${toDatetimeLocal(f.from)}
-          @change=${(e: Event) => this.#setPacketFilter({ from: fromDatetimeLocal((e.target as HTMLInputElement).value) })} />
-      </label>
-      <label
-        >To
-        <input type="datetime-local" data-filter="to" .value=${toDatetimeLocal(f.to)}
-          @change=${(e: Event) => this.#setPacketFilter({ to: fromDatetimeLocal((e.target as HTMLInputElement).value) })} />
-      </label>
-      <label
-        >Search
-        <input type="search" data-filter="text" placeholder="text or hex" .value=${f.text ?? ''}
-          @input=${(e: Event) => {
-            const v = (e.target as HTMLInputElement).value;
-            this.#debouncedText(() => this.#setPacketFilter({ text: v.trim() || undefined }));
-          }} />
-      </label>
-      ${Object.keys(f).length
-        ? html`<button
-            data-action="clear-filters"
-            @click=${() => {
-              void this.#log.packets.clearFilter();
-              if (this.params['key']) location.hash = hrefFor('/packets');
-            }}
-          >Reset</button>`
-        : nothing}
-    </div>`;
-  }
 
   #frameFilters(): TemplateResult {
     const f = this.#log.frames.filter.value;
@@ -857,21 +732,25 @@ export class McPacketsPage extends AppElement {
     if (!conn.connected.value) {
       return html`<section class="card">
         <h2>Packets</h2>
-        <p><a href=${hrefFor('/')}>Connect a radio</a> to see its packet and frame logs.</p>
+        <p><a href=${hrefFor('/')}>Connect a radio</a> to see its packet log and statistics.</p>
       </section>`;
     }
     const log = this.#log;
+    const showFrames = this.app.appSettings.showFrames.value;
     // The inspector belongs to the tab its row came from: switching tabs hides it (and back shows it).
     const split = this.tab !== 'stats' && this.wide && this.selected !== null && this.selected.tab === this.tab;
     return html`
+      <mc-packet-filters ?node-route=${!!this.params['key']} ?hidden=${this.tab === 'frames'}></mc-packet-filters>
       <div class="tabs" role="tablist" aria-label="Log">
         <button role="tab" data-tab="packets" aria-selected=${this.tab === 'packets' ? 'true' : 'false'} @click=${() => this.#setTab('packets')}>
           Packets <span class="muted">(${log.packets.total.value})</span>
         </button>
-        <button role="tab" data-tab="frames" aria-selected=${this.tab === 'frames' ? 'true' : 'false'} @click=${() => this.#setTab('frames')}>
-          Frames <span class="muted">(${log.frames.total.value})</span>
-        </button>
         <button role="tab" data-tab="stats" aria-selected=${this.tab === 'stats' ? 'true' : 'false'} @click=${() => this.#setTab('stats')}>Stats</button>
+        ${showFrames
+          ? html`<button role="tab" data-tab="frames" aria-selected=${this.tab === 'frames' ? 'true' : 'false'} @click=${() => this.#setTab('frames')}>
+              Frames <span class="muted">(${log.frames.total.value})</span>
+            </button>`
+          : nothing}
       </div>
       ${this.tab === 'stats'
         ? html`<section role="tabpanel" aria-label="Packet statistics"><mc-packet-stats></mc-packet-stats></section>`
@@ -884,7 +763,7 @@ export class McPacketsPage extends AppElement {
     return html`
       <div class="layout ${split ? 'split' : ''}">
         <section role="tabpanel" aria-label=${this.tab === 'packets' ? 'Over-the-air packets' : 'Host ↔ device frames'}>
-          ${this.tab === 'packets' ? this.#packetFilters() : this.#frameFilters()} ${this.#toolbar()}
+          ${this.tab === 'frames' ? this.#frameFilters() : nothing} ${this.#toolbar()}
           ${this.tab === 'packets' ? this.#packetTable(log.packets.rows.value) : this.#frameTable(log.frames.rows.value)}
         </section>
         ${split

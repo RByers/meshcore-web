@@ -245,13 +245,25 @@ marks for a small dataset, links appear, dot click dispatches the id, series bey
 
 ## 3. Web: the Stats tab (`packages/web/src/pages/packets/packet-stats.ts`, `<mc-packet-stats>`)
 
-`LogTab` gains `'stats'`; the packets page renders `<mc-packet-stats>` for it (the toolbar /
-filters of the list tabs are not shown; the inspector split is hidden). Layout, top to bottom:
+**Page layout.** `/packets` renders, top to bottom: one **shared filter area**
+(`<mc-packet-filters>`, `packages/web/src/pages/packets/packet-filters.ts`, rendered once by the
+page so switching tabs keeps it mounted; sticky under the app header on wide viewports), then the
+tab row *Packets | Stats* (*| Frames* only with the `showFrames` app setting, off by default),
+then the tab content. The filter area edits the shared packet filter (§6): date range — presets
+*All* (default), *Last hour*, *24 h*, *7 d*, and one pair of `datetime-local` *From* / *To* inputs
+(`<mc-stats-range parts="range">`; the range is the filter's `from` / `to`) — direction, types,
+route, node, text, removable chips for criteria with no control of their own (the
+`/packets/node/:key` source, `data-filter="src"`, and Stats drill-downs, `data-filter="drill-<field>"`
+/ `data-chip="<field>"`), and *Reset* (`data-action="clear-filters"`), which clears everything, the
+range included. On the Frames tab the area is hidden: frames keep their own filter row in the
+Frames panel, since the packet filter does not apply to them.
 
-1. **Filter row**: date range — presets *All* (default), *Last hour*, *24 h*, *7 d*, and two
-   `datetime-local` inputs for a custom range; bin size *auto / 1 min / 5 min / 1 h / 1 d*. The
-   range is the shared packet filter's `from` / `to` (§6), so the Packets tab's *From* / *To*
-   follow it; the bin is kept in the stats model (neither in the URL). A line of stat tiles: packets, bytes, airtime %
+`LogTab` gains `'stats'`; the packets page renders `<mc-packet-stats>` for it (the list toolbar
+is not shown; the inspector split is hidden). The Stats panel, top to bottom:
+
+1. **Bin size** *auto / 1 min / 5 min / 1 h / 1 d* (`<mc-stats-range parts="bin">`; kept in the
+   stats model, not in the URL), and, while any criterion other than the range is active,
+   "Showing X of Y packets" (`data-field="filter-count"`). A line of stat tiles: packets, bytes, airtime %
    (with the radio params in the tooltip, "—" when unknown), unique sources, span.
 2. **Packet paths** (`data-section="paths"`, from `routes`, §1.7): hidden by default behind a
    *Map* / *Hide map* toggle (`aria-pressed`); while hidden, one line "N packets with a known
@@ -301,25 +313,21 @@ link. Charts opt in per item with a `key` (`<mc-bar-chart>` dispatches `bar-sele
 are `role=button` hit rects with Enter / Space; `<mc-breakdown>` dispatches `segment-select` from
 segments and from legend `<button>`s), with `selected` marking the active value; items without a
 key (e.g. the contact Stats tab) stay plain. The filter is **shared with the Packets tab** (§6):
-switching tabs never clears it. While any criterion other than the range is active a sticky
-filter bar sits under the range: a chip per criterion from the core `packetFilterChips` — the
-drill-downs and the Packets tab's own filters alike ("Source: Alice ×", "Type: ADVERT ×",
-"Text: foo ×"), each removed with `packetLog.removeFilterChip(key)` — "Showing X of Y packets" and
-a *Clear filters* button (`clearFilters()`: everything but the range). Filters matching nothing →
-"No packets match these filters." with the bar kept. Active-segment highlighting reads
-`stats.filters`. On the Packets tab, drill-downs set here show in its controls (direction, a single
-type, a single route) or, for the fields it has no control for (source, category, channel, hops,
-compression), as removable chips in its filter row (`data-filter="drill-<field>"`); its *Reset*
-clears everything, the range included.
+switching tabs never clears it. Drill-downs show in the shared filter area above the tabs: in its
+controls (direction, a single type, a single route) or, for the fields it has no control for
+(source, category, channel, hops, compression), as removable chips ("Source: Alice ✕", removed with
+`packetLog.removeFilterChip(key)`); its *Reset* clears everything, the range included. Filters
+matching nothing → "No packets match these filters." with the "Showing 0 of Y" line kept.
+Active-segment highlighting reads `stats.filters`.
 
 Everything renders from the model's signals (read in `render()` → auto re-render). Empty log →
 one empty-state line. Browser tests (`packages/web/test/packet-stats.test.ts`, harness +
 emulator scenario that produces packets): the tab appears and renders tiles and the four chart
 elements; the source chart has links to `/node/…`; the y/colour selectors change the dot plot's
 axis label / legend; a date preset shrinks the packet count tile; source-bar / segment / keyboard
-filtering, chip removal, *Clear filters* and the no-match state; the shared filter across tabs (a
-source drill-down filters the Packets tab and its chip there removes it; a Packets-tab text filter
-narrows Stats with a chip; a date preset is the Packets tab's *From*, cleared by *Reset*); the
+filtering, chip removal in the top area, *Reset* and the no-match state; the shared filter across tabs (a
+source drill-down filters the Packets tab and its chip removes it; a text filter narrows Stats with
+the filtered count; one preset / *From* pair for both tabs, cleared by *Reset*); the
 compression section's counts, summary, *Compressed* filter, empty state and the *Compression* dot
 colouring; the paths card's summary, map lines and widths, sized markers with counts (this radio
 `self`), note, filter narrowing, the approximate toggle's dashed lines and *Hide map*.
@@ -334,9 +342,9 @@ for `packet-stats-model.ts` / `airtime.ts`.
 The node page (`/node/:key`, see roadmap "Node page") has a *Stats* tab (`/node/:key/stats`) next
 to *Info* and the other tabs.
 *Stats* is `<mc-contact-stats key=…>` (`packages/web/src/pages/messaging/contact-stats.ts`) fed by
-`app.packetStats.forContact(key)` and the same global date range (reuse the same filter row
-element as the packets Stats tab — extract it to `packages/web/src/charts/` or
-`components/` as `<mc-stats-range>` bound to the model). To support it, `StatPacket` also carries:
+`app.packetStats.forContact(key)` and the same global date range (the same
+`components/stats-range.ts` element as `/packets`, bound to the model, with every part shown: presets,
+*From* / *To* and bin size). To support it, `StatPacket` also carries:
 
 ```ts
 path: readonly NodeRef[]   // every path entry resolved (oldest forwarder first); [] when direct / TRACE
