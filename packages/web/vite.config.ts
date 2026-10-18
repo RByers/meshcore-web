@@ -21,6 +21,9 @@ export default defineConfig({
   server: {
     port: 5180,
     strictPort: true,
+    // No hot updates or automatic full reloads when files change: a reload would drop the
+    // radio connection. Refresh the page by hand to pick up edits.
+    hmr: false,
   },
   preview: {
     port: 4173,
