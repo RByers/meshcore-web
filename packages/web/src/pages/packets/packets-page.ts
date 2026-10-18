@@ -11,7 +11,7 @@
  */
 import { css, html, nothing, type PropertyValues, type TemplateResult } from 'lit';
 import { repeat } from 'lit/directives/repeat.js';
-import { PATH_SEPARATOR, resolvedPathTitle, sendOutcomeLabel, type FrameRow, type LogView, type PacketRow } from '@meshcore-web/core/app';
+import { MAP_PACKET_LIMIT, PATH_SEPARATOR, resolvedPathTitle, sendOutcomeLabel, type FrameRow, type LogView, type PacketRow } from '@meshcore-web/core/app';
 import { CMD, PUSH, RESP } from '@meshcore-web/core/protocol';
 import { AppElement } from '../../app-context.js';
 import { hrefFor } from '../../router.js';
@@ -594,10 +594,12 @@ export class McPacketsPage extends AppElement {
         ? html`<button
             data-action="map"
             aria-pressed=${this.showMap ? 'true' : 'false'}
-            title="Map the paths of the newest packets listed"
+            title=${v.matching.value > MAP_PACKET_LIMIT
+              ? `Map the paths of the newest ${MAP_PACKET_LIMIT} of the ${v.matching.value} packets listed (only ${MAP_PACKET_LIMIT} are mapped)`
+              : 'Map the paths of the packets listed'}
             @click=${() => (this.showMap = !this.showMap)}
           >
-            ${this.showMap ? 'Hide map' : 'Map'}
+            ${this.showMap ? 'Hide map' : v.matching.value > MAP_PACKET_LIMIT ? `Map newest ${MAP_PACKET_LIMIT}` : 'Map'}
           </button>`
         : nothing}
       <button data-action="export" @click=${() => void this.#export()}>Export</button>

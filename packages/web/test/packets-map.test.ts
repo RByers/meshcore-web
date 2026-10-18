@@ -84,6 +84,7 @@ describe('/packets Map button', () => {
     const note = () => t.query('[data-field="packets-map-note"]')!.textContent!.replace(/\s+/g, ' ');
     expect(note()).toMatch(/Paths of the 5 packets listed \(5 have a known path\)\. Arrows show travel direction/);
     expect(note()).toMatch(/busiest: 4/);
+    expect(within(t.query('mc-packets-map'), '[data-field="packets-map-limit"]')).toHaveLength(0);
 
     // a filter narrows it: 1-hop packets only (Alice ×2 and Bob via Hilltop)
     t.app.packetStats.addFilter({ field: 'hops', value: '1', label: '1 hop' });
@@ -94,5 +95,33 @@ describe('/packets Map button', () => {
     await t.click('[data-action="map"]');
     await t.until(() => !t.query('mc-packets-map'), 3000, 'map hidden');
     expect(button.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('says up front when more packets are listed than the map shows', async () => {
+    const t = (h = createHarness());
+    await t.mount();
+    await t.connectEmulator('/packets');
+    await t.until(() => t.query('[data-tab="packets"]'), 3000, 'packets page');
+    await t.app.connection.capture!.idle();
+    const s = t.emulatorScenario();
+    const hill = s.keys.repeater[0]!;
+    const store = t.app.connection.store.value!;
+    const now = t.clock.now();
+    const bytes = advert(s.keys.alice, 'Alice', [hill]);
+    for (let i = 0; i < 502; i++) await store.packets.append({ direction: 'rx', source: 'logRxData', bytes, ts: now + i, snr: 4, rssi: -100 });
+    await t.app.packetStats.settled();
+    await t.until(() => t.app.packetStats.points.value.length === 502, 10000, 'stats points');
+
+    const label = () => t.query<HTMLButtonElement>('[data-action="map"]')!.textContent!.trim();
+    await t.until(() => label() === 'Map newest 500', 5000, 'limited button label');
+    expect(t.query('[data-action="map"]')!.getAttribute('title')).toMatch(/newest 500 of the 502 packets listed/);
+
+    await t.click('[data-action="map"]');
+    await t.until(() => within(t.query('mc-packets-map'), '[data-field="packets-map-limit"]').length === 1, 3000, 'limit banner');
+    const banner = within(t.query('mc-packets-map'), '[data-field="packets-map-limit"]')[0]!.textContent!.replace(/\s+/g, ' ');
+    expect(banner).toMatch(/Only the newest 500 of the 502 packets listed are mapped/);
+    await t.until(() => within(t.query('mc-packets-map'), '[data-field="packets-map-note"]').length === 1, 3000, 'note');
+    const note = within(t.query('mc-packets-map'), '[data-field="packets-map-note"]')[0]!.textContent!.replace(/\s+/g, ' ');
+    expect(note).toMatch(/Paths of the newest 500 of the 502 packets listed \(500 have a known path\)/);
   });
 });

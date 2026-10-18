@@ -7,7 +7,7 @@
  * positions toggle and its fit-bounds rules.
  */
 import { css, html, nothing, type TemplateResult } from 'lit';
-import { type Bounds, type PathUsageMap, type PathUsageRoute } from '@meshcore-web/core/app';
+import { MAP_PACKET_LIMIT, type Bounds, type PathUsageMap, type PathUsageRoute } from '@meshcore-web/core/app';
 import { AppElement } from '../../app-context.js';
 import { shared } from '../../styles.js';
 import { formatNumber } from '../../charts/index.js';
@@ -31,6 +31,14 @@ export class McPacketsMap extends AppElement {
       }
       mc-tile-map {
         height: clamp(240px, 45dvh, 420px);
+      }
+      .limit {
+        margin: 0 0 6px;
+        padding: 6px 10px;
+        border-inline-start: 4px solid var(--mc-warn);
+        background: color-mix(in oklab, var(--mc-warn) 15%, transparent);
+        border-radius: 4px;
+        font-size: 13px;
       }
       .note {
         margin: 6px 0 0;
@@ -85,15 +93,24 @@ export class McPacketsMap extends AppElement {
       listed > packets
         ? `Paths of the newest ${formatNumber(packets, 0)} of the ${plural(listed, 'packet')} listed`
         : `Paths of the ${plural(listed, 'packet')} listed`;
+    // over the limit: say so up front, not only in the note under the map
+    const limit =
+      listed > packets
+        ? html`<p class="limit" role="status" data-field="packets-map-limit">
+            Only the newest ${formatNumber(MAP_PACKET_LIMIT, 0)} of the ${plural(listed, 'packet')} listed are mapped (the first
+            ${formatNumber(MAP_PACKET_LIMIT, 0)} rows). Narrow the filters, e.g. the date range, to map the others.
+          </p>`
+        : nothing;
     const known = `${formatNumber(mapped, 0)} ${mapped === 1 ? 'has' : 'have'} a known path`;
     if (m.edges.length === 0) {
-      return html`<p class="note muted" data-field="packets-map-empty">
+      return html`${limit}<p class="note muted" data-field="packets-map-empty">
           ${scope} (${known}). None can be drawn: ${mapped ? 'the nodes on them have no known location.' : 'no packet has a known path.'}
         </p>
         ${toggle}`;
     }
     const maxStop = m.stops.reduce((n, st) => Math.max(n, st.count), 0);
     return html`
+      ${limit}
       <mc-tile-map .tileUrl=${this.app.map.tileUrl.value} .lines=${directedUsageLines(m)} label="Paths of listed packets" data-field="packets-map">
         ${m.stops.map(
           (st) => html`<mc-map-marker
