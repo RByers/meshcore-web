@@ -3,7 +3,7 @@ import { PayloadType, RouteType } from '../packet/constants.js';
 import { buildPacket } from '../packet/packet.js';
 import type { PacketRecord, PacketSend } from '../store/schema.js';
 import { concatBytes, toHex } from '../util/bytes.js';
-import { formatDurationMs, packetEndpoints, sendOutcomeLabel, viewPacket } from './packet-summary.js';
+import { formatDurationMs, nodeLabel, packetEndpoints, sendOutcomeLabel, viewPacket } from './packet-summary.js';
 
 const T = 1_700_000_000_000;
 const dm = (send: PacketSend) => ({ direction: 'tx' as const, ts: T, payloadType: PayloadType.TXT_MSG, send });
@@ -91,5 +91,25 @@ describe('packetEndpoints', () => {
     expect(viewPacket(rec(PayloadType.ACK, Uint8Array.of(1, 2, 3, 4))).endpoints).toEqual({ src: null, dst: null });
     expect(viewPacket(rec(PayloadType.REQ, Uint8Array.of(0x0c))).endpoints).toEqual({ src: null, dst: null }); // malformed
     expect(packetEndpoints(undefined)).toEqual({ src: null, dst: null });
+  });
+});
+
+describe('nodeLabel', () => {
+  const ctx = {
+    channels: [],
+    nodes: [
+      { key: 'a1' + '00'.repeat(31), name: 'Alice' },
+      { key: 'b2' + '00'.repeat(31), name: 'Bob' },
+      { key: 'b2' + '11'.repeat(31), name: 'Bert' },
+    ],
+  };
+
+  it('names a hash matching exactly one node', () => {
+    expect(nodeLabel(ctx, 'A1')).toBe('Alice');
+  });
+
+  it('shows just the hex when the hash matches several nodes or none', () => {
+    expect(nodeLabel(ctx, 'b2')).toBe('b2');
+    expect(nodeLabel(ctx, 'c3')).toBe('c3');
   });
 });

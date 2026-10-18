@@ -89,13 +89,11 @@ function hex2(n: number): string {
   return n.toString(16).padStart(2, '0');
 }
 
-/** Name for a 1-byte node hash (or a longer hash / prefix hex), else the hex itself. */
+/** Name for a 1-byte node hash (or a longer hash / prefix hex) matching exactly one known node, else the hex itself. */
 export function nodeLabel(ctx: SummaryContext, hashHex: string): string {
   const h = hashHex.toLowerCase();
   const matches = ctx.nodes.filter((n) => n.key.startsWith(h));
-  if (matches.length === 1) return matches[0]!.name || h;
-  if (matches.length > 1) return `${h} (${matches.map((m) => m.name).join('|')})`;
-  return h;
+  return matches.length === 1 && matches[0]!.name ? matches[0]!.name : h;
 }
 
 /** Name for a public key or key prefix, else its first 4 bytes. */
