@@ -145,6 +145,9 @@ export class ChatModel extends StoreBoundModel {
    */
   readonly effectiveRegion: ReadonlySignal<EffectiveRegion> = computed(() => this.#effective(this.region.value));
 
+  /** Whether the radio can send a channel message unscoped despite its default scope (firmware v12+). */
+  readonly unscopedSupported: ReadonlySignal<boolean> = computed(() => this.#unscopedSupported());
+
   readonly pageSize: number;
   readonly #retry: ChatRetryOptions;
   readonly #paths: DmPathRecorder | undefined;

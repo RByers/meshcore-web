@@ -95,6 +95,7 @@ describe('ChatModel: channel regions (flood scope)', () => {
     expect(p.routeType).toBe(RouteType.TRANSPORT_FLOOD);
     expect(p.transportCodes![0]).toBe(transportCodeSync(homeKey, PayloadType.GRP_TXT, p.payload));
 
+    expect(chat.unscopedSupported.value).toBe(true);
     await chat.setRegion(UNSCOPED_REGION);
     await vi.waitFor(() => expect(chat.effectiveRegion.value).toBeNull());
     const w2 = watch(t);
@@ -107,6 +108,7 @@ describe('ChatModel: channel regions (flood scope)', () => {
 
   it('firmware before v12 cannot send unscoped: no SET, the radio default applies', async () => {
     const { t, chat } = await publicChat({ scenario: { firmware: { verCode: 11 } } });
+    expect(chat.unscopedSupported.value).toBe(false);
     await chat.setRegion(UNSCOPED_REGION);
     await vi.waitFor(() => expect(chat.region.value).toBe(UNSCOPED_REGION));
     const w = watch(t);

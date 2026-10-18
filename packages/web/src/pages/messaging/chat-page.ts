@@ -7,9 +7,12 @@
  * (`ChatModel.firstUnreadId`); on open the log scrolls to it instead of the bottom.
  * A channel's "⋯" header button opens its details (key, channel hash, slot): `[data-action="details"]`,
  * `dialog#channel-details` with `[data-field="detail-*"]` values.
+ * Its region chip (`[data-action="region"]`) shows the scope channel sends go out with and opens
+ * `dialog#channel-region` to pick one (`ChatModel.setRegion`). Messages sent / received in a region
+ * show a `#name` tag; a reply to one goes out in that region unless "in #name" is unticked.
  */
 import { css, html, nothing, type PropertyValues, type TemplateResult } from 'lit';
-import { parseReply, receivedSignal, type ChannelDetails, type ChatModel } from '@meshcore-web/core/app';
+import { UNSCOPED_REGION, parseReply, receivedSignal, type ChannelDetails, type ChatModel, type EffectiveRegion } from '@meshcore-web/core/app';
 import type { ConversationType, MessageRecord } from '@meshcore-web/core/store';
 import { smazSizes } from '@meshcore-web/core/util/smaz';
 import { AppElement } from '../../app-context.js';
@@ -290,6 +293,38 @@ export class McChatPage extends AppElement {
         min-height: 0;
         padding: 0 8px;
       }
+      .reply-banner label.reply-region {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        flex: none;
+        white-space: nowrap;
+      }
+      .region-tag {
+        padding: 0 6px;
+        border-radius: 999px;
+        background: var(--mc-surface-2);
+        color: var(--mc-text-muted);
+      }
+      header .region-chip {
+        border-radius: 999px;
+      }
+      #channel-region fieldset {
+        border: 0;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 6px;
+      }
+      #channel-region label.radio {
+        flex-direction: row;
+        align-items: baseline;
+        gap: 8px;
+      }
+      #channel-region label.radio > span {
+        display: flex;
+        flex-direction: column;
+      }
       .compose-foot {
         display: flex;
         flex-wrap: wrap;
@@ -349,6 +384,8 @@ export class McChatPage extends AppElement {
   #longPress = new LongPress();
   /** The channel details dialog's content (loaded when it opens). */
   #details: ChannelDetails | undefined;
+  /** Reply in the quoted message's region (when it has one). */
+  #replyInRegion = true;
 
   get convType(): ConversationType {
     return this.mode === 'channel' ? 'channel' : 'contact';
@@ -441,10 +478,11 @@ export class McChatPage extends AppElement {
     if (!chat) return;
     const text = this.#draft;
     if (!text.trim() || chat.budget(text.trim()).over) return;
+    const region = this.#replyRegion(chat);
     try {
       this.#draft = '';
       this.requestUpdate();
-      await chat.send(text);
+      await chat.send(text, region !== undefined ? { region } : {});
       this.#scrollToBottom();
     } catch (err) {
       this.#draft = text;
@@ -495,7 +533,14 @@ export class McChatPage extends AppElement {
     }
   }
 
+  /** The region a reply goes out in instead of the channel's: the quoted message's, if kept. */
+  #replyRegion(chat: ChatModel): string | undefined {
+    const r = this.convType === 'channel' ? chat.replyTo.peek()?.region : undefined;
+    return r && this.#replyInRegion ? r : undefined;
+  }
+
   #reply(m: MessageRecord): void {
+    this.#replyInRegion = true;
     this.#chat?.setReplyTo(m);
     this.renderRoot.querySelector<HTMLTextAreaElement>('[data-field="composer"]')?.focus();
   }
@@ -551,6 +596,63 @@ export class McChatPage extends AppElement {
     </dialog>`;
   }
 
+  async #openRegion(): Promise<void> {
+    this.requestUpdate();
+    await this.updateComplete;
+    const d = this.renderRoot.querySelector<HTMLDialogElement>('#channel-region');
+    if (d) d.returnValue = '';
+    d?.querySelector('form')?.reset(); // back to the current choice
+    d?.showModal();
+  }
+
+  async #onRegionClose(e: Event): Promise<void> {
+    const d = e.currentTarget as HTMLDialogElement;
+    const chat = this.#chat;
+    const form = d.querySelector('form');
+    if (d.returnValue !== 'save' || !chat || !form) return;
+    const v = new FormData(form).get('region');
+    if (typeof v !== 'string') return;
+    try {
+      await chat.setRegion(v === '' ? undefined : v);
+    } catch (err) {
+      this.app.notifications.error('Could not set the region', err);
+    }
+  }
+
+  #regionDialog(chat: ChatModel) {
+    const choice = chat.region.value ?? '';
+    const def = this.app.regions.radioDefault.value;
+    const saved = this.app.regions.names.value;
+    const names = choice && choice !== UNSCOPED_REGION && !saved.includes(choice) ? [...saved, choice] : saved;
+    const option = (value: string, label: string, hint?: string) =>
+      html`<label class="radio" data-region-option=${value || 'default'}
+        ><input type="radio" name="region" value=${value} ?checked=${choice === value} /><span
+          >${label}${hint ? html`<span class="hint">${hint}</span>` : nothing}</span
+        ></label
+      >`;
+    const defHint = def ? `the radio's default scope, #${def.name}` : def === null ? "the radio's default: no region" : "the radio's default scope";
+    return html`<dialog id="channel-region" aria-labelledby="channel-region-h" closedby="any" @close=${(e: Event) => void this.#onRegionClose(e)}>
+      <form method="dialog">
+        <h3 id="channel-region-h">Region</h3>
+        <p class="hint muted">Messages to this channel only flood through repeaters that serve the region.</p>
+        <fieldset>
+          <legend class="visually-hidden">Region for this channel</legend>
+          ${option('', 'Default', defHint)}
+          ${chat.unscopedSupported.value || choice === UNSCOPED_REGION ? option(UNSCOPED_REGION, 'No region', 'plain flood, reaches every repeater') : nothing}
+          ${names.map((n) => option(n, `#${n}`))}
+        </fieldset>
+        ${saved.length ? nothing : html`<p class="hint muted" data-field="no-regions">No saved regions yet.</p>`}
+        <a href=${hrefFor('/settings')} data-action="manage-regions" @click=${(e: Event) => (e.currentTarget as HTMLElement).closest('dialog')?.close()}
+          >Manage regions in Settings</a
+        >
+        <div class="actions">
+          <button value="cancel" data-action="region-cancel">Cancel</button>
+          <button value="save" class="primary" data-action="region-save">Save</button>
+        </div>
+      </form>
+    </dialog>`;
+  }
+
   #status(m: MessageRecord) {
     if (m.direction !== 'out') return nothing;
     const attempts = (m.attempt ?? 0) + 1;
@@ -601,6 +703,9 @@ export class McChatPage extends AppElement {
       </div>
       <div class="meta">
         <time datetime=${new Date(m.receivedAt).toISOString()}>${formatTime(m.receivedAt, this.app.clock.now())}</time>
+        ${m.region
+          ? html`<span class="region-tag" data-field="region" title=${`${m.direction === 'out' ? 'Sent' : 'Received'} in region #${m.region}`}>#${m.region}</span>`
+          : nothing}
         ${m.direction === 'in' ? this.#signal(m) : nothing}
         ${m.compressed ? smazIcon(m) : nothing} ${this.#status(m)}
         ${chat.canReact(m)
@@ -681,9 +786,12 @@ export class McChatPage extends AppElement {
             <button data-action="mute" aria-pressed=${ch?.muted ? 'true' : 'false'} @click=${() => void this.#toggleMute()}>
               ${ch?.muted ? '🔕 Muted' : '🔔 Mute'}
             </button>
+            <button data-action="region" class="region-chip" title="Region (flood scope) for messages to this channel" @click=${() => void this.#openRegion()}>
+              ${regionLabel(chat.effectiveRegion.value)}
+            </button>
             <button data-action="details" aria-label="Channel details" title="Channel details" @click=${() => void this.#openDetails()}>⋯</button>
           </div>
-          ${this.#detailsDialog()}`
+          ${this.#detailsDialog()} ${this.#regionDialog(chat)}`
         : nothing}
     </header>`;
   }
@@ -730,6 +838,20 @@ export class McChatPage extends AppElement {
         ${replyTo
           ? html`<div class="reply-banner" data-field="reply-banner">
               <span>Replying to <strong>${chat.replyName(replyTo)}</strong>: ${replyTo.text}</span>
+              ${channel && replyTo.region
+                ? html`<label class="reply-region" title="Send the reply in the region the message came from"
+                    ><input
+                      type="checkbox"
+                      data-field="reply-in-region"
+                      .checked=${this.#replyInRegion}
+                      @change=${(e: Event) => {
+                        this.#replyInRegion = (e.target as HTMLInputElement).checked;
+                        this.requestUpdate();
+                      }}
+                    />
+                    in #${replyTo.region}</label
+                  >`
+                : nothing}
               <button type="button" data-action="cancel-reply" aria-label="Cancel reply" @click=${() => chat.setReplyTo(null)}>✕</button>
             </div>`
           : nothing}
@@ -758,6 +880,12 @@ export class McChatPage extends AppElement {
       <mc-reaction-picker @reaction-pick=${(e: CustomEvent<{ emoji: string }>) => void this.#react(e.detail.emoji)}></mc-reaction-picker>
     `;
   }
+}
+
+/** The region chip: where channel sends go. */
+function regionLabel(r: EffectiveRegion): string {
+  if (!r) return 'No region';
+  return r.fromDefault ? `#${r.name} (radio default)` : `#${r.name}`;
 }
 
 const unreadDivider = html`<li class="unread-divider" data-field="unread-divider" role="separator" aria-label="New messages">New messages</li>`;

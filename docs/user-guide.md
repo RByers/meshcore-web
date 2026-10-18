@@ -140,6 +140,26 @@ with a **Disconnect** button; disconnect first to connect to a different radio.
 - Channel messages use the `sender: text` convention and show the sender's name. Anyone
   with the key can read a channel; use a random key for a private group.
 
+### Regions
+
+A **region** (flood scope, e.g. `#east`) limits how far a channel message floods: only
+repeaters that serve the region forward it. Direct messages are never scoped by the app.
+
+- **Settings → Regions** keeps the list of region names you know (works without a radio).
+  Add one by name (lowercase letters, digits and `-`), remove it, or **Fetch from repeaters**
+  to ask every repeater contact which regions it serves (only repeaters reachable direct or
+  along a known path answer; the fetch can be cancelled). A single repeater can be asked
+  from its node page: **Tools → Regions → Fetch regions**, then add the names you want.
+- **Settings → Advanced → Default flood scope** is the radio's own default, used for every
+  flood the radio sends; the field suggests the saved names.
+- In a channel's header, the region button shows where messages go: `#east`,
+  `#home (radio default)` or `No region`. It opens a picker: **Default** (follow the radio's
+  default scope), **No region** (a plain flood; firmware v12+), or a saved region. The choice
+  is remembered per channel.
+- Messages sent or received in a region show a small `#region` tag. Replying to one sends
+  the reply in that region (untick **in #region** in the reply bar to use the channel's).
+- The packet log names the region of scoped packets it can match against the saved list.
+
 ## Map
 
 **Map** shows contacts that advertised a location, plus this radio's own position (set in
@@ -234,6 +254,8 @@ distant path; the app runs one remote request at a time, as the firmware require
 - **Adverts**: send an advert now (flood or zero-hop), advert interval and location sharing.
 - **Device**: battery, storage, stats, clock drift with **Sync time**, BLE PIN.
 - **Contacts**: auto-add policy and telemetry permissions.
+- **Regions** (works without a radio): saved region names, fetch from repeaters (see
+  [Regions](#regions)).
 - **Advanced**: tuning, export/import private key, reboot, factory reset (requires typing a
   confirmation).
 - **App** (works without a radio): theme (system/light/dark), time format, packet-log

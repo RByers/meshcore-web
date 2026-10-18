@@ -2,6 +2,8 @@
  * Settings page (Phase 11): device settings of the connected radio (identity, radio, clock and
  * PIN, contacts policy, advanced) and local app settings. Thin view over
  * `app.deviceSettings` (DeviceSettingsModel) and `app.appSettings` (AppSettingsModel).
+ * The Regions card (`app.regions`) edits the saved region list without a radio; fetching regions
+ * from repeaters needs a connection.
  */
 import { css, html, nothing, type TemplateResult } from 'lit';
 import {
@@ -15,6 +17,8 @@ import {
   TIME_FORMAT_OPTIONS,
   effect,
   findRadioPreset,
+  normalizeRegionName,
+  validateRegionName,
   type DeviceSettingsModel,
   type SettingsAction,
   type ThemePreference,
@@ -211,6 +215,27 @@ export class McSettingsPage extends AppElement {
       .warn {
         color: var(--mc-warn);
       }
+      ul.regions {
+        list-style: none;
+        margin: 0 0 10px;
+        padding: 0;
+      }
+      ul.regions li {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding-block: 4px;
+        border-block-end: 1px solid var(--mc-border);
+      }
+      ul.regions .name {
+        flex: 1;
+        font-weight: 600;
+        overflow-wrap: anywhere;
+      }
+      ul.regions button {
+        min-height: 0;
+        padding: 2px 10px;
+      }
       .danger-zone {
         border-color: color-mix(in oklab, var(--mc-danger), transparent 50%);
       }
@@ -244,6 +269,8 @@ export class McSettingsPage extends AppElement {
   #exportedKey: string | null = null;
   #dialog: DialogRequest | null = null;
   #dialogText = '';
+  /** A running "Fetch from repeaters": progress and its abort controller. */
+  #regionFetch: { done: number; total: number; ac: AbortController } | null = null;
   #off: (() => void) | undefined;
   #tick: ReturnType<typeof setInterval> | undefined;
 
@@ -278,6 +305,8 @@ export class McSettingsPage extends AppElement {
     this.#tick = undefined;
     this.#dialog?.resolve(false);
     this.#dialog = null;
+    this.#regionFetch?.ac.abort();
+    this.#regionFetch = null;
   }
 
   // ---- helpers ----
@@ -359,11 +388,13 @@ export class McSettingsPage extends AppElement {
       <h2 class="visually-hidden">Settings</h2>
       <div class="sections">
         ${connected
-          ? html`${this.#identity()} ${this.#radio()} ${this.#device()} ${this.#contactsPolicy()} ${this.#advanced()}`
+          ? html`${this.#identity()} ${this.#radio()} ${this.#device()} ${this.#contactsPolicy()} ${this.#regions(true)}
+            ${this.#advanced()}`
           : html`<section class="card" data-section="no-radio">
-              <h2>Radio settings</h2>
-              <p><a href=${hrefFor('/')}>Connect a radio</a> to change its settings.</p>
-            </section>`}
+                <h2>Radio settings</h2>
+                <p><a href=${hrefFor('/')}>Connect a radio</a> to change its settings.</p>
+              </section>
+              ${this.#regions(false)}`}
         ${this.#appSection()} ${this.#install()}
       </div>
       ${this.#about()}
@@ -766,8 +797,10 @@ export class McSettingsPage extends AppElement {
           : html`<form data-form="flood-scope" @submit=${this.#saveScope} novalidate>
               <label class="field"
                 >Region name (empty = unscoped)
-                <input name="scope" autocomplete="off" .value=${scope?.name ?? ''} aria-invalid=${this.#invalid('floodScope')} />
+                <input name="scope" list="saved-regions" autocomplete="off" autocapitalize="none" spellcheck="false" .value=${scope?.name ?? ''}
+                  aria-invalid=${this.#invalid('floodScope')} />
               </label>
+              <datalist id="saved-regions">${this.app.regions.names.value.map((n) => html`<option value=${n}></option>`)}</datalist>
               ${this.#err('floodScope')}
               <p class="hint">Flood messages and flood adverts are limited to repeaters that serve this region.</p>
               <div class="actions">${this.#btn('floodScope', 'Save scope', 'save-scope')}</div>
@@ -797,6 +830,106 @@ export class McSettingsPage extends AppElement {
         ${this.#btn('factoryReset', 'Factory reset…', 'factory-reset', { type: 'button', danger: true, onClick: this.#factoryReset })}
       </div>
     </section>`;
+  }
+
+  #regions(connected: boolean): TemplateResult {
+    const r = this.app.regions;
+    const names = r.names.value;
+    const def = r.radioDefault.value;
+    const f = this.#regionFetch;
+    return html`<section class="card" data-section="regions" id="regions" aria-labelledby="s-regions">
+      <h2 id="s-regions">Regions</h2>
+      <p class="hint">
+        A region (flood scope) limits a channel message's flood to the repeaters that serve it. Pick a channel's region from its
+        chat header; the packet log names the saved regions it recognises.
+      </p>
+      ${names.length
+        ? html`<ul class="regions" data-field="regions">
+            ${names.map(
+              (n) => html`<li data-region=${n}>
+                <span class="name">#${n}</span>${def?.name === n ? html` <span class="hint">radio default</span>` : nothing}
+                <button type="button" data-action="remove-region" aria-label=${`Remove #${n}`} @click=${() => void this.#removeRegion(n)}>Remove</button>
+              </li>`,
+            )}
+          </ul>`
+        : html`<p class="hint" data-field="no-regions">No saved regions yet.</p>`}
+      <form data-form="add-region" @submit=${this.#addRegion} novalidate>
+        <label class="field"
+          >Add a region
+          <input name="region" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="e.g. east"
+            aria-invalid=${this.#invalid('region')} aria-describedby=${this.#described('region')} />
+        </label>
+        ${this.#err('region')}
+        <div class="actions"><button type="submit" data-action="add-region">Add</button></div>
+      </form>
+      <h3>From repeaters</h3>
+      <p class="hint">Asks each repeater contact for the regions it serves (only repeaters with a direct or known path answer).</p>
+      <div class="actions">
+        ${f
+          ? html`<span class="saving" data-field="region-fetch-progress" role="status">Asking repeaters… ${f.done} / ${f.total || '?'}</span>
+              <button type="button" data-action="cancel-fetch-regions" @click=${() => f.ac.abort()}>Cancel</button>`
+          : html`<button type="button" data-action="fetch-regions" ?disabled=${!connected} @click=${() => void this.#fetchRegions()}>
+                Fetch from repeaters
+              </button>
+              ${connected ? nothing : html`<span class="hint">Connect a radio to fetch.</span>`}`}
+      </div>
+    </section>`;
+  }
+
+  #addRegion = (e: SubmitEvent): void => {
+    e.preventDefault();
+    const form = e.currentTarget as HTMLFormElement;
+    const name = normalizeRegionName(str(form, 'region'));
+    const err = validateRegionName(name);
+    if (err) {
+      this.#errors = { ...this.#errors, region: err };
+    } else {
+      this.#errors = Object.fromEntries(Object.entries(this.#errors).filter(([k]) => k !== 'region'));
+      if (this.app.regions.add(name)) form.reset();
+      else this.#errors = { ...this.#errors, region: `#${name} is already saved` };
+    }
+    this.requestUpdate();
+  };
+
+  async #removeRegion(name: string): Promise<void> {
+    try {
+      await this.app.regions.remove(name);
+    } catch (err) {
+      this.app.notifications.error(`Could not remove #${name}`, err);
+    }
+  }
+
+  async #fetchRegions(): Promise<void> {
+    if (this.#regionFetch) return;
+    const ac = new AbortController();
+    const state = { done: 0, total: 0, ac };
+    this.#regionFetch = state;
+    this.requestUpdate();
+    try {
+      const res = await this.app.regions.fetchFromRepeaters({
+        signal: ac.signal,
+        onProgress: (done, total) => {
+          state.done = done;
+          state.total = total;
+          this.requestUpdate();
+        },
+      });
+      if (!this.isConnected) return; // left the page (aborted)
+      const added = this.app.regions.addAll(res.regions);
+      const n = (k: number, one: string, many: string): string => `${k} ${k === 1 ? one : many}`;
+      if (res.asked === 0) this.app.notifications.info('No repeater contacts to ask');
+      else if (res.answered === 0) this.app.notifications.warning(`None of ${n(res.asked, 'repeater', 'repeaters')} answered`);
+      else
+        this.app.notifications.success(
+          `${n(added, 'new region', 'new regions')} from ${n(res.answered, 'repeater', 'repeaters')}`,
+          res.regions.length ? res.regions.map((r) => `#${r}`).join(', ') : 'They reported no regions',
+        );
+    } catch (err) {
+      this.app.notifications.error('Could not fetch regions', err);
+    } finally {
+      if (this.#regionFetch === state) this.#regionFetch = null;
+      this.requestUpdate();
+    }
   }
 
   #saveTuning = (e: SubmitEvent): void => {

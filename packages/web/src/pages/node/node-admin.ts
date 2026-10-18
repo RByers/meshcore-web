@@ -2,7 +2,7 @@
  * `<mc-node-admin>` (Phase 10): the repeater / room server / sensor administration tabs of the
  * node page (`/node/:key/overview|telemetry|cli|tools`, node-page.ts). A thin view over
  * `app.remoteAdmin.node(key)` (RemoteNodeModel): Overview (login + status), Telemetry, CLI and
- * Tools (trace, path discovery, reset path, neighbours, ACL). `key` must be a stored contact's
+ * Tools (trace, path discovery, reset path, neighbours, regions, ACL). `key` must be a stored contact's
  * full public key.
  */
 import { css, html, nothing, type TemplateResult } from 'lit';
@@ -66,6 +66,14 @@ function quiet(p: Promise<unknown>): void {
   p.catch(() => undefined);
 }
 
+/** A repeater's regions request: running, its answer or error. */
+interface RegionFetch {
+  busy: boolean;
+  ac: AbortController;
+  names?: string[];
+  error?: string;
+}
+
 export class McNodeAdmin extends AppElement {
   static override properties = {
     key: { type: String },
@@ -88,6 +96,8 @@ export class McNodeAdmin extends AppElement {
   #history: string[] = [];
   #historyPos = -1;
   #lastKey = '';
+  /** The repeater's regions request (`app.regions.fetchFromRepeater`). */
+  #regionFetch: RegionFetch | null = null;
 
   constructor() {
     super();
@@ -210,6 +220,23 @@ export class McNodeAdmin extends AppElement {
         margin-inline-start: 8px;
         font-size: 0.85em;
       }
+      ul.region-list {
+        list-style: none;
+        margin: 0 0 8px;
+        padding: 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 16px;
+      }
+      ul.region-list li {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      ul.region-list button {
+        min-height: 0;
+        padding: 2px 10px;
+      }
       ol.hops {
         margin: 0;
         padding-inline-start: 1.5em;
@@ -233,9 +260,16 @@ export class McNodeAdmin extends AppElement {
       this.cliInput = '';
       this.#history = [];
       this.#historyPos = -1;
+      this.#regionFetch?.ac.abort();
+      this.#regionFetch = null;
     }
     // idempotent: starts tracking the archived battery / temperature history once
     if (this.#key && this.tab === 'telemetry') quiet(this.#node().loadTelemetryHistory());
+  }
+
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this.#regionFetch?.ac.abort();
   }
 
   #node(): RemoteNodeModel {
@@ -598,6 +632,64 @@ export class McNodeAdmin extends AppElement {
     quiet(node.tracePath(path, Math.max(1, first.length / 2)));
   }
 
+  async #fetchRegions(): Promise<void> {
+    if (this.#regionFetch?.busy) return;
+    const ac = new AbortController();
+    const state: RegionFetch = { busy: true, ac };
+    this.#regionFetch = state;
+    this.requestUpdate();
+    try {
+      state.names = await this.app.regions.fetchFromRepeater(this.#key, { signal: ac.signal });
+    } catch (err) {
+      state.error = ac.signal.aborted ? 'Cancelled' : `No answer: ${err instanceof Error ? err.message : String(err)}`;
+    } finally {
+      state.busy = false;
+      this.requestUpdate();
+    }
+  }
+
+  #addRegions(names: readonly string[]): void {
+    const added = this.app.regions.addAll(names);
+    this.app.notifications.success(added ? `${added} region${added === 1 ? '' : 's'} added` : 'Already saved');
+  }
+
+  #regionsCard(): TemplateResult {
+    const f = this.#regionFetch;
+    const saved = this.app.regions.names.value;
+    const fresh = f?.names?.filter((n) => !saved.includes(n)) ?? [];
+    return html`<section class="card" data-card="regions">
+      <div class="row">
+        <h3 style="flex: 1; margin: 0">Regions</h3>
+        ${f?.busy
+          ? html`<button data-action="cancel-fetch-regions" @click=${() => f.ac.abort()}>Cancel</button>`
+          : nothing}
+        <button data-action="fetch-regions" ?disabled=${f?.busy === true} @click=${() => void this.#fetchRegions()}>
+          ${f?.busy ? 'Fetching…' : 'Fetch regions'}
+        </button>
+      </div>
+      <p class="muted">The regions (flood scopes) this repeater serves. It answers only when reachable direct or along a known path.</p>
+      ${f?.error ? html`<p class="error" role="alert" data-error="regions">${f.error}</p>` : nothing}
+      ${f?.names
+        ? f.names.length
+          ? html`<ul class="region-list" data-field="regions-result">
+                ${f.names.map(
+                  (n) => html`<li data-region=${n}>
+                    <span class="mono">#${n}</span>
+                    ${saved.includes(n)
+                      ? html`<span class="muted" data-field="saved">saved</span>`
+                      : html`<button data-action="add-region" @click=${() => this.#addRegions([n])}>Add</button>`}
+                  </li>`,
+                )}
+              </ul>
+              <div class="row">
+                <button class="primary" data-action="add-all-regions" ?disabled=${!fresh.length} @click=${() => this.#addRegions(fresh)}>Add all</button>
+                <a href=${hrefFor('/settings')}>Manage regions</a>
+              </div>`
+          : html`<p class="muted" data-field="regions-result">This repeater serves no regions.</p>`
+        : nothing}
+    </section>`;
+  }
+
   #tools(node: RemoteNodeModel): TemplateResult {
     const kind = node.kind.value;
     const trace = node.lastTrace.value;
@@ -683,7 +775,8 @@ export class McNodeAdmin extends AppElement {
                   ${nb.total > nb.items.length ? html`<p class="muted">${nb.items.length} of ${nb.total}</p>` : nothing}`
                 : html`<p class="muted">No neighbours heard.</p>`
               : nothing}
-          </section>`
+          </section>
+          ${this.#regionsCard()}`
         : nothing}
       <section class="card" data-card="acl">
         <div class="row">
