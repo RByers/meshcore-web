@@ -296,6 +296,25 @@ describe('direct chat', () => {
   });
 });
 
+describe('room server chat', () => {
+  it('shows a backlog post at its post time, marked as synced from the room server', async () => {
+    const t = await connected();
+    const k = keys(t);
+    // the scenario's room post was made 15 minutes before the device delivered it
+    const postedAt = (t.emulatorScenario().startSecs - 900) * 1000;
+    await t.go(`/node/${k.room}/messages`, '.msg [data-field="text"]');
+    const msg = () => t.queryAll<HTMLElement>('.msg[data-dir="in"]').find((e) => e.querySelector('[data-field="text"]')?.textContent === 'Welcome to Town Square');
+    await t.until(() => msg()?.querySelector('[data-field="synced"]'), 3000, 'synced marker');
+    expect(msg()!.querySelector('time')!.getAttribute('datetime')).toBe(new Date(postedAt).toISOString());
+    expect(msg()!.querySelector('[data-field="synced"]')!.getAttribute('title')).toMatch(/^Posted .* · received .* \(synced from the room server\)$/);
+
+    // a direct contact's message keeps its receive time and no marker
+    await t.go(`/node/${k.alice}/messages`, '.msg [data-field="text"]');
+    await t.until(() => t.queryAll('.msg [data-field="text"]').some((e) => e.textContent === 'Hi! Are you on the mesh today?'), 3000, 'alice chat');
+    expect(t.query('[data-field="synced"]')).toBeNull();
+  });
+});
+
 describe('channels', () => {
   it('lists Public and #test, opens Public, shows senders and sends a message', async () => {
     const t = await connected();

@@ -446,6 +446,16 @@ export class ChatModel extends StoreBoundModel {
     return this.convType === 'channel' || this.#contact.peek()?.type !== ContactType.ROOM;
   }
 
+  /** Whether this conversation is with a room server (whose posts carry the server's post time). */
+  get isRoom(): boolean {
+    return this.convType === 'contact' && this.#contact.value?.type === ContactType.ROOM;
+  }
+
+  /** When to show `m` as sent, and whether it is synced room backlog (see `messageDisplayTime`). */
+  displayTime(m: MessageRecord): MessageDisplayTime {
+    return messageDisplayTime(m, this.isRoom);
+  }
+
   /** The reaction chips under `m` (counts, who reacted, our pending / failed state). */
   reactions(m: MessageRecord): ReactionChip[] {
     return reactionChips(m);
@@ -601,6 +611,36 @@ function checkRegion(region: string): string {
   const err = validateRegionName(n);
   if (err) throw new Error(err);
   return n;
+}
+
+/** A room post received this long after its post time was synced from the server's backlog. */
+export const ROOM_SYNC_THRESHOLD_MS = 5 * 60_000;
+/** A room post time this far ahead of when we received it means the server's clock is wrong. */
+export const ROOM_CLOCK_SKEW_MS = 2 * 60_000;
+/** Post times before this (2020-01-01) mean the room server's clock was never set. */
+export const MIN_PLAUSIBLE_POST_MS = Date.UTC(2020, 0, 1);
+
+export interface MessageDisplayTime {
+  /** Epoch ms to show as the message's time. */
+  at: number;
+  /** A room server post pushed to us well after it was posted (backlog synced on login). */
+  synced: boolean;
+}
+
+/**
+ * The time to show for `m`: normally when we received it. An incoming room server post shows its
+ * post time instead (the sender timestamp, on the server's clock), because on login the server
+ * replays its backlog of posts newer than our last sync; received more than
+ * `ROOM_SYNC_THRESHOLD_MS` after that, it is marked `synced`. A post time ahead of the receive
+ * time by more than `ROOM_CLOCK_SKEW_MS`, or before 2020, means the server's clock is wrong, so
+ * the receive time is shown.
+ */
+export function messageDisplayTime(m: Pick<MessageRecord, 'direction' | 'timestamp' | 'receivedAt'>, isRoom: boolean): MessageDisplayTime {
+  const received = { at: m.receivedAt, synced: false };
+  if (!isRoom || m.direction !== 'in') return received;
+  const posted = m.timestamp * 1000;
+  if (posted < MIN_PLAUSIBLE_POST_MS || posted - m.receivedAt > ROOM_CLOCK_SKEW_MS) return received;
+  return { at: posted, synced: m.receivedAt - posted > ROOM_SYNC_THRESHOLD_MS };
 }
 
 /** A delivered message never goes back; a failed one only moves on a late ACK. */

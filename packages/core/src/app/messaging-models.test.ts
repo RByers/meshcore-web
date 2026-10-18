@@ -6,7 +6,7 @@ import type { MessageRecord } from '../store/schema.js';
 import { hashtagChannelSecret, publicChannelSecret, scenarioKey } from '../emulator/scenarios.js';
 import type { AppModelOptions } from './app-model.js';
 import { connectedApp } from './testing.js';
-import { firstUnreadId } from './chat-model.js';
+import { firstUnreadId, messageDisplayTime, MIN_PLAUSIBLE_POST_MS, ROOM_CLOCK_SKEW_MS, ROOM_SYNC_THRESHOLD_MS } from './chat-model.js';
 import { base64Encode } from './messaging.js';
 import { messagePreview } from './contacts-model.js';
 
@@ -400,5 +400,34 @@ describe('messagePreview', () => {
     expect(messagePreview(base)).toBe('You: hi');
     expect(messagePreview({ ...base, direction: 'in', senderName: 'Dave', text: 'yo' })).toBe('Dave: yo');
     expect(messagePreview({ ...base, text: '@[Alice] Yes, all day' })).toBe('You: ↪ Yes, all day');
+  });
+});
+
+describe('messageDisplayTime (room server post times)', () => {
+  const now = Date.UTC(2026, 5, 1, 12, 0, 0);
+  const m = (direction: 'in' | 'out', postedMs: number) => ({ direction, timestamp: Math.floor(postedMs / 1000), receivedAt: now });
+
+  it('room backlog shows the post time, marked synced', () => {
+    const posted = now - ROOM_SYNC_THRESHOLD_MS - 60_000;
+    expect(messageDisplayTime(m('in', posted), true)).toEqual({ at: posted, synced: true });
+  });
+
+  it('a live room post shows the post time, not synced', () => {
+    const posted = now - 30_000;
+    expect(messageDisplayTime(m('in', posted), true)).toEqual({ at: posted, synced: false });
+    // slightly ahead (within the skew allowance) still counts as the post time
+    expect(messageDisplayTime(m('in', now + 60_000), true)).toEqual({ at: now + 60_000, synced: false });
+  });
+
+  it('falls back to the receive time when the server clock is in the future or unset', () => {
+    expect(messageDisplayTime(m('in', now + ROOM_CLOCK_SKEW_MS + 60_000), true)).toEqual({ at: now, synced: false });
+    expect(messageDisplayTime(m('in', MIN_PLAUSIBLE_POST_MS - 1000), true)).toEqual({ at: now, synced: false });
+    expect(messageDisplayTime(m('in', 60_000), true)).toEqual({ at: now, synced: false });
+  });
+
+  it('contacts, channels and our own room posts keep the receive time', () => {
+    const posted = now - 3_600_000;
+    expect(messageDisplayTime(m('in', posted), false)).toEqual({ at: now, synced: false });
+    expect(messageDisplayTime(m('out', posted), true)).toEqual({ at: now, synced: false });
   });
 });

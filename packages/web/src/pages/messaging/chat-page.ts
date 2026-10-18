@@ -187,7 +187,8 @@ export class McChatPage extends AppElement {
         color: var(--mc-text-muted);
         margin-inline: 8px;
       }
-      .meta .smaz {
+      .meta .smaz,
+      .meta .synced {
         display: inline-flex;
         cursor: help;
       }
@@ -702,7 +703,7 @@ export class McChatPage extends AppElement {
           : html`<span data-field="text">${m.text}</span>`}
       </div>
       <div class="meta">
-        <time datetime=${new Date(m.receivedAt).toISOString()}>${formatTime(m.receivedAt, this.app.clock.now())}</time>
+        ${this.#time(chat, m)}
         ${m.region
           ? html`<span class="region-tag" data-field="region" title=${`${m.direction === 'out' ? 'Sent' : 'Received'} in region #${m.region}`}>#${m.region}</span>`
           : nothing}
@@ -715,6 +716,16 @@ export class McChatPage extends AppElement {
       </div>
       ${reactionChipsTemplate(chat.reactions(m), (emoji) => void this.#retryReaction(m, emoji))}
     </li>`;
+  }
+
+  /** The message time: a room server post shows its post time, flagged when synced backlog. */
+  #time(chat: ChatModel, m: MessageRecord) {
+    const now = this.app.clock.now();
+    const { at, synced } = chat.displayTime(m);
+    const time = html`<time datetime=${new Date(at).toISOString()}>${formatTime(at, now)}</time>`;
+    if (!synced) return time;
+    const title = `Posted ${formatTime(at, now)} · received ${formatTime(m.receivedAt, now)} (synced from the room server)`;
+    return html`${time}<span class="synced" data-field="synced" title=${title} aria-label=${title}>⟲ synced</span>`;
   }
 
   /**
