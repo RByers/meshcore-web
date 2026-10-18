@@ -34,6 +34,7 @@ import {
   SERIES_REQUESTS,
   SERIES_UNKNOWN_CHANNELS,
   autoBinMs,
+  channelMessageCounts,
   matchesFilter,
   nodeEndpoint,
   nodeId,
@@ -322,6 +323,31 @@ describe('PacketStatsModel — range, live tail, aggregations', () => {
     await model.setRange({ from: null, to: null });
     expect(model.window.value).toBeNull();
     expect(model.timeline.value.bins).toEqual([]);
+  });
+
+  it('counts group messages per channel, by name or hash', async () => {
+    const other = new Uint8Array(16).fill(9);
+    const { model } = await harness([
+      rx(await grpTxt(PSK, 'Carol', 'one'), T),
+      rx(await grpTxt(PSK, 'Zed', 'two'), T + 1),
+      { direction: 'tx', bytes: await grpTxt(PSK, 'Me', 'three'), ts: T + 2 },
+      rx(await grpTxt(other, 'Bob', 'secret'), T + 3),
+      // not group text, or no channel: left out
+      rx(datagram(PayloadType.GRP_DATA, 0, await channelHash(PSK)), T + 4),
+      rx(datagram(PayloadType.TXT_MSG, 0xa1, 0x01), T + 5),
+      { direction: 'tx', bytes: new Uint8Array(0), format: 'none', source: 'sent', payloadType: PayloadType.GRP_TXT, routeType: RouteType.FLOOD, pathLen: 0, ts: T + 6 },
+    ]);
+    const pts = model.points.value;
+    const unknown = `channel ${toHex(Uint8Array.of(await channelHash(other)))}`;
+    expect(model.channelMessages.value).toEqual([
+      { channel: 'Test', count: 3, sent: 1, bytes: byTs(pts, T).bytes + byTs(pts, T + 1).bytes + byTs(pts, T + 2).bytes },
+      { channel: unknown, count: 1, sent: 0, bytes: byTs(pts, T + 3).bytes },
+    ]);
+    expect(channelMessageCounts([])).toEqual([]);
+
+    // follows the drill-down filters
+    await model.addFilter({ field: 'direction', value: 'out', label: 'Sent' });
+    expect(model.channelMessages.value.map((c) => [c.channel, c.count, c.sent])).toEqual([['Test', 1, 1]]);
   });
 
   it('summary, breakdowns and hop counts', async () => {

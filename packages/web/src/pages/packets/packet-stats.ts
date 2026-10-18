@@ -20,6 +20,7 @@ import {
   type Breakdown,
   type CompressionCounts,
   type CompressionStats,
+  type ChannelMessageCount,
   type HopCount,
   type LoraParams,
   type NodeRef,
@@ -261,6 +262,17 @@ function hopLabel(hops: number): string {
 }
 
 /** Hop count bars, keyed by `String(hops)` (the hops filter value). */
+/** Group-message bars, one per channel (name, or `channel xx` by hash), keyed by the channel filter value. */
+export function channelMessageItems(rows: readonly ChannelMessageCount[], active?: string): BarItem[] {
+  return rows.map((r) => ({
+    label: r.channel,
+    value: r.count,
+    key: r.channel,
+    selected: r.channel === active,
+    title: `${formatNumber(r.count - r.sent, 0)} received, ${formatNumber(r.sent, 0)} sent · ${formatBytes(r.bytes)}`,
+  }));
+}
+
 export function hopItems(hops: readonly HopCount[], active?: string): BarItem[] {
   return hops.map((h) => ({ label: hopLabel(h.hops), value: h.count, key: String(h.hops), selected: String(h.hops) === active }));
 }
@@ -557,6 +569,10 @@ export class McPacketStats extends AppElement {
     this.#toggle('source', e.detail.key, node?.label ?? e.detail.key);
   };
 
+  #onChannel = (e: CustomEvent<BarSelectDetail>): void => {
+    this.#toggle('channel', e.detail.key, e.detail.key);
+  };
+
   #onHops = (e: CustomEvent<BarSelectDetail>): void => {
     this.#toggle('hops', e.detail.key, hopLabel(Number(e.detail.key)));
   };
@@ -674,6 +690,15 @@ export class McPacketStats extends AppElement {
         <h3>Packets per source node</h3>
         <mc-bar-chart class="sources" .items=${sourceItems(bySource, active('source'))} @bar-select=${this.#onSource}></mc-bar-chart>
         ${footer ? html`<p class="note muted" data-field="source-footer">${footer}</p>` : nothing}
+      </section>
+
+      <section class="card" data-section="channels">
+        <h3>Group messages per channel</h3>
+        <mc-bar-chart
+          .items=${channelMessageItems(stats.channelMessages.value, active('channel'))}
+          empty-text="No group messages in the shown packets."
+          @bar-select=${this.#onChannel}
+        ></mc-bar-chart>
       </section>
 
       <section class="card" data-section="dots">

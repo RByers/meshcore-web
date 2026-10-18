@@ -151,6 +151,7 @@ utilization: {
   byRoute: …  byDirection: …  byCategory: …  byChannel: …
 }
 hops: { hops: number; count: number }[]
+channelMessages: { channel: string; count: number; sent: number; bytes: number }[] // GRP_TXT per channel (name, or `channel xx`), count desc; no channel (sent, no bytes) left out
 compression: CompressionStats   // text messages only (compression !== null)
 routes: readonly PathUsageRoute[] // the "packet paths" map's routes, see 1.7
 interface CompressionCounts { text: number; smaz: number; plain: number; unknown: number }
@@ -268,6 +269,8 @@ filters of the list tabs are not shown; the inspector split is hidden). Layout, 
 3. **Packets per source node** (`mc-bar-chart`, top 50, count desc): the label links to
    `/contact/:key` (via `hrefFor`) when the node resolved to a contact, plain text for self /
    unresolved; footer line "n packets could not be attributed, m more nodes".
+   **Group messages per channel** (`mc-bar-chart`, `channelMessages`): one bar per channel, by
+   name or `channel xx` (hash) when the PSK is unknown; tooltip "n received, m sent · bytes".
 4. **Packets over time** (`mc-dot-plot`): x = time (range or log bounds), y selector
    (*SNR* default, *RSSI*, *Distance*, *Hops*, *Size*), colour selector (*Packet type* default,
    *Route type*, *Last hop*, *Source*, *Channel*, *Direction*, *Compression*), dot area ∝ bytes. Clicking a dot
@@ -291,7 +294,7 @@ filters of the list tabs are not shown; the inspector split is hidden). Layout, 
    messages in the shown packets → one-line empty state.
 8. **Hop count** distribution (`mc-bar-chart`, vertical-ish is fine as horizontal rows 0,1,2…).
 
-**Drill-down** (model side in §6): clicking a source bar, a hop-count bar, or a breakdown segment /
+**Drill-down** (model side in §6): clicking a source bar, a channel bar, a hop-count bar, or a breakdown segment /
 legend entry (type, route, direction, category, channel, compression) adds a filter for that value; clicking the
 active value again removes it. On source bars the *bar* filters and the *label* stays the contact
 link. Charts opt in per item with a `key` (`<mc-bar-chart>` dispatches `bar-select`, keyed rows

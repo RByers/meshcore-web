@@ -244,6 +244,28 @@ describe('/packets Stats drill-down filters', () => {
     expect(chips(t)[0]).toMatch(/^Hops: /);
   });
 
+  it('charts group messages per channel; a bar filters by that channel', async () => {
+    const { t, el } = await openStats();
+    const labels = (): string[] => inChart(el, 'channels', 'mc-bar-chart', '[data-label]').map((l) => l.textContent!.trim());
+    expect(el.shadowRoot!.querySelector('[data-section="channels"] h3')!.textContent).toBe('Group messages per channel');
+    expect(labels()).toEqual(['Public']);
+    const grp = t.app.packetStats.points.value.filter((p) => p.typeName === 'GRP_TXT' && p.channel === 'Public').length;
+    expect(t.app.packetStats.channelMessages.value).toEqual([expect.objectContaining({ channel: 'Public', count: grp })]);
+
+    const hit = inChart(el, 'channels', 'mc-bar-chart', 'rect[role="button"]')[0]!;
+    expect(hit.getAttribute('data-key')).toBe('Public');
+    hit.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await settle(t, el);
+    expect(t.app.packetStats.filters.value).toEqual([expect.objectContaining({ field: 'channel', value: 'Public' })]);
+    expect(chips(t)).toEqual(['Channel: Public']);
+
+    // no group messages left: the chart's empty state
+    await t.app.packetStats.clearFilters();
+    await t.app.packetStats.addFilter({ field: 'category', value: 'advert', label: 'advert' });
+    await settle(t, el);
+    expect(inChart(el, 'channels', 'mc-bar-chart', '[data-empty]')[0]!.textContent).toContain('No group messages');
+  });
+
   it('shows an empty state but keeps the filter bar when nothing matches', async () => {
     const { t, el } = await openStats();
     t.app.packetStats.addFilter({ field: 'hops', value: '99', label: '99' });

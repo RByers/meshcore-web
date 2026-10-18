@@ -202,6 +202,16 @@ export interface HopCount {
   count: number;
 }
 
+/** Group text messages (GRP_TXT) of one channel. */
+export interface ChannelMessageCount {
+  /** {@link StatPacket.channel}: the channel name, or `channel xx` (the hash) when not known. */
+  channel: string;
+  count: number;
+  /** Of `count`, sent by this radio. */
+  sent: number;
+  bytes: number;
+}
+
 /** Text message counts by {@link TextCompression}; `text` = smaz + plain + unknown. */
 export interface CompressionCounts {
   text: number;
@@ -950,6 +960,23 @@ function compressionStats(pts: readonly StatPacket[]): CompressionStats {
   };
 }
 
+/**
+ * GRP_TXT messages per channel, by count desc then name. Messages without a channel (a sent message
+ * logged without its bytes) are left out.
+ */
+export function channelMessageCounts(pts: readonly StatPacket[]): ChannelMessageCount[] {
+  const m = new Map<string, ChannelMessageCount>();
+  for (const p of pts) {
+    if (p.payloadType !== PayloadType.GRP_TXT || p.channel === null) continue;
+    let c = m.get(p.channel);
+    if (!c) m.set(p.channel, (c = { channel: p.channel, count: 0, sent: 0, bytes: 0 }));
+    c.count++;
+    if (p.direction === 'out') c.sent++;
+    c.bytes += p.bytes;
+  }
+  return [...m.values()].sort((a, b) => b.count - a.count || a.channel.localeCompare(b.channel));
+}
+
 function hopCounts(pts: readonly StatPacket[]): HopCount[] {
   const m = new Map<number, number>();
   for (const p of pts) if (p.hops !== null) m.set(p.hops, (m.get(p.hops) ?? 0) + 1);
@@ -1033,6 +1060,8 @@ export class PacketStatsModel extends StoreBoundModel implements DrillSource {
   readonly timeline: ReadonlySignal<Timeline>;
   readonly utilization: ReadonlySignal<Utilization>;
   readonly hops: ReadonlySignal<HopCount[]>;
+  /** Group messages of `points` per channel ({@link channelMessageCounts}). */
+  readonly channelMessages: ReadonlySignal<ChannelMessageCount[]>;
   /** SMAZ compression usage of the text messages in `points`. */
   readonly compression: ReadonlySignal<CompressionStats>;
   /** The routes of `points` for the "packet paths" map ({@link packetRoutes}). */
@@ -1193,6 +1222,7 @@ export class PacketStatsModel extends StoreBoundModel implements DrillSource {
     });
 
     this.hops = computed(() => hopCounts(this.points.value));
+    this.channelMessages = computed(() => channelMessageCounts(this.points.value));
     this.compression = computed(() => compressionStats(this.points.value));
     this.routes = computed(() => packetRoutes(this.points.value));
   }
