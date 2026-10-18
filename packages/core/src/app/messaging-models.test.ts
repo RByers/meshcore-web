@@ -62,6 +62,31 @@ describe('ContactsModel', () => {
     expect(names()).toEqual(['Bob']);
   });
 
+  it('sorts by distance from our own position, nearest first, contacts without a location last', async () => {
+    const { app, hex } = await connected();
+    const m = app.contacts;
+    await vi.waitFor(() => expect(m.views.value).toHaveLength(6));
+    await m.settled();
+    const names = () => m.visible.value.map((v) => v.name);
+    await m.setFavourite(hex.alice, false);
+    m.setSort('distance');
+    // basicScenario: self in Seattle; Alice ~0.4 km, the repeater ~2 km, the rest have no location (by name)
+    expect(names()).toEqual(['Alice', 'Hilltop Repeater', 'Bob', 'Carol', 'Town Square', 'Weather Station']);
+
+    // moving ourselves onto the repeater re-sorts
+    const rep = m.view(hex.repeater)!.record;
+    await app.deviceSettings.setLocation(rep.lat, rep.lon);
+    await vi.waitFor(() => expect(names().slice(0, 2)).toEqual(['Hilltop Repeater', 'Alice']));
+
+    // favourites still come first
+    await m.setFavourite(hex.carol, true);
+    expect(names()).toEqual(['Carol', 'Hilltop Repeater', 'Alice', 'Bob', 'Town Square', 'Weather Station']);
+
+    // without our own location nothing has a distance: name order
+    await app.deviceSettings.setLocation(0, 0);
+    await vi.waitFor(() => expect(names()).toEqual(['Carol', 'Alice', 'Bob', 'Hilltop Repeater', 'Town Square', 'Weather Station']));
+  });
+
   it('stars / unstars a contact on the radio (FAVOURITE flag) and lists favourites first', async () => {
     const { app, s, hex } = await connected();
     const m = app.contacts;

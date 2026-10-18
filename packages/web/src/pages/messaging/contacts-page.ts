@@ -344,7 +344,7 @@ export class McContactsPage extends AppElement {
     const now = this.app.clock.now();
     const path = this.app.contacts.outPathLabel(v, this.app.appSettings.pathNames.value);
     const heard = contactLastHeard(v);
-    const dist = this.#selecting ? contactDistance(v, this.#selfLocation()) : undefined;
+    const dist = this.#selecting || this.app.contacts.sort.value === 'distance' ? contactDistance(v, this.#selfLocation()) : undefined;
     const meta = [
       dist !== undefined ? `${formatDistance(dist)} away` : '',
       path.label,
@@ -456,6 +456,7 @@ export class McContactsPage extends AppElement {
 
   override render() {
     const m = this.app.contacts;
+    const me = this.#selfLocation();
     const visible = m.visible.value;
     const total = m.views.value.length;
     const removing = this.#removeKey ? m.view(this.#removeKey) : undefined;
@@ -485,6 +486,14 @@ export class McContactsPage extends AppElement {
         <select data-field="sort" aria-label="Sort" @change=${(e: Event) => m.setSort((e.target as HTMLSelectElement).value as ContactSort)}>
           <option value="recent" ?selected=${m.sort.value === 'recent'}>Recent</option>
           <option value="name" ?selected=${m.sort.value === 'name'}>A–Z</option>
+          <option
+            value="distance"
+            ?selected=${m.sort.value === 'distance'}
+            ?disabled=${!me}
+            title=${me ? nothing : 'Set your radio’s location (Settings › Identity) to sort by distance'}
+          >
+            Nearest
+          </option>
         </select>
       </div>
       ${visible.length

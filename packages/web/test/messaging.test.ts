@@ -130,6 +130,28 @@ describe('contacts page', () => {
     expect(order()[0]).toBe(k.bob);
   });
 
+  it('sorts contacts by distance, showing how far away each one is', async () => {
+    // basicScenario: self in Seattle; Alice (favourite) ~0.4 km away, the repeater ~2 km; the rest have no location
+    const t = await connected();
+    const k = keys(t);
+    await t.go('/contacts', '[data-contact]');
+    const order = () => t.queryAll('[data-contact]').map((li) => li.dataset['contact']);
+    const meta = (key: string) => t.query(`[data-contact="${key}"] [data-field="meta"]`)!.textContent!;
+    expect(meta(k.repeater)).not.toContain('away');
+
+    await t.fill('[data-field="sort"]', 'distance');
+    await t.until(() => order()[1] === k.repeater, 3000, 'repeater after Alice');
+    expect(order().slice(0, 3)).toEqual([k.alice, k.repeater, k.bob]);
+    expect(meta(k.repeater)).toMatch(/^2\.\d km away · /);
+    expect(meta(k.bob)).not.toContain('away');
+
+    const option = () => t.query<HTMLOptionElement>('[data-field="sort"] option[value="distance"]')!;
+    expect(option().disabled).toBe(false);
+    await t.app.deviceSettings.setLocation(0, 0);
+    await t.until(() => option().disabled, 3000, 'disabled without a location');
+    expect(option().title).toContain('Settings › Identity');
+  });
+
   it('shows a node summary for repeaters', async () => {
     const t = await connected();
     const k = keys(t);

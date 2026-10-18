@@ -29,7 +29,8 @@ import {
 import type { HeardNode } from './packet-log-model.js';
 import { pathLabel, resolvePath, type PathLabel, type ResolvedHop, type ResolvePathOptions } from './path-resolver.js';
 
-export type ContactSort = 'recent' | 'name';
+/** `distance`: nearest to our own advertised position first; contacts with no known distance last. */
+export type ContactSort = 'recent' | 'name' | 'distance';
 export type ContactFilter = 'all' | ContactKind | 'favourites' | 'unread';
 
 export const CONTACT_FILTERS: readonly ContactFilter[] = ['all', 'chat', 'repeater', 'room', 'sensor', 'favourites', 'unread'];
@@ -263,7 +264,16 @@ export class ContactsModel extends StoreBoundModel {
       a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }) || a.key.localeCompare(b.key);
     const byRecent = (a: ContactView, b: ContactView): number =>
       Math.max(b.lastActivity, b.lastSeen) - Math.max(a.lastActivity, a.lastSeen) || byName(a, b);
-    const inner = sort === 'name' ? byName : byRecent;
+    let inner = sort === 'name' ? byName : byRecent;
+    if (sort === 'distance') {
+      const si = this.connection.selfInfo.value;
+      const dist = new Map(out.map((v) => [v.key, contactDistance(v, si) ?? Infinity]));
+      inner = (a, b) => {
+        const da = dist.get(a.key) ?? Infinity;
+        const db = dist.get(b.key) ?? Infinity;
+        return da === db ? byName(a, b) : da - db;
+      };
+    }
     return out.sort((a, b) => Number(b.favourite) - Number(a.favourite) || inner(a, b));
   });
 
