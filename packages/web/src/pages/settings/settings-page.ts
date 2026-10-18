@@ -86,9 +86,8 @@ export class McSettingsPage extends AppElement {
       }
       .sections {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+        grid-template-columns: minmax(0, 1fr);
         gap: var(--mc-gap);
-        align-items: start;
       }
       section.card h2 {
         font-size: 1.1rem;
