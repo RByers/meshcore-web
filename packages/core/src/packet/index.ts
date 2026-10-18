@@ -6,3 +6,4 @@ export * from './payloads.js';
 export * from './lpp.js';
 export * from './annotate.js';
 export * from './field-docs.js';
+export * from './regions.js';

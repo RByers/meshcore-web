@@ -80,4 +80,22 @@ describe('RxPathCorrelator', () => {
     expect(c.observe({ ...rec(zeroHop, 80, 'd', 1), direction: 'tx' })).toBeNull();
     expect(c.size).toBe(2);
   });
+
+  it('claimChannelPacket returns the packet (transport codes included), zero-hop floods too', () => {
+    const c = new RxPathCorrelator();
+    const payload = Uint8Array.of(0x06, 0xaa, 0xbb, ...new Array<number>(16).fill(3));
+    // §1.2: TRANSPORT_FLOOD = [header][code0 u16][code1 u16][path_len][path][payload]
+    c.observe(rec(buildPacket({ routeType: RouteType.TRANSPORT_FLOOD, payloadType: PayloadType.GRP_TXT, transportCodes: [0x1234, 0], payload }), 1000, 'z'));
+    c.observe(rec(buildPacket({ routeType: RouteType.TRANSPORT_FLOOD, payloadType: PayloadType.GRP_TXT, transportCodes: [0x4321, 0], path: Uint8Array.of(0xa1), payload: payload.map((b, i) => (i === 3 ? 9 : b)) }), 1100, 'r'));
+    // the path-only API still ignores zero-hop messages
+    expect(c.claimChannelMessage({ pathLen: 0, channelHash: 0x06, now: 1200 })).toBeUndefined();
+    const zero = c.claimChannelPacket({ pathLen: 0, channelHash: 0x06, now: 1200 })!;
+    expect(zero.path).toBeUndefined();
+    expect(zero.packet.transportCodes).toEqual([0x1234, 0]);
+    expect(c.claimChannelPacket({ pathLen: 0, channelHash: 0x06, now: 1200 })).toBeUndefined();
+    const relayed = c.claimChannelPacket({ pathLen: encodePathLen(1), channelHash: 0x06, now: 1200 })!;
+    expect([...relayed.path!]).toEqual([0xa1]);
+    expect(relayed.packet.routeType).toBe(RouteType.TRANSPORT_FLOOD);
+    expect(relayed.packet.transportCodes).toEqual([0x4321, 0]);
+  });
 });

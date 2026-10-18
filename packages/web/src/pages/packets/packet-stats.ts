@@ -43,7 +43,7 @@ import {
   type TextCompression,
   type Timeline,
 } from '@meshcore-web/core/app';
-import { packetTypeNameDescription } from '@meshcore-web/core/packet';
+import { packetTypeNameDescription, regionLabel } from '@meshcore-web/core/packet';
 import type { NoiseFloorSample } from '@meshcore-web/core/store';
 import { AppElement } from '../../app-context.js';
 import { hrefFor } from '../../router.js';
@@ -1101,6 +1101,15 @@ export class McPacketStats extends AppElement {
                 .segments=${breakdownSegments(util.byChannel, airtimeKnown, undefined, seg('channel'))}
                 .format=${fmtShare}
                 @segment-select=${this.#onSegment('channel')}
+              ></mc-breakdown>`
+            : nothing}
+          ${util.byRegion.length
+            ? html`<mc-breakdown
+                data-breakdown="region"
+                label="Region (scoped floods)"
+                .segments=${breakdownSegments(util.byRegion, airtimeKnown, regionLabel, seg('region'))}
+                .format=${fmtShare}
+                @segment-select=${this.#onSegment('region', regionLabel)}
               ></mc-breakdown>`
             : nothing}
         </div>

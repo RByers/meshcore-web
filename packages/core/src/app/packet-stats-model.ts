@@ -19,6 +19,7 @@ import { TxtType, decodePathLen, isValidPathLen } from '../protocol/constants.js
 import type { SelfInfo } from '../protocol/types.js';
 import { PayloadType, hasTransportCodes, isDirectRoute, isFloodRoute, payloadTypeName, routeTypeName } from '../packet/constants.js';
 import { decryptPayload, parseGrpTxtPlaintext } from '../packet/payloads.js';
+import { packetRegion, regionLabel, type RegionKeys } from '../packet/regions.js';
 import { decodeReceivedText } from '../store/messages.js';
 import type { RadioStore } from '../store/radio-store.js';
 import type { ContactRecord, NoiseFloorSample, PacketRecord } from '../store/schema.js';
@@ -103,6 +104,11 @@ export interface StatPacket {
   category: TrafficCategory;
   /** GRP_TXT / GRP_DATA: the channel name when the hash matches a known channel, else `channel xx`. */
   channel: string | null;
+  /**
+   * TRANSPORT_FLOOD packets: the region whose key gives the transport code (name without '#'), or
+   * `UNKNOWN_REGION` ('?') when no known key (or several) does; null for every other packet.
+   */
+  region: string | null;
   /** Who originated the packet (best effort, docs/packet-stats.md §1.3); null when unattributable. */
   source: NodeRef | null;
   /**
@@ -201,6 +207,8 @@ export interface Utilization {
   byCategory: Breakdown[];
   /** Channel traffic only. */
   byChannel: Breakdown[];
+  /** TRANSPORT_FLOOD traffic only, by {@link StatPacket.region}. */
+  byRegion: Breakdown[];
 }
 
 export interface HopCount {
@@ -246,7 +254,7 @@ export interface CompressionStats extends CompressionCounts {
 export type BinSetting = number | 'auto';
 
 /** A packet field the stats can be drilled down by (docs/packet-stats.md §6). */
-export type StatsFilterField = 'source' | 'type' | 'route' | 'direction' | 'category' | 'channel' | 'hops' | 'compression' | 'pathStart' | 'pathEnd' | 'lastHop';
+export type StatsFilterField = 'source' | 'type' | 'route' | 'direction' | 'category' | 'channel' | 'hops' | 'compression' | 'pathStart' | 'pathEnd' | 'lastHop' | 'region';
 
 /**
  * One drill-down filter. `value` is the key the aggregations produce for the field: source →
@@ -255,6 +263,7 @@ export type StatsFilterField = 'source' | 'type' | 'route' | 'direction' | 'cate
  * hops → `String(hops)`, compression → 'smaz' / 'plain' / 'unknown' (text messages only),
  * pathStart / pathEnd → `nodeId` of the first / last path entry (packets with a path only),
  * lastHop → `nodeId` of {@link StatPacket.lastHop} (received packets with a last hop only).
+ * region → {@link StatPacket.region} (TRANSPORT_FLOOD packets only).
  * `label` is the caller's display text (chips).
  */
 export interface StatsFilter {
@@ -276,6 +285,7 @@ export const STATS_FIELD_LABEL: Readonly<Record<StatsFilterField, string>> = {
   pathStart: 'First in path',
   pathEnd: 'Last in path',
   lastHop: 'Last hop',
+  region: 'Region',
 };
 
 const DIRECTION_FILTER_LABEL: Readonly<Record<StatDirection, string>> = { in: 'Received', out: 'Sent' };
@@ -312,6 +322,7 @@ export function statsFiltersOf(f: PacketFilter): StatsFilter[] {
     const name = routeTypeName(f.routeTypes[0]!);
     out.push({ field: 'route', value: name, label: name });
   }
+  if (f.region !== undefined) out.push({ field: 'region', value: f.region, label: regionLabel(f.region) });
   for (const d of drill) if (!out.some((x) => x.field === d.field)) out.push(d);
   return out;
 }
@@ -324,6 +335,7 @@ export function statsFiltersOf(f: PacketFilter): StatsFilter[] {
 export function withStatsFilter(f: PacketFilter, d: StatsFilter): PacketFilter {
   const entry: StatsFilter = { field: d.field, value: d.value, label: d.label };
   const out = withoutStatsFilter(f, d.field);
+  if (d.field === 'region') return { ...out, region: d.value };
   const native =
     d.field === 'direction'
       ? d.value === 'in' || d.value === 'out'
@@ -344,6 +356,7 @@ export function withoutStatsFilter(f: PacketFilter, field: StatsFilterField): Pa
   if (field === 'direction') delete out.direction;
   if (field === 'type') delete out.payloadTypes;
   if (field === 'route') delete out.routeTypes;
+  if (field === 'region') delete out.region;
   const drill = (f.drill ?? []).filter((x) => x.field !== field);
   if (drill.length) out.drill = drill;
   else delete out.drill;
@@ -377,6 +390,8 @@ export function filterKey(p: StatPacket, field: StatsFilterField): string | null
     }
     case 'lastHop':
       return p.direction === 'in' && p.lastHop ? nodeId(p.lastHop) : null;
+    case 'region':
+      return p.region;
   }
 }
 
@@ -880,7 +895,7 @@ function hex2(n: number): string {
   return n.toString(16).padStart(2, '0');
 }
 
-function toStat(raw: RawPoint, R: Resolver, channels: Channels, radio: LoraParams | null): StatPacket {
+function toStat(raw: RawPoint, R: Resolver, channels: Channels, radio: LoraParams | null, regions: RegionKeys | undefined): StatPacket {
   const { rec, view } = raw;
   const p = view.payload;
   const direction: StatDirection = rec.direction === 'tx' ? 'out' : 'in';
@@ -965,6 +980,7 @@ function toStat(raw: RawPoint, R: Resolver, channels: Channels, radio: LoraParam
     rssi: rec.rssi ?? null,
     category: trafficCategory(payloadType),
     channel,
+    region: packetRegion({ routeType: rec.routeType, payloadType, payload: view.payloadBytes, transportCodes: view.transportCodes }, regions) ?? null,
     source,
     lastHop,
     direct,
@@ -1547,21 +1563,23 @@ export class PacketStatsModel extends StoreBoundModel implements DrillSource {
 
     const resolver = computed(() => new Resolver(deps.contacts.value, selfNode(connection.selfInfo.value, connection.store.value)));
     const channels = computed(() => deps.context.value.channels);
-    // per-record cache, valid for one (resolver, channels, radio) snapshot
+    const regions = computed(() => deps.context.value.regions);
+    // per-record cache, valid for one (resolver, channels, radio, regions) snapshot
     let cache = new Map<number, StatPacket>();
     let cacheFor: readonly unknown[] = [];
     this.allPoints = computed(() => {
       const R = resolver.value;
       const chs = channels.value;
       const radio = this.radio.value;
+      const regs = regions.value;
       const raws = this.#raw.value;
-      if (cacheFor[0] !== R || cacheFor[1] !== chs || cacheFor[2] !== radio) {
+      if (cacheFor[0] !== R || cacheFor[1] !== chs || cacheFor[2] !== radio || cacheFor[3] !== regs) {
         cache = new Map();
-        cacheFor = [R, chs, radio];
+        cacheFor = [R, chs, radio, regs];
       }
       const next = new Map<number, StatPacket>();
       const out = raws.map((raw) => {
-        const s = cache.get(raw.rec.id) ?? toStat(raw, R, chs, radio);
+        const s = cache.get(raw.rec.id) ?? toStat(raw, R, chs, radio, regs);
         next.set(raw.rec.id, s);
         return s;
       });
@@ -1666,6 +1684,7 @@ export class PacketStatsModel extends StoreBoundModel implements DrillSource {
         byDirection: breakdown(pts, (p) => p.direction),
         byCategory: breakdown(pts, (p) => p.category),
         byChannel: breakdown(pts, (p) => (p.category === 'channel' ? p.channel : null)),
+        byRegion: breakdown(pts, (p) => p.region),
       };
     });
 

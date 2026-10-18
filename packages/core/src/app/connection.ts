@@ -20,7 +20,7 @@ import { toHex } from '../util/bytes.js';
 import type { DevicesRepo } from '../store/devices.js';
 import type { RadioStore } from '../store/radio-store.js';
 import type { DeviceRecord } from '../store/schema.js';
-import { CapturePipeline } from './capture.js';
+import { CapturePipeline, type RegionResolver } from './capture.js';
 import type { NotificationsModel } from './notifications.js';
 import { batch, computed, signal, type ReadonlySignal, type Signal } from './signal.js';
 
@@ -174,6 +174,8 @@ export interface ConnectionModelDeps {
   clock?: Clock;
   /** Read on each compressed DM: auto-enable the sender's SMAZ setting (CapturePipelineOptions). */
   smazAutoEnable?: () => boolean;
+  /** Identifies the region of received scoped channel messages (CapturePipelineOptions). */
+  resolveRegion?: RegionResolver;
 }
 
 export interface ConnectionEvents {
@@ -334,6 +336,7 @@ export class ConnectionModel {
       s.pipeline = new CapturePipeline(client, {
         devices,
         ...(this.deps.smazAutoEnable ? { smazAutoEnable: this.deps.smazAutoEnable } : {}),
+        ...(this.deps.resolveRegion ? { resolveRegion: this.deps.resolveRegion } : {}),
         onError: (err, step) => {
           if (live()) this.deps.notifications.error(`Could not save ${step}`, err);
         },

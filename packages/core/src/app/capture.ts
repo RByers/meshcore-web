@@ -23,6 +23,7 @@ import type { ChannelMessageEvent, ContactMessageEvent, ContactsChangedEvent, Fr
 import type { SelfInfo } from '../protocol/types.js';
 import { fromHex, toHex } from '../util/bytes.js';
 import { channelHash } from '../packet/payloads.js';
+import { RouteType } from '../packet/constants.js';
 import { decodePathLen, PATH_LEN_UNKNOWN } from '../protocol/constants.js';
 import type { Unsubscribe } from '../util/events.js';
 import type { DevicesRepo } from '../store/devices.js';
@@ -35,6 +36,12 @@ import { RxPathCorrelator, type DirectHearing } from './rx-path-correlator.js';
 
 type Task = (store: RadioStore) => Promise<void>;
 
+/**
+ * Names the known region whose key gives transport code `code` for this payload, or null
+ * (`RegionsModel.resolveCode`). mesh-packet-format.md §1.2
+ */
+export type RegionResolver = (code: number, payloadType: number, payload: Uint8Array) => string | null;
+
 export interface CapturePipelineOptions {
   devices?: DevicesRepo | null | undefined;
   /**
@@ -44,6 +51,11 @@ export interface CapturePipelineOptions {
   smazAutoEnable?: () => boolean;
   /** Called for each failed step (the pipeline keeps going). */
   onError?: (err: unknown, step: string) => void;
+  /**
+   * Identifies the region of a channel message that arrived as a TRANSPORT_FLOOD; the name is
+   * stored on the message (`MessageRecord.region`) as resolved at receive time.
+   */
+  resolveRegion?: RegionResolver;
   /** Run the one-time sent-packet backfill when a store is attached (default true). */
   backfillSends?: boolean;
 }
@@ -254,8 +266,13 @@ export class CapturePipeline {
         hash = await channelHash(ch.psk).catch(() => -1);
         this.#channelHashes.set(ch.key, hash);
       }
-      const path = this.#rx.claimChannelMessage({ pathLen: f.route.pathLen, channelHash: hash, now: meta.receivedAt });
-      if (path) input.path = path;
+      const claimed = this.#rx.claimChannelPacket({ pathLen: f.route.pathLen, channelHash: hash, now: meta.receivedAt });
+      if (claimed?.path) input.path = claimed.path;
+      const p = claimed?.packet;
+      if (p && p.routeType === RouteType.TRANSPORT_FLOOD && p.transportCodes && this.opts.resolveRegion) {
+        const region = this.opts.resolveRegion(p.transportCodes[0], p.payloadType, p.payload);
+        if (region !== null) input.region = region;
+      }
     }
     await this.#append(store, input);
   }

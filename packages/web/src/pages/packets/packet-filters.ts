@@ -164,7 +164,7 @@ export class McPacketFilters extends AppElement {
   }
 
   #chips(f: PacketFilter): TemplateResult | typeof nothing {
-    const drills = packetFilterChips(f).filter((c) => c.key.startsWith('drill-'));
+    const drills = packetFilterChips(f).filter((c) => c.key.startsWith('drill-') || c.key === 'region');
     if (!f.src && drills.length === 0) return nothing;
     return html`<div class="chips" data-filter-chips>${f.src
       ? html`<span class="chip" data-filter="src" data-chip="src" title=${`Packets originated by ${f.src}`}

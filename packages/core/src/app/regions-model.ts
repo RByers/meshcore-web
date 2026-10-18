@@ -10,7 +10,8 @@
 import type { CompanionClient } from '../client/companion-client.js';
 import { ContactType } from '../protocol/constants.js';
 import type { Contact } from '../protocol/types.js';
-import { sha256Sync, transportCodeSync } from '../emulator/crypto-sync.js';
+import { sha256Sync } from '../emulator/crypto-sync.js';
+import { matchRegionCode, type RegionKeys } from '../packet/regions.js';
 import { concatBytes, fromHex, toHex, utf8Decode, utf8Encode } from '../util/bytes.js';
 import type { ConnectionModel, PreferencesStore } from './connection.js';
 import type { FloodScopeView } from './device-settings-model.js';
@@ -146,7 +147,7 @@ export class RegionsModel {
    * Name → 16-byte transport key for every region we can recognise: the saved names (public
    * hashtag keys) plus the radio's default scope with the key the radio stores.
    */
-  readonly keys: ReadonlySignal<ReadonlyMap<string, Uint8Array>>;
+  readonly keys: ReadonlySignal<RegionKeys>;
 
   constructor(
     private readonly connection: ConnectionModel,
@@ -239,17 +240,7 @@ export class RegionsModel {
    * or more than one does (ambiguous).
    */
   resolveCode(code: number, payloadType: number, payload: Uint8Array): string | null {
-    let hit: string | null = null;
-    const seen = new Set<string>();
-    for (const [name, key] of this.keys.peek()) {
-      const kh = toHex(key);
-      if (seen.has(kh)) continue;
-      seen.add(kh);
-      if (transportCodeSync(key, payloadType, payload) !== code) continue;
-      if (hit !== null) return null;
-      hit = name;
-    }
-    return hit;
+    return matchRegionCode(this.keys.peek(), code, payloadType, payload);
   }
 
   #client(): CompanionClient {

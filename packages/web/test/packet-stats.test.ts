@@ -10,7 +10,8 @@ import { createHarness, type Harness, type HarnessOptions } from '../src/testing
 import type { McTileMap } from '../src/components/tile-map.js';
 import type { McRangePlot } from '../src/charts/range-plot.js';
 import { timelineDescribe, timelinePalette, timelineSeries, type McPacketStats } from '../src/pages/packets/packet-stats.js';
-import { NOISE_FLOOR_FIRST_DELAY_MS, NOISE_FLOOR_INTERVAL_MS, timelineSeriesDescription } from '@meshcore-web/core/app';
+import { NOISE_FLOOR_FIRST_DELAY_MS, NOISE_FLOOR_INTERVAL_MS, regionKeySync, timelineSeriesDescription } from '@meshcore-web/core/app';
+import { envelope } from '@meshcore-web/core/emulator';
 import { toDatetimeLocal } from '../src/pages/packets/inspection.js';
 
 let h: Harness | undefined;
@@ -885,5 +886,22 @@ describe('/packets Stats packet paths map', () => {
     await settle(t, el);
     expect(card('path-starts').querySelector('mc-tile-map')).toBeNull();
     expect(card('path-ends').querySelector('mc-tile-map')).not.toBeNull();
+  });
+
+  it('breaks scoped floods down by region; a region segment sets the Region chip', async () => {
+    const { t, el } = await openStats();
+    t.app.regions.add('east');
+    // GRP_TXT for an unknown channel, TRANSPORT_FLOOD scoped to #east (§1.2)
+    const payload = Uint8Array.of(0x7e, 1, 2, ...new Array<number>(16).fill(5));
+    t.emulatorScenario().emulator.injectRxPacket(envelope(PayloadType.GRP_TXT, payload, { path: null, scopeKey: regionKeySync('east') }));
+    await t.until(() => t.app.packetStats.points.value.some((p) => p.region === 'east'), 5000, 'scoped point');
+    await settle(t, el);
+    const b = el.shadowRoot!.querySelector('mc-breakdown[data-breakdown="region"]')!;
+    const btn = b.shadowRoot!.querySelector<HTMLButtonElement>('[data-legend] button[data-key="east"]')!;
+    expect(btn.textContent).toContain('#east');
+    btn.click();
+    await settle(t, el);
+    expect(chips(t)).toEqual(['Region: #east']);
+    expect(t.app.packetStats.points.value.map((p) => p.region)).toEqual(['east']);
   });
 });

@@ -3,6 +3,8 @@ import { page, userEvent } from 'vitest/browser';
 import type { AnnotationNode } from '@meshcore-web/core/packet';
 import { toHex } from '@meshcore-web/core/util/bytes';
 import { PayloadType, RouteType, buildPacket } from '@meshcore-web/core/packet';
+import { regionKeySync } from '@meshcore-web/core/app';
+import { envelope } from '@meshcore-web/core/emulator';
 import '../src/mc-app.js';
 import '../src/pages/packets/index.js';
 import { createHarness, type Harness } from '../src/testing/harness.js';
@@ -638,5 +640,23 @@ describe('/packets page', () => {
     await t.until(() => t.query('mc-packet-inspector')?.shadowRoot?.textContent?.includes(`Packet #${ackId}`), 3000, 'ACK in the panel');
     expect(location.hash).toBe('#/packets');
     expect(t.query('[data-section="related"] dt[data-relation="acked"]')).not.toBeNull();
+  });
+
+  it('shows the region of a scoped flood from the saved list, and follows the list', async () => {
+    const t = await openLog();
+    t.app.regions.add('east');
+    const emu = t.emulatorScenario().emulator;
+    // GRP_TXT for an unknown channel (hash 0x7e), as TRANSPORT_FLOOD scoped to #east / #west (§1.2)
+    const scoped = (region: string, fill: number) =>
+      envelope(PayloadType.GRP_TXT, Uint8Array.of(0x7e, 1, 2, ...new Array<number>(16).fill(fill)), { path: null, scopeKey: regionKeySync(region) });
+    emu.injectRxPacket(scoped('east', 1));
+    emu.injectRxPacket(scoped('west', 2));
+    const tag = (r: string) => t.query(`tr[data-type="GRP_TXT"] [data-region="${r}"]`);
+    await t.until(() => tag('east') && tag('?'), 5000, 'scoped rows');
+    expect(tag('east')!.textContent).toBe('#east');
+    expect(tag('east')!.closest('td')!.textContent).toContain('TRANSPORT_FLOOD');
+    expect(tag('?')!.textContent).toBe('unknown region');
+    t.app.regions.add('west');
+    await t.until(() => tag('west') && !tag('?'), 3000, 'west identified');
   });
 });

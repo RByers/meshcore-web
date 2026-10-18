@@ -177,7 +177,7 @@ export const PACKET_FIELD_DOCS: FieldDocTable = {
     'Two u16 region ("scope") codes, present only for TRANSPORT_FLOOD and TRANSPORT_DIRECT. Repeaters configured for a region forward only packets whose code matches. §1.2',
   'env:transport codes/transport_code[]': (n) =>
     n.name === 'transport_code[0]'
-      ? 'First 2 bytes (u16 LE) of HMAC-SHA256(key = 16-byte region key, msg = payload type ‖ payload); 0 maps to 1 and 0xFFFF to 0xFFFE. Hashtag regions use key SHA256("#name")[0..16]. Cannot be verified without the region key. §1.2'
+      ? 'First 2 bytes (u16 LE) of HMAC-SHA256(key = 16-byte region key, msg = payload type ‖ payload); 0 maps to 1 and 0xFFFF to 0xFFFE. Hashtag regions use key SHA256("#name")[0..16]. The code cannot be inverted: the region is identified by testing the keys of the saved region names (and the radio\'s default scope); a code none of them gives (or several do) is an unknown region. §1.2'
       : 'Reserved for the "home region"; currently always 0. {0,0} on a zero-hop TRANSPORT_DIRECT advert marks a "Share contact" re-broadcast. §1.2',
   'env:path_len':
     'Encoded path length: bits 6-7 = hash size − 1, bits 0-5 = number of path entries. 0x00 = no path (zero-hop or a fresh flood). For TRACE it counts SNR bytes instead. §1.3',

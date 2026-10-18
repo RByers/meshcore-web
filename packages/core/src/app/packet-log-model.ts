@@ -55,6 +55,7 @@ import {
   type RelationRule,
 } from './packet-relations.js';
 import { batch, computed, effect, signal, untracked, type ReadonlySignal, type Signal } from './signal.js';
+import { regionLabel, type RegionKeys } from '../packet/regions.js';
 import type { Unsubscribe } from '../util/events.js';
 
 /**
@@ -87,6 +88,11 @@ export interface PacketFilter {
   text?: string;
   /** Hex node reference: a path / src / dest hash, or a public key (prefix). */
   node?: string;
+  /**
+   * TRANSPORT_FLOOD packets of this region ({@link PacketView.region}: a name without '#', or
+   * `UNKNOWN_REGION` ('?') for scoped packets no known region key matches).
+   */
+  region?: string;
   /**
    * Source node public key (or key prefix) hex: only packets this node originated (searched
    * through the packet log's source index; see store/packet-source.ts).
@@ -122,6 +128,8 @@ export interface PacketRow {
   path: readonly string[];
   /** Source / destination named by the payload ({@link PacketEndpoints}): the path column's ends. */
   endpoints: PacketEndpoints;
+  /** TRANSPORT_FLOOD packets: the region name, or `UNKNOWN_REGION` ({@link PacketView.region}). */
+  region?: string;
   /** Decoded one-line summary (with decrypted channel text when a PSK is known). */
   summary: string;
 }
@@ -574,7 +582,8 @@ export class PacketLogModel extends StoreBoundModel {
   #relationsFingerprint = '';
 
   /** Names / channel hashes used to describe packets. */
-  readonly context: ReadonlySignal<SummaryContext> = this.#ctx.readonly;
+  readonly context: ReadonlySignal<SummaryContext>;
+  readonly #regionKeys: ReadonlySignal<RegionKeys> | undefined;
   /** True when the radio's private key is stored for DM decryption (opt-in). */
   readonly selfKeyStored: ReadonlySignal<boolean> = computed(() => this.#selfKey.value !== null);
   /**
@@ -623,8 +632,11 @@ export class PacketLogModel extends StoreBoundModel {
   /** Host ↔ device frames. */
   readonly frames: LogView<FrameRecord, FrameFilter, FrameRow>;
 
-  constructor(connection: ConnectionModel, opts: { pageSize?: number } = {}) {
+  constructor(connection: ConnectionModel, opts: { pageSize?: number; regionKeys?: ReadonlySignal<RegionKeys> } = {}) {
     super(connection);
+    const regionKeys = opts.regionKeys;
+    this.#regionKeys = regionKeys;
+    this.context = regionKeys ? computed(() => ({ ...this.#ctx.value, regions: regionKeys.value })) : this.#ctx.readonly;
     const pageSize = opts.pageSize ?? 100;
     const getStore = (): RadioStore | null => this.store;
     this.packets = new LogView<PacketRecord, PacketFilter, PacketRow>(
@@ -678,6 +690,7 @@ export class PacketLogModel extends StoreBoundModel {
         this.#relateLive(e.record); // a DM's ACK code arrives with RESP_SENT
       }),
       store.events.on('frame', (r) => this.frames.onRecord(r)),
+      this.#watchRegions(),
       store.events.on('logChanged', (e) => {
         if (e.store === 'packets') {
           void this.packets.reload();
@@ -702,6 +715,21 @@ export class PacketLogModel extends StoreBoundModel {
       }),
     ];
     return () => offs.forEach((off) => off());
+  }
+
+  /** Rows show the packet's region: reload them when the known regions change. */
+  #watchRegions(): Unsubscribe {
+    const keys = this.#regionKeys;
+    if (!keys) return () => undefined;
+    let first = true;
+    return effect(() => {
+      void keys.value;
+      if (first) {
+        first = false;
+        return;
+      }
+      untracked(() => void this.packets.reload());
+    });
   }
 
   protected async load(store: RadioStore): Promise<void> {
@@ -911,7 +939,7 @@ export class PacketLogModel extends StoreBoundModel {
     if (f.to !== undefined) q.to = f.to;
     if (nonEmpty(f.payloadTypes) && f.payloadTypes.length === 1) q.payloadType = f.payloadTypes[0]!;
     if (nonEmpty(f.routeTypes) && f.routeTypes.length === 1) q.routeType = f.routeTypes[0]!;
-    if ((nonEmpty(f.payloadTypes) && f.payloadTypes.length > 1) || (nonEmpty(f.routeTypes) && f.routeTypes.length > 1) || f.text || f.node || hasDrill(f)) {
+    if ((nonEmpty(f.payloadTypes) && f.payloadTypes.length > 1) || (nonEmpty(f.routeTypes) && f.routeTypes.length > 1) || f.text || f.node || f.region !== undefined || hasDrill(f)) {
       q.match = (r) => this.packetMatches(r, f);
     }
     return q;
@@ -939,12 +967,13 @@ export class PacketLogModel extends StoreBoundModel {
       const p = this.#stats?.point(r.id);
       if (!p || !f.drill.every((d) => filterKey(p, d.field) === d.value)) return false;
     }
-    if (!f.text && !f.node) return true;
-    const view = viewPacket(r, this.#ctx.peek());
+    if (!f.text && !f.node && f.region === undefined) return true;
+    const view = viewPacket(r, this.context.peek());
+    if (f.region !== undefined && view.region !== f.region) return false;
     if (f.node && !packetMentionsNode(view, hexNorm(f.node))) return false;
     if (f.text) {
       const t = f.text.trim().toLowerCase();
-      const hay = `${view.typeName} ${view.routeName} ${view.summary} ${this.#summaries.get(r.id) ?? ''} ${r.decodedSummary ?? ''}`.toLowerCase();
+      const hay = `${view.typeName} ${view.routeName} ${view.region !== undefined ? regionLabel(view.region) : ''} ${view.summary} ${this.#summaries.get(r.id) ?? ''} ${r.decodedSummary ?? ''}`.toLowerCase();
       if (!hay.includes(t)) {
         const h = hexNorm(t);
         if (!h || h.length !== t.replace(/\s/g, '').length || !toHex(r.bytes).includes(h)) return false;
@@ -971,7 +1000,7 @@ export class PacketLogModel extends StoreBoundModel {
   }
 
   async #packetRow(r: PacketRecord): Promise<PacketRow> {
-    const ctx = this.#ctx.peek();
+    const ctx = this.context.peek();
     const view = viewPacket(r, ctx);
     let summary = this.#summaries.get(r.id);
     if (summary === undefined) {
@@ -979,7 +1008,9 @@ export class PacketLogModel extends StoreBoundModel {
       if (this.#summaries.size > 20_000) this.#summaries.clear();
       this.#summaries.set(r.id, summary);
     }
-    return { id: r.id, record: r, typeName: view.typeName, routeName: view.routeName, hops: view.hops, path: view.path, endpoints: view.endpoints, summary };
+    const row: PacketRow = { id: r.id, record: r, typeName: view.typeName, routeName: view.routeName, hops: view.hops, path: view.path, endpoints: view.endpoints, summary };
+    if (view.region !== undefined) row.region = view.region;
+    return row;
   }
 
   /** DM decryption keys for summaries, when the radio's private key is stored (opt-in). */
@@ -1001,6 +1032,8 @@ export class PacketLogModel extends StoreBoundModel {
   /** The keys the inspector decrypts with. */
   annotateKeys(): AnnotateKeys {
     const keys: AnnotateKeys = { channelPsks: this.#channelPsks.peek(), contacts: this.#contactKeys.peek() };
+    const regions = this.#regionKeys?.peek();
+    if (regions) keys.regions = regions;
     const priv = this.#selfKey.peek();
     const pub = this.store?.pubKey;
     if (priv && pub) keys.self = { publicKey: fromHex(pub), privateKey: priv };
@@ -1020,7 +1053,7 @@ export class PacketLogModel extends StoreBoundModel {
         : record.format === 'payload'
           ? await annotatePayload(record.payloadType, record.bytes, { keys })
           : { offset: 0, length: 0, name: 'requested transmission', value: record.decodedSummary ?? '', meaning: NO_BYTES_MEANING, errors: [] };
-    const ctx = this.#ctx.peek();
+    const ctx = this.context.peek();
     const view = viewPacket(record, ctx);
     const summary = await summarizePacket(record, ctx, view, this.#dmKeys());
     const [sourceFrame, copies] = await Promise.all([
@@ -1180,7 +1213,7 @@ function parseKey(v: unknown): Uint8Array | null {
 /** One active criterion of a {@link PacketFilter}, for a removable chip. */
 export interface PacketFilterChip {
   /**
-   * 'direction', 'types', 'routes', 'src', 'node', 'text', or `drill-<field>` (one per
+   * 'direction', 'types', 'routes', 'src', 'node', 'region', 'text', or `drill-<field>` (one per
    * {@link PacketFilter.drill} entry); pass to {@link withoutChip}.
    */
   key: string;
@@ -1201,7 +1234,7 @@ const DIRECTION_LABEL: Readonly<Record<PacketDirection, string>> = { rx: 'Receiv
 
 /**
  * The chips of a filter's active criteria, in a fixed order: direction, types, routes, src, node,
- * text, then each drill entry. The date range (`from` / `to`) is not a chip.
+ * region, text, then each drill entry. The date range (`from` / `to`) is not a chip.
  */
 export function packetFilterChips(f: PacketFilter, ctx: PacketFilterChipContext = {}): PacketFilterChip[] {
   const out: PacketFilterChip[] = [];
@@ -1213,6 +1246,7 @@ export function packetFilterChips(f: PacketFilter, ctx: PacketFilterChipContext 
   if (nonEmpty(f.routeTypes)) add('routes', f.routeTypes.length > 1 ? 'Routes' : 'Route', f.routeTypes.map((t) => routeTypeName(t)).join(', '));
   if (f.src !== undefined) add('src', 'From', ctx.srcLabel?.(f.src) ?? `${f.src.slice(0, 8)}…`);
   if (f.node) add('node', 'Node', f.node);
+  if (f.region !== undefined) add('region', 'Region', regionLabel(f.region));
   if (f.text) add('text', 'Text', f.text);
   for (const d of f.drill ?? []) add(`drill-${d.field}`, STATS_FIELD_LABEL[d.field], d.label);
   return out;
@@ -1236,6 +1270,9 @@ export function withoutChip(f: PacketFilter, key: string): PacketFilter {
       break;
     case 'node':
       delete out.node;
+      break;
+    case 'region':
+      delete out.region;
       break;
     case 'text':
       delete out.text;

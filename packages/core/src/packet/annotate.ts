@@ -23,6 +23,7 @@ import { calcSharedSecret, ed25519Verify, macThenDecrypt } from './crypto.js';
 import { firmwareRejectReasons, packetHash, parsePacket } from './packet.js';
 import { advertSignedMessage, channelHash } from './payloads.js';
 import { describePacketTree } from './field-docs.js';
+import { UNKNOWN_REGION, packetRegion, type RegionKeys } from './regions.js';
 
 export interface AnnotationNode {
   /** Absolute byte offset within the packet. */
@@ -59,6 +60,8 @@ export interface AnnotateKeys {
   self?: { publicKey: Uint8Array; privateKey: Uint8Array };
   /** Known peer public keys. */
   contacts?: readonly Uint8Array[];
+  /** Known regions (name → transport key), to identify a TRANSPORT_FLOOD packet's region. §1.2 */
+  regions?: RegionKeys;
 }
 
 export interface AnnotateOptions {
@@ -269,6 +272,15 @@ function buildAnnotation(bytes: Uint8Array, opts: AnnotateOptions, pending: Pend
   return root;
 }
 
+/** The region of a whole TRANSPORT_FLOOD packet (undefined: other route, or unparsable). */
+function regionOf(bytes: Uint8Array, keys: RegionKeys): string | undefined {
+  try {
+    return packetRegion(parsePacket(bytes), keys);
+  } catch {
+    return undefined;
+  }
+}
+
 function annotateEnvelope(
   bytes: Uint8Array,
   errors: string[],
@@ -292,10 +304,13 @@ function annotateEnvelope(
   root.value = `${routeTypeName(routeType)} ${payloadTypeName(payloadType)}`;
 
   if (hasTransportCodes(routeType)) {
-    const tc = f.add(4, 'transport codes', toHex, 'region scope codes (need region keys to verify)');
+    const region = opts.keys?.regions ? regionOf(bytes, opts.keys.regions) : undefined;
+    const regionMeaning =
+      region === undefined ? undefined : region === UNKNOWN_REGION ? 'unknown region (not in saved list)' : `region "#${region}"`;
+    const tc = f.add(4, 'transport codes', toHex, regionMeaning ?? 'region scope codes (need region keys to verify)');
     if (!tc) return f.finish();
     tc.children = [
-      { offset: 1, length: 2, name: 'transport_code[0]', value: String(readU16LE(bytes, 1)), meaning: 'region code' },
+      { offset: 1, length: 2, name: 'transport_code[0]', value: String(readU16LE(bytes, 1)), meaning: regionMeaning ?? 'region code' },
       { offset: 3, length: 2, name: 'transport_code[1]', value: String(readU16LE(bytes, 3)), meaning: 'reserved (home region)' },
     ];
   }

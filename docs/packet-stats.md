@@ -171,7 +171,7 @@ timeline: { binMs: number; bins: { t: number; series: Record<string, number> }[]
 utilization: {
   overTime: { t: number; airtimeMs: number; fraction: number }[]   // same bins as timeline
   byType: { name: string; count: number; bytes: number; airtimeMs: number }[]      // payload type
-  byRoute: …  byDirection: …  byCategory: …  byChannel: …
+  byRoute: …  byDirection: …  byCategory: …  byChannel: …  byRegion: …   // byRegion: TRANSPORT_FLOOD only, by StatPacket.region (name or '?')
 }
 hops: { hops: number; count: number }[]
 channelMessages: { channel: string; count: number; sent: number; bytes: number }[] // GRP_TXT per channel (name, or `channel xx`), count desc; no channel (sent, no bytes) left out
@@ -531,7 +531,7 @@ survive range changes). The stats model reads and writes it through `PacketLogMo
 (`PacketStatsDeps.filter`); `stats.filters` is a computed drill-down view of it:
 
 ```ts
-type StatsFilterField = 'source' | 'type' | 'route' | 'direction' | 'category' | 'channel' | 'hops' | 'compression' | 'pathStart' | 'pathEnd' | 'lastHop';
+type StatsFilterField = 'source' | 'type' | 'route' | 'direction' | 'category' | 'channel' | 'hops' | 'compression' | 'pathStart' | 'pathEnd' | 'lastHop' | 'region';
 interface StatsFilter { field: StatsFilterField; value: string; label: string /* chip text, from the caller */ }
 filters: ReadonlySignal<readonly StatsFilter[]>
 addFilter(f) / removeFilter(field) / clearFilters()
@@ -547,7 +547,9 @@ matchesFilter(p, f) / filterKey(p, field) / filterPoints(points, filters)   // p
   unknown hops never match), compression → `'smaz'` / `'plain'` / `'unknown'` (non-text packets
   never match), pathStart / pathEnd → `nodeId` of the first / last `path` entry (packets with no
   path never match), lastHop → `nodeId(lastHop)` (sent packets and those with no last hop never
-  match; chip label "Last hop").
+  match; chip label "Last hop"), region → `StatPacket.region` (the saved region whose key gives the
+  TRANSPORT_FLOOD code, `'?'` when none / several do; other packets never match). Region is a
+  native packet log criterion (`PacketFilter.region`, chip `Region: #name`), like direction.
 - Filters AND together; at most one per field — adding one on a field that already has one
   replaces it.
 - `summary`, `bySource`, `pathStarts`, `pathEnds`, `lastHops`, `timeline`, `utilization`, `hops` and `compression` count the filtered `points`.

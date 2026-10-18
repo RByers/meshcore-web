@@ -39,7 +39,7 @@ Firmware rejects a packet (it still appears in LOG_RX_DATA, which is emitted **b
 - Region key for public hashtag regions = `SHA256("#name")[0..16]` (`getAutoKeyFor`; meshcore.js `TransportKeyUtil` returns all 32 bytes, of which the firmware uses the first 16).
 - `code[1]` = 0 currently ("REVISIT: home region", `CMM sendFloodScoped` L497).
 - `{0,0}` with TRANSPORT_DIRECT, zero-hop = a "Share contact" re-broadcast that must not be treated as heard-direct (`RPT isShare`).
-- A decoder cannot verify the codes without the region keys. Display them as raw u16s.
+- The code cannot be inverted: a decoder identifies the region by computing `code[0]` with each region key it knows (this app: the saved region names' hashtag keys plus the radio's default-scope key) and naming the one that matches. 16 bits collide, so a code that several known keys give is ambiguous, and one that none gives is an unknown region; show the raw u16s alongside (`packet/regions.ts` `matchRegionCode`). Only TRANSPORT_FLOOD codes are region scopes.
 
 ### 1.3 path_len encoding (`Packet.h` L79-83, `Packet.cpp isValidPathLen`)
 

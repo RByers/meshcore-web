@@ -9,6 +9,7 @@ import { smazTryDecode } from '../util/smaz.js';
 import { ContactType, cmdName, decodePathLen, deviceFrameName, isValidPathLen } from '../protocol/constants.js';
 import { PayloadType, payloadTypeName, routeTypeName } from '../packet/constants.js';
 import { parsePacket, splitPath } from '../packet/packet.js';
+import { packetRegion, type RegionKeys } from '../packet/regions.js';
 import {
   decryptPayload,
   parseGrpDataPlaintext,
@@ -27,6 +28,8 @@ export interface SummaryContext {
   nodes: readonly { key: string; name: string }[];
   /** Channels with their 1-byte hash (SHA256(psk)[0]). */
   channels: readonly { name: string; psk: Uint8Array; hash: number }[];
+  /** Known regions (`RegionsModel.keys`), to identify the region of TRANSPORT_FLOOD packets. */
+  regions?: RegionKeys;
 }
 
 export const EMPTY_SUMMARY_CONTEXT: SummaryContext = { nodes: [], channels: [] };
@@ -40,6 +43,13 @@ export interface PacketView {
   hops: number | null;
   /** Path entries as hex (empty for TRACE, whose path holds SNRs). */
   path: string[];
+  /** The transport codes (TRANSPORT_FLOOD / TRANSPORT_DIRECT packets with bytes). */
+  transportCodes?: readonly [number, number];
+  /**
+   * TRANSPORT_FLOOD packets: the region whose key (from {@link SummaryContext.regions}) gives the
+   * transport code, or {@link UNKNOWN_REGION} when none / several do; undefined otherwise. §1.2
+   */
+  region?: string;
   /** Node hashes (path entries, src/dest hashes) and full / prefix public keys found in the packet. */
   nodeHashes: string[];
   nodeKeys: string[];
@@ -118,6 +128,7 @@ export function viewPacket(rec: PacketRecord, ctx: SummaryContext = EMPTY_SUMMAR
   const nodeHashes: string[] = [];
   const nodeKeys: string[] = [];
   let error: string | undefined;
+  let codes: { routeType: number; transportCodes: readonly [number, number] } | undefined;
   if (rec.format === 'packet') {
     try {
       const p = parsePacket(rec.bytes);
@@ -125,6 +136,7 @@ export function viewPacket(rec: PacketRecord, ctx: SummaryContext = EMPTY_SUMMAR
       payloadBytes = p.payload;
       routeName = routeTypeName(p.routeType);
       hops = p.pathHashCount;
+      if (p.transportCodes) codes = { routeType: p.routeType, transportCodes: p.transportCodes };
       if (p.payloadType !== PayloadType.TRACE) path = splitPath(p.path, p.pathHashSize).map(toHex);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -135,6 +147,11 @@ export function viewPacket(rec: PacketRecord, ctx: SummaryContext = EMPTY_SUMMAR
   nodeHashes.push(...path);
   const typeName = payloadType >= 0 ? payloadTypeName(payloadType) : 'UNKNOWN';
   const view: PacketView = { typeName, routeName, hops, path, nodeHashes, nodeKeys, summary: '', endpoints: NO_ENDPOINTS, payloadBytes };
+  if (codes) {
+    view.transportCodes = codes.transportCodes;
+    const region = packetRegion({ ...codes, payloadType, payload: payloadBytes }, ctx.regions);
+    if (region !== undefined) view.region = region;
+  }
   if (rec.format === 'none') {
     // a requested transmission: no bytes, only what the command asked for
     view.summary = rec.decodedSummary ?? `${typeName} (requested)`;

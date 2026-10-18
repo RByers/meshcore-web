@@ -14,6 +14,7 @@ import { css, html, nothing, type PropertyValues, type TemplateResult } from 'li
 import { repeat } from 'lit/directives/repeat.js';
 import { MAP_PACKET_LIMIT, PATH_SEPARATOR, resolvedPathTitle, sendOutcomeLabel, type FrameRow, type LogView, type PacketRow } from '@meshcore-web/core/app';
 import { CMD, PUSH, RESP } from '@meshcore-web/core/protocol';
+import { UNKNOWN_REGION, regionLabel } from '@meshcore-web/core/packet';
 import { AppElement } from '../../app-context.js';
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
@@ -730,7 +731,7 @@ export class McPacketsPage extends AppElement {
               <td>${r.typeName}${this.#log.answered(r.id)
                 ? html` <span class="answered" data-answered title="Answered: an ACK or reply was logged (see Related in its details)">↩</span>`
                 : nothing}</td>
-              <td>${r.routeName || '—'}</td>
+              <td>${r.routeName || '—'}${r.region !== undefined ? this.#regionTag(r.region) : nothing}</td>
               ${this.#pathCell(r)}
               <td class="num">${rec.snr !== undefined ? `${rec.snr} dB` : '—'}${rec.rssi !== undefined ? ` / ${rec.rssi}` : ''}</td>
               ${rec.format === 'none'
@@ -744,6 +745,12 @@ export class McPacketsPage extends AppElement {
       ${this.#moreSentinel(this.#log.packets.hasMore.value)}
       ${rows.length === 0 ? html`<p class="empty muted">${this.#log.packets.total.value ? 'No packets match the filters.' : 'No packets logged yet. Packets the radio hears, and those this app asks it to send, appear here live.'}</p>` : nothing}
     </div>`;
+  }
+
+  /** The region of a TRANSPORT_FLOOD row (from the saved region list). */
+  #regionTag(region: string): TemplateResult {
+    const title = region === UNKNOWN_REGION ? 'Region-scoped flood: the code matches no saved region' : `Region-scoped flood in #${region}`;
+    return html` <span class="region muted" data-region=${region} title=${title}>${regionLabel(region)}</span>`;
   }
 
   #frameTable(rows: readonly FrameRow[]): TemplateResult {

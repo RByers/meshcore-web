@@ -143,6 +143,7 @@ export class AppModel {
       preferences: this.#prefs,
       clock: this.clock,
       smazAutoEnable: () => this.appSettings.smazAutoEnable.peek(),
+      resolveRegion: (code, payloadType, payload) => this.regions.resolveCode(code, payloadType, payload),
       ...(opts.clientOptions ? { clientOptions: opts.clientOptions } : {}),
     });
     this.noiseFloor = new NoiseFloorSampler(this.connection, { read: () => this.deviceSettings.readRadioStats(), clock: this.clock });
@@ -214,7 +215,7 @@ export class AppModel {
   }
 
   get packetLog(): PacketLogModel {
-    return (this.#packetLog ??= new PacketLogModel(this.connection).start());
+    return (this.#packetLog ??= new PacketLogModel(this.connection, { regionKeys: this.regions.keys }).start());
   }
 
   /** Packet log statistics: per-packet points and aggregations for the Stats tab (docs/packet-stats.md). */

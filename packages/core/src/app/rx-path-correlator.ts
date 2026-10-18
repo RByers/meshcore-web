@@ -42,6 +42,14 @@ export interface DirectHearing {
   ts: number;
 }
 
+/** The logged packet claimed for a message. */
+export interface ClaimedPacket {
+  /** The flood path it arrived over; undefined when heard zero hop. */
+  path?: Uint8Array;
+  /** The parsed packet (route type, transport codes, payload for identifying its region). */
+  packet: ParsedPacket;
+}
+
 export class RxPathCorrelator {
   readonly #entries: RxEntry[] = [];
   readonly #capacity: number;
@@ -83,11 +91,11 @@ export class RxPathCorrelator {
     }
   }
 
-  #claim(now: number, pathLen: number, payloadType: number, match: (payload: Uint8Array) => boolean): Uint8Array | undefined {
+  #claim(now: number, pathLen: number, payloadType: number, match: (payload: Uint8Array) => boolean, zeroHop = false): ClaimedPacket | undefined {
     const raw = pathLen & 0xff;
     if (raw === PATH_LEN_UNKNOWN) return undefined; // direct-routed: the path was consumed on the way
     const { hops } = decodePathLen(raw);
-    if (hops === 0) return undefined;
+    if (hops === 0 && !zeroHop) return undefined;
     const e = this.#entries.find(
       (x) =>
         !x.claimed &&
@@ -100,7 +108,7 @@ export class RxPathCorrelator {
     );
     if (!e) return undefined;
     for (const x of this.#entries) if (x === e || (e.hash && x.hash === e.hash)) x.claimed = true;
-    return e.packet.path.slice();
+    return hops === 0 ? { packet: e.packet } : { path: e.packet.path.slice(), packet: e.packet };
   }
 
   /**
@@ -108,12 +116,20 @@ export class RxPathCorrelator {
    * (pubkey[0]) to `selfHash` with the same path_len. Undefined when none matches.
    */
   claimContactMessage(o: { pathLen: number; senderHash: number; selfHash?: number; now: number }): Uint8Array | undefined {
-    return this.#claim(o.now, o.pathLen, PayloadType.TXT_MSG, (p) => p.length >= 2 && p[1] === o.senderHash && (o.selfHash === undefined || p[0] === o.selfHash));
+    return this.#claim(o.now, o.pathLen, PayloadType.TXT_MSG, (p) => p.length >= 2 && p[1] === o.senderHash && (o.selfHash === undefined || p[0] === o.selfHash))?.path;
   }
 
   /** Path of an incoming channel message: a GRP_TXT flood packet for `channelHash`. */
   claimChannelMessage(o: { pathLen: number; channelHash: number; now: number }): Uint8Array | undefined {
-    return this.#claim(o.now, o.pathLen, PayloadType.GRP_TXT, (p) => p.length >= 1 && p[0] === o.channelHash);
+    return this.#claim(o.now, o.pathLen, PayloadType.GRP_TXT, (p) => p.length >= 1 && p[0] === o.channelHash)?.path;
+  }
+
+  /**
+   * The packet of an incoming channel message ({@link claimChannelMessage}), zero-hop floods
+   * included: with its path and the packet itself (a TRANSPORT_FLOOD one carries its region code).
+   */
+  claimChannelPacket(o: { pathLen: number; channelHash: number; now: number }): ClaimedPacket | undefined {
+    return this.#claim(o.now, o.pathLen, PayloadType.GRP_TXT, (p) => p.length >= 1 && p[0] === o.channelHash, true);
   }
 
   clear(): void {
