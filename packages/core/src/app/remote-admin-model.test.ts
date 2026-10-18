@@ -7,6 +7,7 @@ import {
   REMOTE_CLI_COMMANDS,
   RemoteAdminModel,
   aclRole,
+  canPing,
   completeCliCommand,
   formatSeconds,
   parseHopList,
@@ -195,6 +196,49 @@ describe('RemoteNodeModel against the emulator', () => {
     const pd = await sensor.discoverPath();
     expect(pd.outPath.map((h) => h.name)).toEqual(['Hilltop Repeater']);
     expect(sensor.pathDiscovery.value).toBe(pd);
+  });
+
+  it('builds the default trace (ping) path per contact type: the node itself only for repeaters', async () => {
+    // TRACE payload hop list (mesh-packet-format.md §3.6): 1-byte hashes here, path_sz = 0
+    const { admin, k, app, scenario } = await connected();
+    const h = (key: string) => key.slice(0, 2);
+    // repeater with a direct (zero-hop) path: just itself
+    expect(toHex(admin.node(k.repeater).defaultTracePath().path)).toBe(h(k.repeater));
+    // rooms / sensors (repeat off by default) and chat nodes don't forward a TRACE: the path only
+    expect(app.contacts.view(k.room)?.path.kind).toBe('flood');
+    expect(admin.node(k.room).defaultTracePath().path.length).toBe(0);
+    expect(toHex(admin.node(k.sensor).defaultTracePath().path)).toBe(h(k.repeater).repeat(2));
+    expect(toHex(admin.node(k.alice).defaultTracePath().path)).toBe(h(k.repeater).repeat(2));
+    expect(admin.node(k.bob).defaultTracePath().path.length).toBe(0);
+    // a repeater with no stored path (reset): still a zero-hop ping
+    await admin.node(k.repeater).resetPath();
+    await app.connection.capture!.idle();
+    await app.contacts.settled();
+    expect(admin.node(k.repeater).defaultTracePath()).toEqual({ path: scenario.keys.repeater.slice(0, 1), hashSize: 1 });
+    expect(canPing(2)).toBe(true);
+    expect(canPing(0) || canPing(1) || canPing(3) || canPing(4)).toBe(false);
+  });
+
+  it('pings: the default trace, with its own busy / error / result state', async () => {
+    const { t, admin, k, scenario } = await connected();
+    const rep = admin.node(k.repeater);
+    const p = rep.ping();
+    expect(rep.busy.value.has('ping')).toBe(true);
+    const r = await p;
+    expect(r.hops).toMatchObject([{ hash: k.repeater.slice(0, 2), name: 'Hilltop Repeater', snr: 8 }]);
+    expect(r.finalSnr).toBe(8);
+    expect(rep.lastPing.value).toBe(r);
+    expect(rep.lastTrace.value).toBeNull();
+    // out of range: no TRACE_DATA comes back, the request times out
+    scenario.nodes.repeater.online = false;
+    const miss = expect(rep.ping()).rejects.toThrow(/no response/);
+    expect(rep.lastPing.value).toBeNull();
+    await t.missResponse();
+    await miss;
+    expect(rep.errors.value.ping).toMatch(/timed out/);
+    expect(rep.busy.value.size).toBe(0);
+    // a chat node has nothing to trace through
+    await expect(admin.node(k.bob).ping()).rejects.toThrow(/No path to trace/);
   });
 
   it('resets a path', async () => {

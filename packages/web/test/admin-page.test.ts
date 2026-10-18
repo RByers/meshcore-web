@@ -166,6 +166,47 @@ describe('node admin page', () => {
     expect(hop.querySelector('[data-field="snr"]')!.textContent).toBe('8 dB');
   });
 
+  it('offers a header Ping for repeaters only', async () => {
+    const t = await connected();
+    await t.go(`/node/${key(t, 'repeater')}`, '[data-field="header"] [data-action="ping"]');
+    expect(t.query('[data-action="ping"]')!.textContent!.trim()).toBe('Ping');
+    for (const who of ['room', 'sensor'] as const) {
+      await t.go(`/node/${key(t, who)}`, '[data-field="header"] [data-field="name"]');
+      await t.until(() => t.query('[data-field="header"] [data-field="name"]') && !t.query('[data-action="ping"]'), 3000, `${who} header without ping`);
+    }
+    await t.go(`/node/${toHex(t.emulatorScenario().keys.alice)}`, '[data-field="header"] [data-field="name"]');
+    await t.until(() => t.query('[data-field="name"]')?.textContent === 'Alice', 3000, 'Alice header');
+    expect(t.query('[data-action="ping"]')).toBeNull();
+  });
+
+  it('pings the repeater in one click; an unreachable node shows "No reply"', async () => {
+    const t = await connected();
+    const k = key(t, 'repeater');
+    await t.go(`/node/${k}`, '[data-action="ping"]');
+    await t.click('[data-action="ping"]');
+    await t.until(() => t.query('[data-field="ping-result"]'), 8000, 'ping result');
+    const res = t.query('[data-field="ping-result"]')!;
+    expect(res.dataset['state']).toBe('ok');
+    expect(res.textContent).toMatch(/^Reachable · \d+ ms · SNR out 8 dB \/ back 8 dB$/);
+
+    // out of range: the trace never comes back and the request times out on the harness clock
+    t.emulatorScenario().nodes.repeater.online = false;
+    let sent = false;
+    t.app.connection.client.value!.events.on('frame', (f) => {
+      if (f.direction === 'in' && f.frame?.kind === 'sent') sent = true;
+    });
+    await t.click('[data-action="ping"]');
+    await t.until(() => sent && t.query<HTMLButtonElement>('[data-action="ping"]')?.disabled, 3000, 'ping in flight');
+    expect(t.query('[data-action="ping"]')!.textContent!.trim()).toBe('Pinging…');
+    expect(t.query('[data-field="ping-result"]')).toBeNull();
+    await t.elapse(REMOTE_TIMEOUT_MS);
+    await t.until(() => t.query('[data-field="ping-result"][data-state="failed"]'), 3000, 'no reply');
+    const fail = t.query('[data-field="ping-result"]')!;
+    expect(fail.textContent).toBe('No reply');
+    expect(fail.title).toMatch(/timed out/);
+    expect(t.query<HTMLButtonElement>('[data-action="ping"]')!.disabled).toBe(false);
+  });
+
   it('logs in to the room server as guest and shows the room chat in its Messages tab', async () => {
     const t = await connected();
     const k = key(t, 'room');

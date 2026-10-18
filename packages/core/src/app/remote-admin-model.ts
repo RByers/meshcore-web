@@ -11,7 +11,8 @@
  *  - neighbours / ACL / owner info / sensor min-max: SEND_BINARY_REQ with REQ types 0x06 / 0x05 /
  *    0x07 / 0x04 (these need a login on real servers);
  *  - CLI: TXT_MSG CLI_DATA to the node, reply is the next CLI_DATA message from it (admin only);
- *  - trace: SEND_TRACE_PATH (DIRECT; only repeaters forward), TRACE_DATA has per-hop SNRs;
+ *  - trace: SEND_TRACE_PATH (DIRECT; only repeaters, and rooms / sensors with repeat on, forward),
+ *    TRACE_DATA has per-hop SNRs; ping = the default trace through the node and back;
  *  - path discovery: SEND_PATH_DISCOVERY_REQ (flood) → PATH_DISCOVERY_RESPONSE.
  * All remote requests are serialized by the CompanionClient (one outstanding on the device).
  * Session state is cleared when the connection drops.
@@ -21,7 +22,7 @@ import { LoginFailedError, RemoteTimeoutError } from '../client/errors.js';
 import type { CompanionClient } from '../client/companion-client.js';
 import { decodeAvgMinMax, type AvgMinMaxEntry, type LppDecodeResult, type LppReading, type LppTypeName } from '../packet/lpp.js';
 import { parseAccessList, parseNeighbours, parseOwnerInfo } from '../packet/payloads.js';
-import { AclRole, ReqType, TELEM_CHANNEL_SELF } from '../protocol/constants.js';
+import { AclRole, ContactType, ReqType, TELEM_CHANNEL_SELF } from '../protocol/constants.js';
 import type { NodeStats } from '../protocol/types.js';
 import type { RadioStore } from '../store/radio-store.js';
 import type { ContactRecord } from '../store/schema.js';
@@ -59,6 +60,7 @@ export type RemoteAction =
   | 'owner'
   | 'cli'
   | 'trace'
+  | 'ping'
   | 'discovery'
   | 'resetPath';
 
@@ -339,6 +341,15 @@ export function splitHops(path: Uint8Array, size: number): Uint8Array[] {
   return out;
 }
 
+/**
+ * Whether a contact type can be pinged (a TRACE through the node and back): repeaters only. Room
+ * servers and sensors forward a TRACE only with repeat on (off by default in their firmware) and
+ * chat nodes never do, so a ping to them would almost always fail.
+ */
+export function canPing(type: number): boolean {
+  return type === ContactType.REPEATER;
+}
+
 /** Parses "a1,b2 c3" / "a1b2c3" (1-byte hashes) into a hash list. */
 export function parseHopList(text: string): Uint8Array {
   const t = text.trim();
@@ -377,6 +388,7 @@ export class RemoteNodeModel {
   readonly #acl = signal<NodeAcl | null>(null);
   readonly #owner = signal<OwnerInfo | null>(null);
   readonly #trace = signal<TraceResult | null>(null);
+  readonly #ping = signal<TraceResult | null>(null);
   readonly #discovery = signal<PathDiscoveryResult | null>(null);
   readonly #transcript = signal<readonly CliEntry[]>([]);
   readonly #busy = signal<ReadonlySet<RemoteAction>>(new Set());
@@ -398,6 +410,8 @@ export class RemoteNodeModel {
   readonly acl: ReadonlySignal<NodeAcl | null> = this.#acl.readonly;
   readonly ownerInfo: ReadonlySignal<OwnerInfo | null> = this.#owner.readonly;
   readonly lastTrace: ReadonlySignal<TraceResult | null> = this.#trace.readonly;
+  /** Last successful {@link ping}; cleared when a ping starts (a failure is in `errors.ping`). */
+  readonly lastPing: ReadonlySignal<TraceResult | null> = this.#ping.readonly;
   readonly pathDiscovery: ReadonlySignal<PathDiscoveryResult | null> = this.#discovery.readonly;
   readonly transcript: ReadonlySignal<readonly CliEntry[]> = this.#transcript.readonly;
   /** Actions in progress. */
@@ -667,32 +681,46 @@ export class RemoteNodeModel {
   }
 
   /**
-   * Default trace path: the stored out_path, then the node itself if it is a repeater (only
-   * repeaters forward TRACE), then the out_path reversed back to us.
+   * Default trace path: the stored out_path, then the node itself if it is a repeater (see
+   * {@link canPing}), then the out_path reversed back to us. For a repeater with no stored path it
+   * is just the node's hash: a zero-hop ping.
    */
   defaultTracePath(): { path: Uint8Array; hashSize: number } {
     const c = this.contact.peek()?.record;
     const hashSize = c && !c.outPathInfo.isFlood ? c.outPathInfo.hashSize || 1 : 1;
     const size = [1, 2, 4, 8].includes(hashSize) ? hashSize : 1;
     const hops = c && !c.outPathInfo.isFlood ? splitHops(c.outPath, hashSize).map((h) => h.slice(0, size)) : [];
-    const self = c?.type === 2 ? [this.pubKey.slice(0, size)] : [];
+    const self = c && canPing(c.type) ? [this.pubKey.slice(0, size)] : [];
     return { path: concatBytes(...hops, ...self, ...[...hops].reverse()), hashSize: size };
   }
 
   /** SEND_TRACE_PATH along `path` (concatenated hop hashes; default {@link defaultTracePath}). */
   async tracePath(path?: Uint8Array, hashSize?: number): Promise<TraceResult> {
     const def = this.defaultTracePath();
-    const p = path ?? def.path;
-    const size = path ? (hashSize ?? 1) : def.hashSize;
-    return this.#run('trace', async (c) => {
-      if (p.length === 0) throw new Error('No path to trace (the node is not reachable via repeaters)');
-      const t0 = this.#now;
-      const r = await c.tracePath(p, { ...this.#reqOpts, pathHashSize: size });
-      const hops = r.hops.map((h, i): TraceHop => ({ ...this.resolveHop(h), snr: r.snrs[i] ?? Number.NaN }));
-      const res: TraceResult = { at: this.#now, hops, finalSnr: r.finalSnr, roundTripMs: this.#now - t0 };
-      this.#trace.value = res;
-      return res;
-    });
+    const res = await this.#run('trace', (c) => this.#sendTrace(c, path ?? def.path, path ? (hashSize ?? 1) : def.hashSize));
+    this.#trace.value = res;
+    return res;
+  }
+
+  /**
+   * Ping (MeshCore has no ping packet): the default trace, out along the stored path, through the
+   * node and back. Busy / error state under `'ping'`, the result in {@link lastPing}; a node that
+   * does not answer (out of range, or repeat off) rejects with a timeout.
+   */
+  async ping(): Promise<TraceResult> {
+    this.#ping.value = null;
+    const def = this.defaultTracePath();
+    const res = await this.#run('ping', (c) => this.#sendTrace(c, def.path, def.hashSize));
+    this.#ping.value = res;
+    return res;
+  }
+
+  async #sendTrace(c: CompanionClient, path: Uint8Array, hashSize: number): Promise<TraceResult> {
+    if (path.length === 0) throw new Error('No path to trace: enter the hops to visit');
+    const t0 = this.#now;
+    const r = await c.tracePath(path, { ...this.#reqOpts, pathHashSize: hashSize });
+    const hops = r.hops.map((h, i): TraceHop => ({ ...this.resolveHop(h), snr: r.snrs[i] ?? Number.NaN }));
+    return { at: this.#now, hops, finalSnr: r.finalSnr, roundTripMs: this.#now - t0 };
   }
 
   /** SEND_PATH_DISCOVERY_REQ (flood); does not change the stored path (§6.10). */
@@ -811,6 +839,7 @@ export class RemoteNodeModel {
     this.#acl.value = null;
     this.#owner.value = null;
     this.#trace.value = null;
+    this.#ping.value = null;
     this.#discovery.value = null;
     this.#busy.value = new Set();
     this.#errors.value = {};

@@ -7,14 +7,23 @@
  * Overview / Telemetry / CLI / Tools (repeater, room and sensor administration) and Stats.
  *
  * Test hooks: `[data-field="header"]` with `name` / `type` / `key-short` / `session`,
- * `[data-action="show-on-map"]`; `nav [data-tab]` anchors; `section[data-panel]`;
+ * `[data-action="show-on-map"]`, `[data-action="ping"]` / `[data-field="ping-result"]` (with
+ * `data-state` ok / failed; repeaters, rooms and sensors); `nav [data-tab]` anchors; `section[data-panel]`;
  * `[data-field="subtitle"]` (Messages tab header); `[data-field="room-login-hint"]`.
  * The host carries `data-active-tab` (not `data-tab`, so `[data-tab=…]` only matches the tab links).
  */
 import { css, html, nothing, type TemplateResult } from 'lit';
-import { hasLocation, nodeTabFor, type NodeIdentity, type NodeModel, type NodeTab } from '@meshcore-web/core/app';
+import {
+  canPing,
+  hasLocation,
+  nodeTabFor,
+  type NodeIdentity,
+  type NodeModel,
+  type NodeTab,
+  type RemoteNodeModel,
+} from '@meshcore-web/core/app';
 import { AppElement } from '../../app-context.js';
-import { formatRelative, formatSnr, shortKey } from '../../format.js';
+import { formatDuration, formatRelative, formatSnr, shortKey } from '../../format.js';
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
 import { avatar, listStyles, TYPE_LABEL } from '../messaging/common.js';
@@ -115,6 +124,16 @@ export class McNodePage extends AppElement {
       .ok {
         color: var(--mc-ok);
       }
+      .ping {
+        display: inline-flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .ping .error {
+        color: var(--mc-danger);
+        cursor: help;
+      }
       .hint {
         margin: 0 0 8px;
       }
@@ -202,6 +221,7 @@ export class McNodePage extends AppElement {
     let icon: TemplateResult;
     let located = false;
     let session: TemplateResult | typeof nothing = nothing;
+    let ping: TemplateResult | typeof nothing = nothing;
     switch (id.kind) {
       case 'contact': {
         const v = id.contact;
@@ -213,6 +233,7 @@ export class McNodePage extends AppElement {
           const remote = this.app.remoteAdmin.node(key);
           session = html`<span data-field="session" class=${remote.loggedIn.value ? 'ok' : 'muted'}>${loginLabel(remote.loginState.value)}</span>`;
         }
+        if (canPing(v.record.type)) ping = this.#ping(this.app.remoteAdmin.node(key));
         break;
       }
       case 'heard': {
@@ -241,13 +262,53 @@ export class McNodePage extends AppElement {
         </div>
         ${tab === 'messages' && id.kind === 'contact' ? html`<div class="muted" data-field="subtitle">${this.#subtitle(id, key)}</div>` : nothing}
       </div>
-      ${session}
+      ${session} ${ping}
       ${map
         ? html`<a class="map-link" data-action="show-on-map" href=${hrefFor(`/map/node/${key}`)} title="Show on map" aria-label="Show on map"
             ><span aria-hidden="true">🗺 Map</span></a
           >`
         : nothing}
     </header>`;
+  }
+
+  /**
+   * One-click ping (the default trace through the node and back) and its outcome: "Reachable ·
+   * 850 ms · SNR out 8 dB / back 7.5 dB" (out = what the node heard, back = what we heard), or
+   * "No reply" with the reason as a tooltip.
+   */
+  #ping(remote: RemoteNodeModel): TemplateResult {
+    const busy = remote.busy.value.has('ping');
+    const connected = this.app.connection.connected.value;
+    const res = remote.lastPing.value;
+    const err = remote.errors.value.ping;
+    let result: TemplateResult | typeof nothing = nothing;
+    if (busy) {
+      // the previous outcome is stale while a new ping runs
+    } else if (err) {
+      result = html`<span class="error" data-field="ping-result" data-state="failed" title=${err}>No reply</span>`;
+    } else if (res) {
+      // the path is out-hops + node + the out-hops reversed: the node is the middle entry
+      const relays = (res.hops.length - 1) / 2;
+      const out = res.hops[Math.floor(res.hops.length / 2)]?.snr;
+      const parts = [
+        'Reachable',
+        formatDuration(res.roundTripMs),
+        ...(relays >= 1 ? [`${relays} ${relays === 1 ? 'repeater' : 'repeaters'} each way`] : []),
+        `SNR ${out !== undefined && !Number.isNaN(out) ? `out ${formatSnr(out)} / ` : ''}back ${formatSnr(res.finalSnr)}`,
+      ];
+      result = html`<span class="ok" data-field="ping-result" data-state="ok">${parts.join(' · ')}</span>`;
+    }
+    return html`<span class="ping">
+      <button
+        data-action="ping"
+        ?disabled=${busy || !connected}
+        title=${connected ? 'Trace a packet to the node and back' : 'Connect a radio to ping'}
+        @click=${() => void remote.ping().catch(() => undefined)}
+      >
+        ${busy ? 'Pinging…' : 'Ping'}
+      </button>
+      ${result}
+    </span>`;
   }
 
   /** Messages tab: how messages reach the contact (path · direct SNR · last seen). */
