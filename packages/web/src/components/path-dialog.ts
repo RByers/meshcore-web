@@ -375,7 +375,7 @@ export class McPathDialog extends AppElement {
     for (let i = 1; i < placed.length; i++) {
       const a = placed[i - 1]!;
       const b = placed[i]!;
-      out.push({ points: [{ lat: a.lat!, lon: a.lon! }, { lat: b.lat!, lon: b.lon! }], dashed: isApproximate(a.position) || isApproximate(b.position), id: String(i) });
+      out.push({ points: [{ lat: a.lat!, lon: a.lon! }, { lat: b.lat!, lon: b.lon! }], dashed: isApproximate(a.position) || isApproximate(b.position), id: String(i), arrow: true });
     }
     return out;
   }

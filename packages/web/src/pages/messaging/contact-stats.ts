@@ -13,7 +13,7 @@ import { shared } from '../../styles.js';
 import { assignSlots, type BarItem, type Describe, type DotPoint, type DotSelectDetail, type LineSeries, type SeriesPalette } from '../../charts/index.js';
 import { timelineDescribe, timelinePalette, timelineSeries } from '../packets/packet-stats.js';
 import type { McTileMap } from '../../components/tile-map.js';
-import { usageLines } from '../../components/path-usage-lines.js';
+import { directedUsageLines } from '../../components/path-usage-lines.js';
 import '../../components/stats-range.js';
 import '../../components/tile-map.js';
 import { nodeHref } from '../../components/node-link.js';
@@ -252,6 +252,7 @@ export class McContactStats extends AppElement {
     return this.app.paths.usage(
       paths.map((p) => ({ hashes: p.pathKey === '' ? [] : p.pathKey.split('>'), count: p.count })),
       this.key,
+      { directed: true },
     );
   }
 
@@ -278,7 +279,7 @@ export class McContactStats extends AppElement {
         ${toggle}`;
     }
     return html`
-      <mc-tile-map .tileUrl=${this.app.map.tileUrl.value} .lines=${usageLines(m)} label="Paths heard via" data-field="paths-map">
+      <mc-tile-map .tileUrl=${this.app.map.tileUrl.value} .lines=${directedUsageLines(m)} label="Paths heard via" data-field="paths-map">
         ${m.stops.map(
           (st) => html`<mc-map-marker
             data-stop=${st.id}
@@ -292,7 +293,7 @@ export class McContactStats extends AppElement {
         )}
       </mc-tile-map>
       <p class="muted map-note" data-field="paths-map-note">
-        Line thickness shows how many of the ${m.total} packets crossed each hop (busiest: ${m.maxCount}). Dashed lines lead to
+        Line thickness shows how many of the ${m.total} packets crossed each hop (busiest: ${m.maxCount}); arrows show travel direction. Dashed lines lead to
         estimated positions or skip hops with no known location.${m.incomplete
           ? ` ${m.incomplete} packet${m.incomplete === 1 ? '' : 's'} came over hops with no known location.`
           : ''}

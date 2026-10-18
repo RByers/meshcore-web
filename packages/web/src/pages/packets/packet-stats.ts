@@ -59,7 +59,7 @@ import {
   type SeriesPalette,
 } from '../../charts/index.js';
 import type { McTileMap } from '../../components/tile-map.js';
-import { usageLines, usageMarkerSize } from '../../components/path-usage-lines.js';
+import { directedUsageLines, usageMarkerSize } from '../../components/path-usage-lines.js';
 import '../../components/stats-range.js';
 import '../../components/tile-map.js';
 
@@ -452,7 +452,7 @@ export class McPacketStats extends AppElement {
   }
 
   #pathsMap(routes: readonly PathUsageRoute[]): TemplateResult {
-    const m: PathUsageMap = this.app.paths.routesUsage(routes);
+    const m: PathUsageMap = this.app.paths.routesUsage(routes, { directed: true });
     const estimate = this.app.appSettings.approximatePositions.value;
     const toggle =
       estimate || m.incomplete > 0
@@ -475,7 +475,7 @@ export class McPacketStats extends AppElement {
     }
     const maxStop = m.stops.reduce((n, st) => Math.max(n, st.count), 0);
     return html`
-      <mc-tile-map .tileUrl=${this.app.map.tileUrl.value} .lines=${usageLines(m)} label="Packet paths" data-field="paths-map">
+      <mc-tile-map .tileUrl=${this.app.map.tileUrl.value} .lines=${directedUsageLines(m)} label="Packet paths" data-field="paths-map">
         ${m.stops.map(
           (st) => html`<mc-map-marker
             data-stop=${st.id}
@@ -491,7 +491,7 @@ export class McPacketStats extends AppElement {
         )}
       </mc-tile-map>
       <p class="note muted" data-field="paths-map-note">
-        Line thickness shows how many of the ${formatNumber(m.total, 0)} packets crossed each hop (busiest: ${formatNumber(m.maxCount, 0)}); dot size shows
+        Line thickness shows how many of the ${formatNumber(m.total, 0)} packets crossed each hop that way (busiest: ${formatNumber(m.maxCount, 0)}), arrows show travel direction and dot size shows
         how many passed through each node. Dashed lines lead to estimated positions or skip hops with no known location.${m.incomplete
           ? ` ${formatNumber(m.incomplete, 0)} packet${m.incomplete === 1 ? '' : 's'} came over hops with no known location.`
           : ''}
@@ -504,7 +504,7 @@ export class McPacketStats extends AppElement {
     if (!this.showMap) return;
     const map = this.renderRoot.querySelector<McTileMap>('mc-tile-map');
     if (!map) return;
-    const b = this.app.paths.routesUsage(this.app.packetStats.routes.peek()).bounds;
+    const b = this.app.paths.routesUsage(this.app.packetStats.routes.peek(), { directed: true }).bounds;
     // a live packet over already-drawn nodes keeps the user's pan / zoom; a filter that moves the
     // bounds (or opening the map, toggling estimates) re-fits
     const moved = !sameBounds(b, this.#fittedBounds);

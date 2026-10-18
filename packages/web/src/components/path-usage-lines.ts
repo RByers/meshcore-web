@@ -1,7 +1,7 @@
 /**
- * Shared drawing helpers for weighted "paths usage" maps (`PathUsageMap` from core): the contact
+ * Shared drawing helpers for directed, weighted "paths usage" maps (`PathUsageMap` from core): the contact
  * Stats tab's "Paths heard via" map, the packet Stats tab's "Packet paths" map and the Packets
- * list's directed "Map".
+ * list's "Map". Each line carries an arrow showing travel direction.
  */
 import type { PathUsageMap } from '@meshcore-web/core/app';
 import type { MapLine } from './tile-map.js';
@@ -18,19 +18,10 @@ function usageWidth(count: number, maxCount: number): number {
   return maxCount ? Math.max(MIN_LINE, (MAX_LINE * count) / maxCount) : MIN_LINE;
 }
 
-/** Map lines for a paths-usage map: width proportional to how many packets crossed each hop. */
-export function usageLines(m: PathUsageMap): MapLine[] {
-  return m.edges.map((e) => ({
-    points: [e.a, e.b],
-    width: usageWidth(e.count, m.maxCount),
-    dashed: e.approximate,
-    id: e.id,
-  }));
-}
-
 /**
- * Map lines for a directed paths-usage map (`routesUsage(…, { directed: true })`: `e.a` → `e.b`
- * in travel order): as {@link usageLines}, with a direction arrow. A hop crossed both ways draws
+ * Map lines for a directed paths-usage map (`usage` / `routesUsage(…, { directed: true })`: `e.a`
+ * → `e.b` in travel order): width proportional to how many packets crossed each hop that way, and
+ * a direction arrow at the middle. A hop crossed both ways draws
  * its two lines side by side (each shifted to its right of travel) instead of on top of each other.
  */
 export function directedUsageLines(m: PathUsageMap): MapLine[] {

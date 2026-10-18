@@ -59,8 +59,8 @@ export interface MapLine {
   /** Exposed as `data-line` on the SVG path (tests, styling). */
   id?: string;
   /**
-   * Draw an arrowhead on each segment pointing in point order (travel direction), past the
-   * segment's midpoint so the reverse line over the same hop puts its arrow elsewhere. Segments
+   * Draw an arrowhead at the middle of each segment pointing in point order (travel direction).
+   * A reverse line over the same hop should set `offset` so the two sit side by side. Segments
    * too short on screen get none.
    */
   arrow?: boolean;
@@ -71,8 +71,8 @@ export interface MapLine {
   offset?: number;
 }
 
-/** Where along a segment (0…1) an arrowhead's centre sits: past the middle, see {@link MapLine.arrow}. */
-export const ARROW_POSITION = 0.62;
+/** Where along a segment (0…1) an arrowhead's centre sits: the middle, see {@link MapLine.arrow}. */
+export const ARROW_POSITION = 0.5;
 
 /** Arrowhead size for a stroke of width `w` px: length along the line and half its base width. */
 export function arrowSize(w: number): { length: number; halfWidth: number } {

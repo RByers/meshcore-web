@@ -70,6 +70,12 @@ describe('path view (issue #2)', () => {
       ['Alice', false, ''],
     ]);
     expect(map.shadowRoot!.querySelector('path[data-dashed]')).toBeNull();
+    // each leg has an arrow pointing the way the message travels: leg 1's tip is its corner nearest Hilltop
+    expect([...map.shadowRoot!.querySelectorAll('polygon[data-arrow]')].map((p) => p.getAttribute('data-arrow'))).toEqual(['1', '2']);
+    const hill = map.project(markers[1]!.lat, markers[1]!.lon);
+    const corners = map.shadowRoot!.querySelector('polygon[data-arrow="1"]')!.getAttribute('points')!.split(' ').map((p) => p.split(',').map(Number) as [number, number]);
+    const dist = corners.map(([x, y]) => Math.hypot(x - hill.x, y - hill.y));
+    expect(dist[0]).toBe(Math.min(...dist));
     // every stop is inside the fitted view
     for (const m of markers) {
       const p = map.project(m.lat, m.lon);

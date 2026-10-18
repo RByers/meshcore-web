@@ -267,10 +267,12 @@ is not shown; the inspector split is hidden). The Stats panel, top to bottom:
    (with the radio params in the tooltip, "—" when unknown), unique sources, span.
 2. **Packet paths** (`data-section="paths"`, from `routes`, §1.7): hidden by default behind a
    *Map* / *Hide map* toggle (`aria-pressed`); while hidden, one line "N packets with a known
-   route, M distinct paths". Shown, it is an `<mc-tile-map>` of `app.paths.routesUsage(routes)`
-   drawn like the contact "paths heard via" map (§5, shared `usageLines` in
-   `components/path-usage-lines.ts`): one line per hop segment, 2–14 px wide in proportion to the
-   packets that crossed it (busiest 14 px), dashed when it leads to an estimated position or skips
+   route, M distinct paths". Shown, it is an `<mc-tile-map>` of
+   `app.paths.routesUsage(routes, { directed: true })` drawn like the contact "paths heard via" map
+   (§5, shared `directedUsageLines` in `components/path-usage-lines.ts`): one line per hop segment
+   and direction, with an arrowhead at its middle showing travel direction (a hop crossed both ways
+   draws two lines side by side), 2–14 px wide in proportion to the packets that crossed it that
+   way (busiest 14 px), dashed when it leads to an estimated position or skips
    an unplaced hop; one marker per stop (kind from its node, so this radio is `self`) with its
    packet count in the tooltip, its diameter 1.1–2 rem ∝ √(count / busiest stop) via the marker's
    `--marker-size`; a note with the total, the busiest count and how many packets crossed hops
@@ -372,8 +374,9 @@ value = count; footer "last heard" via tooltip; the label links to the node page
 only for the contact's current out_path row, otherwise plain text; a *Map* button swaps the chart
 for `mc-tile-map` showing every path at once: `app.paths.usage()` (core `path-usage.ts`) lays
 each path out like the path dialog (contact → hops → this radio), merges stops by node (or hash +
-estimated position) and sums packets per hop segment, and each line's width is proportional to
-its count, the busiest hop 14 px, minimum 2 px. Hops without a location are only estimated while
+estimated position) and sums packets per hop segment (`directed`: kept in travel order), and each
+line's width is proportional to its count, the busiest hop 14 px, minimum 2 px, with an arrowhead
+at its middle pointing towards this radio. Hops without a location are only estimated while
 the "approximate positions" setting is on (a checkbox under the map, as in the path dialog);
 otherwise the segment skips them. A segment is dashed only when every packet over it had an
 estimated end or skipped a hop); *Signal over time*

@@ -205,19 +205,18 @@ describe('<mc-tile-map>', () => {
       const len = Math.hypot(to.x - from.x, to.y - from.y);
       return ((p[0] - from.x) * (to.x - from.x) + (p[1] - from.y) * (to.y - from.y)) / len / len;
     };
-    // a→b: the tip (first point) is nearer b than the base corners, past the middle
+    // a→b: the tip (first point) is nearer b than the base corners, centred on the middle
     const [tip, l, r] = pts(heads('ab')[0]!);
     expect(along(pa, pb, tip!)).toBeGreaterThan(along(pa, pb, l!));
     expect(along(pa, pb, l!)).toBeCloseTo(along(pa, pb, r!), 2);
-    expect(along(pa, pb, l!)).toBeGreaterThan(0.5);
-    expect(along(pa, pb, tip!)).toBeLessThan(1);
+    expect((along(pa, pb, tip!) + along(pa, pb, l!)) / 2).toBeCloseTo(0.5, 2);
     // the arrow is wider than its 6px line
     expect(Math.hypot(l![0] - r![0], l![1] - r![1])).toBeGreaterThan(6);
     expect(heads('ab')[0]!.getAttribute('fill')).toBe('var(--mc-accent)');
-    // b→a points the other way, at a different spot along the hop
+    // b→a points the other way, also mid-hop (its line is offset to the side, so they don't overlap)
     const [tip2, l2] = pts(heads('ba')[0]!);
     expect(along(pa, pb, tip2!)).toBeLessThan(along(pa, pb, l2!));
-    expect(along(pa, pb, tip2!)).toBeLessThan(0.5);
+    expect((along(pa, pb, tip2!) + along(pa, pb, l2!)) / 2).toBeCloseTo(0.5, 2);
     // offset 4: its path runs 4px to the right of b→a (screen y down)
     const d = root.querySelector('path[data-line="ba"]')!.getAttribute('d')!;
     const [x0, y0] = d.slice(1).split(' L')[0]!.split(' ').map(Number) as [number, number];

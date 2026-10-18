@@ -92,6 +92,9 @@ describe('contact Stats tab', () => {
     await t.until(() => within(map, 'path[data-line]').length === 3, 3000, 'paths map lines');
     expect(lineWidths().map((w) => w.toFixed(2)).sort()).toEqual(['14.00', '14.00', '4.67']);
     expect(within(map, 'path[data-dashed]')).toHaveLength(0);
+    // one arrow per hop, pointing towards this radio
+    expect(within(map, 'polygon[data-arrow]')).toHaveLength(3);
+    expect(within(map, 'polygon[data-arrow]').every((p) => /^[0-9a-f]+>/.test(p.getAttribute('data-arrow')!))).toBe(true);
     expect(t.query('[data-field="paths-map-note"]')!.textContent).toMatch(/1 packet came over hops with no known location/);
 
     // with estimates on, 55 is placed between Alice and Hilltop: Hilltop–me 3 (busiest), Alice–

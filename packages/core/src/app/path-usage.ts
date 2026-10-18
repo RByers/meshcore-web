@@ -96,7 +96,7 @@ export function buildPathUsageMap(
   contactKey: string,
   nodes: readonly PathGeoNode[],
   self: PathGeoNode | null,
-  opts: PathGeometryOptions = {},
+  opts: RouteUsageOptions = {},
 ): PathUsageMap {
   const from: PathEndpoint = { kind: 'contact', key: contactKey };
   const to: PathEndpoint = { kind: 'self' };

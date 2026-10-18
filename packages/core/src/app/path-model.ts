@@ -231,11 +231,12 @@ export class PathModel {
 
   /**
    * Merges the paths packets from `contactKey` arrived over into weighted hop segments (reactive
-   * in a render). Estimated positions follow the same setting / override as {@link geometry}.
+   * in a render). Estimated positions follow the same setting / override as {@link geometry};
+   * `directed` keeps edges in travel order (contact → this radio).
    */
-  usage(paths: readonly PathUsageInput[], contactKey: string, opts: { estimate?: boolean } = {}): PathUsageMap {
+  usage(paths: readonly PathUsageInput[], contactKey: string, opts: RouteUsageOptions = {}): PathUsageMap {
     const estimate = opts.estimate ?? this.src.approximatePositions?.value ?? false;
-    return buildPathUsageMap(paths, contactKey, this.nodes.value, this.self.value, { estimate });
+    return buildPathUsageMap(paths, contactKey, this.nodes.value, this.self.value, { ...opts, estimate });
   }
 
   /**

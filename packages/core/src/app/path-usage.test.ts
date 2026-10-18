@@ -51,6 +51,14 @@ describe('buildPathUsageMap', () => {
     ]);
   });
 
+  it('with directed, keeps edges in travel order (contact → this radio)', () => {
+    const m = buildPathUsageMap([{ hashes: ['aa'], count: 2 }], CONTACT.key, NODES, SELF, { directed: true });
+    expect(m.edges.map((e) => [e.a.label, e.b.label, e.count])).toEqual([
+      ['Alpha', 'Me (you)', 2],
+      ['Delta', 'Alpha', 2],
+    ]);
+  });
+
   it('keeps a segment firm when any path crossed it between known stops', () => {
     const m = buildPathUsageMap([{ hashes: ['aa'], count: 2 }, { hashes: ['99', 'aa'], count: 1 }], CONTACT.key, NODES, SELF);
     expect(m.edges.find((x) => [x.a.label, x.b.label].includes('Delta'))).toMatchObject({ count: 3, approximate: false });
