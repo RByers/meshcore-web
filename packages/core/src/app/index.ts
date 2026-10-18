@@ -13,7 +13,6 @@ export * from './chat-model.js';
 export * from './packet-summary.js';
 export * from './packet-log-model.js';
 export * from './node-model.js';
-export * from './node-activity.js';
 export * from './airtime.js';
 export * from './packet-stats-model.js';
 export * from './device-settings-model.js';

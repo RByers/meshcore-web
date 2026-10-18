@@ -141,16 +141,6 @@ function withSource<T extends Omit<PacketRecord, 'id'>>(rec: T): T {
   return rec;
 }
 
-/** One packet in a {@link PacketLog.sourceActivity} scan. */
-export interface SourceSighting {
-  id: number;
-  ts: number;
-  direction: PacketDirection;
-  payloadType: number;
-  /** The packet carried the full source key (so it is certainly from the node). */
-  keyed: boolean;
-}
-
 /**
  * Maps a decoded device push that carries an over-the-air packet to a {@link PacketInput}:
  * LOG_RX_DATA (full packet), RAW_DATA (RAW_CUSTOM payload), TRACE_DATA (trace payload rebuilt
@@ -429,23 +419,6 @@ export class PacketLog extends TimeLog<PacketRecord, PacketQuery> {
   static srcQuery(node: string): string | null {
     const n = node.trim().toLowerCase();
     return /^([0-9a-f]{2})+$/.test(n) ? n : null;
-  }
-
-  /**
-   * Every logged packet from source node `node` (key or key prefix hex) in the ts window, oldest
-   * first, as light rows (no bytes kept). One `srcHash_ts` index range scan.
-   */
-  async sourceActivity(node: string, q: { from?: number; to?: number } = {}): Promise<SourceSighting[]> {
-    const n = PacketLog.srcQuery(node);
-    if (!n) return [];
-    const range = this.tsRange([n.slice(0, 2)], q);
-    return this.db.transaction(this.storeName, 'readonly', async (t) => {
-      const out: SourceSighting[] = [];
-      await t.store<PacketRecord>(this.storeName).each({ index: INDEX.packets.srcHashTs, query: range }, (r) => {
-        if (sourceMatches(r, n)) out.push({ id: r.id, ts: r.ts, direction: r.direction, payloadType: r.payloadType, keyed: r.srcKey !== undefined });
-      });
-      return out;
-    });
   }
 
   /**

@@ -1,7 +1,7 @@
 /**
  * Clickable nodes in displayed paths (known contacts → their node page; unknown / ambiguous hop
  * hashes → the node page of the bare hash), the node Info tab's "Packets from this node" link
- * (packet log filtered by source node) and its packet activity chart.
+ * (packet log filtered by source node).
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { concatBytes, toHex } from '@meshcore-web/core/util/bytes';
@@ -189,45 +189,5 @@ describe('node page packets', () => {
     await t.click('[data-action="clear-src"]');
     await t.until(() => location.hash === '#/packets' && !t.query('[data-filter="src"]'), 5000, 'filter cleared');
     expect(t.app.packetLog.packets.filter.value.src).toBeUndefined();
-  });
-
-  it('charts the packets heard from the node over time and follows new packets', async () => {
-    const { t, alice } = await connected();
-    const store = t.app.connection.store.peek()!;
-    t.emulatorScenario().nodes.alice.advertise();
-    await vi.waitFor(async () => expect(await store.packets.count({ src: alice })).toBeGreaterThan(0), { timeout: 5000 });
-    await go(t, `/node/${alice}`, 'mc-node-info');
-    const chart = () => info(t, 'mc-activity-chart');
-    const bars = () => [...(chart()?.shadowRoot?.querySelectorAll<HTMLElement>('[data-bar]') ?? [])];
-    await t.until(() => bars().length === 28, 5000, '7-day chart');
-    const total = () => bars().reduce((n, b) => n + Number(b.dataset['count']), 0);
-    const logged = await store.packets.count({ src: alice });
-    await t.until(() => total() === logged, 5000, 'chart total');
-    expect(bars().at(-1)!.dataset['count']).toBe(String(logged));
-    expect(info(t, '[data-field="activity-summary"]')!.textContent).toContain(`${logged} packet`);
-
-    // hover tooltip
-    bars().at(-1)!.dispatchEvent(new PointerEvent('pointerenter'));
-    await t.until(() => chart()!.shadowRoot!.querySelector('[data-field="tooltip"]'), 2000, 'tooltip');
-    expect(chart()!.shadowRoot!.querySelector('[data-field="tooltip"]')!.textContent).toContain(`${logged} packet`);
-
-    // range switch
-    info(t, 'button[data-range="24h"]')!.click();
-    await t.until(() => bars().length === 24 && total() === logged, 5000, '24h chart');
-
-    // a new packet from Alice shows up live
-    t.emulatorScenario().nodes.alice.sendText(t.emulatorScenario().keys.self, 'ping');
-    await vi.waitFor(async () => expect(await store.packets.count({ src: alice })).toBeGreaterThan(logged), { timeout: 5000 });
-    const now = await store.packets.count({ src: alice });
-    await t.until(() => total() === now, 5000, 'chart updated');
-    expect(info(t, '[data-field="activity-hash-note"]')!.textContent).toContain(alice.slice(0, 2));
-  });
-
-  it('shows an empty state for a node with no packets', async () => {
-    const { t } = await connected();
-    const bob = toHex(t.emulatorScenario().keys.bob);
-    await go(t, `/node/${bob}`, 'mc-node-info');
-    await t.until(() => info(t, '[data-field="activity-empty"]'), 5000, 'empty state');
-    expect(info(t, '[data-field="activity-empty"]')!.textContent).toContain('7 days');
   });
 });

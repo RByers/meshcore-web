@@ -85,12 +85,6 @@ describe('PacketLog by source', () => {
     expect(await s.packets.count({ src: 'a7' })).toBe(3);
     expect(await s.packets.count({ src: 'not hex' })).toBe(0);
 
-    const seen = await s.packets.sourceActivity(keyA);
-    expect(seen.map((x) => [x.ts, x.keyed])).toEqual([
-      [10, true],
-      [20, false],
-    ]);
-    expect(await s.packets.sourceActivity(keyA, { from: 11, to: 25 })).toHaveLength(1);
     s.close();
   });
 

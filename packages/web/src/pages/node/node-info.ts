@@ -1,8 +1,7 @@
 /**
  * `<mc-node-info>`: the node page's Info tab. What we know about the node — key (or the bare
- * hash / prefix), path and direct signal (contacts), last seen / heard, location — a chart of the
- * packets heard from it over time (core `PacketLogModel.nodeActivity`, an indexed scan of the
- * packet log by source node) and a link to the packet log filtered to it.
+ * hash / prefix), path and direct signal (contacts), last seen / heard, location — and a link to
+ * the packet log filtered to it. Packets heard over time are on the *Stats* tab.
  *
  * A contact gets a *Contact* section: local note, SMAZ (chat & room), favourite / not-on-radio,
  * and a two-click *Remove contact*. A node only heard advertising gets
@@ -11,16 +10,13 @@
  * Test hooks: `dl.info` `[data-field="key|path|direct-signal|last-seen|heard|location"]`,
  * `[data-candidate="<key>"]`, `[data-section="contact|note|smaz"]`, `[data-field="contact-flags"]`,
  * `[data-action="remove-contact|add-contact|node-packets"]` (`data-armed` while the
- * remove button awaits its confirming click), `[data-field="activity"]`.
+ * remove button awaits its confirming click).
  */
 import { css, html, nothing, type TemplateResult } from 'lit';
 import {
-  ACTIVITY_RANGES,
   hasLocation,
-  type ActivityRange,
   type ContactView,
   type HeardNode,
-  type NodeActivity,
   type NodeIdentity,
   type NodeModel,
 } from '@meshcore-web/core/app';
@@ -30,9 +26,6 @@ import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
 import { listStyles, TYPE_LABEL } from '../messaging/common.js';
 import { contactNote, nodeHref, pathLabelView } from '../../components/node-link.js';
-import '../../components/activity-chart.js';
-
-const RANGES = Object.keys(ACTIVITY_RANGES) as ActivityRange[];
 
 /** The key links and panels use: the resolved full key, else the reference as given. */
 export function identityKey(id: NodeIdentity | null, ref: string): string {
@@ -106,52 +99,9 @@ export class McNodeInfo extends AppElement {
         align-items: center;
         gap: 8px;
       }
-      section.activity {
-        margin-block: var(--mc-gap);
-      }
-      .activity-head {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 8px;
-        margin-block-end: 8px;
-      }
-      .activity-head h3 {
-        flex: 1;
-        margin: 0;
-        font-size: 1rem;
-      }
-      .seg {
-        display: inline-flex;
-        border: 1px solid var(--mc-border);
-        border-radius: 8px;
-        overflow: hidden;
-      }
-      .seg button {
-        min-height: 0;
-        padding: 2px 10px;
-        border: 0;
-        border-radius: 0;
-        background: none;
-        font-size: 0.85rem;
-      }
-      .seg button[aria-pressed='true'] {
-        background: var(--mc-accent-soft);
-        color: var(--mc-accent);
-        font-weight: 600;
-      }
-      .activity p {
-        margin: 6px 0 0;
-        font-size: 0.85rem;
-      }
     `,
   ];
 
-  #range: ActivityRange = '7d';
-  #activity: NodeActivity | null = null;
-  /** What #activity was loaded for ("key|range|logged packets"); reloads when it changes. */
-  #activityFor = '';
-  #activitySeq = 0;
   /** The Remove button was clicked once and awaits the confirming second click. */
   #armed = false;
   #removing = false;
@@ -180,35 +130,6 @@ export class McNodeInfo extends AppElement {
     if (changed.has('node')) this.#armed = false;
   }
 
-  /** The key (full, or the reference for a hash / prefix) the activity chart and packet link use. */
-  #activityKey(): string {
-    const node = this.node;
-    return node ? identityKey(node.identity.peek(), node.ref) : '';
-  }
-
-  #setRange(r: ActivityRange): void {
-    this.#range = r;
-    this.requestUpdate();
-  }
-
-  protected override updated(): void {
-    const key = this.#activityKey();
-    const log = this.app.packetLog;
-    // the packet log's total ticks as packets are logged, so the chart follows live traffic
-    const want = `${key}|${this.#range}|${log.packets.total.peek()}`;
-    if (!key || want === this.#activityFor) return;
-    this.#activityFor = want;
-    const seq = ++this.#activitySeq;
-    log.nodeActivity(key, this.#range).then(
-      (a) => {
-        if (seq !== this.#activitySeq) return;
-        this.#activity = a;
-        this.requestUpdate();
-      },
-      (err: unknown) => console.error('node activity:', err),
-    );
-  }
-
   override render() {
     const node = this.node;
     const id = node?.identity.value;
@@ -225,7 +146,6 @@ export class McNodeInfo extends AppElement {
           : nothing}
         <a data-action="node-packets" href=${hrefFor(`/packets/node/${key}`)}>Packets from this node</a>
       </div>
-      ${this.#activitySection(key)}
     `;
   }
 
@@ -422,38 +342,6 @@ export class McNodeInfo extends AppElement {
       this.#adding = false;
       this.requestUpdate();
     }
-  }
-
-  // ---- activity ----
-
-  #activitySection(key: string): TemplateResult {
-    const a = this.#activity?.range === this.#range ? this.#activity : null;
-    // read the signal so a newly logged packet re-renders (and so reloads) the chart
-    void this.app.packetLog.packets.total.value;
-    return html`<section class="card activity" data-field="activity">
-      <div class="activity-head">
-        <h3 id="activity-h">Packets heard from this node</h3>
-        <span class="seg" role="group" aria-label="Time range">
-          ${RANGES.map(
-            (r) => html`<button data-range=${r} aria-pressed=${r === this.#range ? 'true' : 'false'} @click=${() => this.#setRange(r)}>${r}</button>`,
-          )}
-        </span>
-      </div>
-      ${!a
-        ? html`<p class="muted" role="status">Loading…</p>`
-        : a.total === 0
-          ? html`<p class="muted" data-field="activity-empty">No packets from this node in the last ${ACTIVITY_RANGES[a.range].label}.</p>`
-          : html`<mc-activity-chart aria-labelledby="activity-h" .activity=${a}></mc-activity-chart>
-              <p data-field="activity-summary">
-                ${a.total} packet${a.total === 1 ? '' : 's'} in the last ${ACTIVITY_RANGES[a.range].label}${a.last ? html` · last ${formatRelative(a.last, this.app.clock.now())}` : nothing}
-                ${a.hashOnly
-                  ? html`<br /><span class="muted" data-field="activity-hash-note"
-                        >${a.hashOnly} matched only by the node's 1-byte hash <span class="mono">${key.slice(0, 2)}</span>; packets
-                        from another node with the same first key byte are counted too.</span
-                      >`
-                  : nothing}
-              </p>`}
-    </section>`;
   }
 }
 

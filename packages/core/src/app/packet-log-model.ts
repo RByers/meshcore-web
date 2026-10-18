@@ -39,7 +39,6 @@ import {
   type SummaryContext,
 } from './packet-summary.js';
 import { contactTypeName, type ContactKind } from './messaging.js';
-import { ACTIVITY_RANGES, bucketActivity, type ActivityRange, type NodeActivity } from './node-activity.js';
 import { STATS_FIELD_LABEL, filterKey, type StatPacket, type StatsFilter } from './packet-stats-model.js';
 import { StoreBoundModel } from './store-bound.js';
 import { batch, computed, signal, type ReadonlySignal, type Signal } from './signal.js';
@@ -773,17 +772,6 @@ export class PacketLogModel extends StoreBoundModel {
   /** DM decryption keys for summaries, when the radio's private key is stored (opt-in). */
   #dmKeys(): DmKeys | undefined {
     return this.dmKeys.peek() ?? undefined;
-  }
-
-  // ---- per-node activity ----
-
-  /** Packets originated by node `key` over `range`, bucketed for a chart (indexed scan). */
-  async nodeActivity(key: string, range: ActivityRange, now = this.connection.clock.now()): Promise<NodeActivity> {
-    const store = this.store;
-    const { spanMs, bucketMs } = ACTIVITY_RANGES[range];
-    const from = Math.floor(now / bucketMs) * bucketMs + bucketMs - spanMs;
-    const sightings = store ? await store.packets.sourceActivity(key, { from }) : [];
-    return bucketActivity(sightings, range, now);
   }
 
   /**

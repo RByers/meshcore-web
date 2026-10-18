@@ -192,7 +192,6 @@ describe('node page', () => {
     expect(t.query('[data-section="contact"]')).toBeNull();
     expect(tabs(t)).toEqual(['info']);
     expect(t.query<HTMLAnchorElement>('[data-action="node-packets"]')!.getAttribute('href')).toBe(`#/packets/node/${free}`);
-    await t.until(() => t.query('[data-field="activity-empty"]'), 3000, 'activity empty state');
   });
 
   it('lists the candidates of an ambiguous hash', async () => {

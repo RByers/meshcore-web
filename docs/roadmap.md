@@ -167,7 +167,7 @@ contact: the path editor and *Reset path*, see Contact paths below), *Overview* 
 (repeater, room and sensor admin) and *Stats*; an unknown or hidden tab falls back to Info. The
 header (every tab) shows name + note, type, short key, login state and a "Map" link; on Messages
 it adds the path · direct SNR · last seen line. *Info* shows key (or hash), path, direct signal,
-last seen / heard advert, location, packet activity and a link to the packet log; for contacts a
+last seen / heard advert, location and a link to the packet log (packets over time are on *Stats*); for contacts a
 *Contact* section holds the note, SMAZ compression, favourite / not-on-radio flags and a two-click *Remove contact* (the page stays, as a heard / unknown node). A
 heard node with an advert gets *Add contact* (`ContactsModel.addFromAdvert`, CMD_ADD_UPDATE_CONTACT
 so it works in manual-add mode). Contact list / map clicks open chat and room contacts on Messages,

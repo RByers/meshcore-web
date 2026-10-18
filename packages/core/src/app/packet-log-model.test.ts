@@ -145,13 +145,6 @@ describe('PacketLogModel — packets', () => {
     await log.packets.setFilter({ src: toHex(scenario.keys.bob) }, { replace: true });
     expect(log.packets.rows.value.map((r) => r.typeName)).not.toContain('TXT_MSG');
 
-    // per-node activity: Alice's packets land in the newest hourly slot
-    const act = await log.nodeActivity(alice, '24h');
-    expect(act.buckets).toHaveLength(24);
-    expect(act.total).toBe(fromAlice.length);
-    expect(act.buckets.at(-1)!.count).toBe(fromAlice.length);
-    expect(act.hashOnly).toBe(fromAlice.filter((r) => r.typeName === 'TXT_MSG').length);
-
     // packets are stamped with the app clock, so "now" bounds them exactly
     const now = app.clock.now();
     await log.packets.setFilter({ from: now + 1 }, { replace: true });
