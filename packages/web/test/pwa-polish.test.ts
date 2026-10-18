@@ -36,7 +36,7 @@ describe('install prompt', () => {
     window.dispatchEvent(e);
     expect(e.defaultPrevented).toBe(true);
     await t.until(() => t.query('[data-action="install"]'), 2000, 'install button');
-    expect(t.query('[data-section="install"]')).not.toBeNull();
+    expect(t.query('[data-section="app"] [data-action="install"]')).not.toBeNull();
     expect(t.query('[data-action="install"]')!.textContent).toContain('Install app');
 
     await t.click('[data-action="install"]');

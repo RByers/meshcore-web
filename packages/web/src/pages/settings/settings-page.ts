@@ -395,7 +395,7 @@ export class McSettingsPage extends AppElement {
                 <p><a href=${hrefFor('/')}>Connect a radio</a> to change its settings.</p>
               </section>
               ${this.#regions(false)}`}
-        ${this.#appSection()} ${this.#install()}
+        ${this.#appSection()}
       </div>
       ${this.#about()}
       ${this.#renderDialog()}
@@ -1071,6 +1071,7 @@ export class McSettingsPage extends AppElement {
           Contacts where you turned compression off on their contact page are left alone.
         </p>
       </form>
+      ${this.#install()}
     </section>`;
   }
 
@@ -1078,13 +1079,12 @@ export class McSettingsPage extends AppElement {
   #install() {
     const install = getInstallPrompt();
     if (!install.available.value) return nothing;
-    return html`<section class="card install" data-section="install" aria-labelledby="s-install">
-      <h2 id="s-install">Install app</h2>
-      <p class="hint">Install MeshCore Web to open it from your dock or home screen, in its own window; the app shell works offline.</p>
+    return html`<div data-install>
       <div class="actions">
         <button class="primary" data-action="install" @click=${() => void install.prompt()}>Install app</button>
       </div>
-    </section>`;
+      <p class="hint">Install MeshCore Web to open it from your dock or home screen, in its own window; the app shell works offline.</p>
+    </div>`;
   }
 
   #about(): TemplateResult {
