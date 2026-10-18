@@ -17,7 +17,7 @@ import { CMD, PUSH, RESP } from '@meshcore-web/core/protocol';
 import { AppElement } from '../../app-context.js';
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
-import { formatLogTime, frameInspectorProps, packetInspectorProps, type InspectorProps } from './inspection.js';
+import { formatLogTime, frameInspectorProps, packetInspectorProps, relatedKey, type InspectorProps } from './inspection.js';
 import { jsonReplacer } from './packet-inspector.js';
 import { hopsLink } from '../../components/path-dialog.js';
 import { hashLink, nodeLink, pathHops } from '../../components/node-link.js';
@@ -74,6 +74,8 @@ export class McPacketsPage extends AppElement {
   /** `send` of the packet the inspector shows (JSON), to refresh it when the outcome changes. */
   #inspectedSend = '';
   #inspectedId = -1;
+  /** {@link relatedKey} of the inspected packet. */
+  #inspectedRelated = '';
   /** First visible row before an update, so rows added above it don't move it (see #keepAnchor). */
   #anchor: { attr: string; id: string; top: number } | null = null;
   /** Contact note lookup for path hop tooltips. */
@@ -389,15 +391,20 @@ export class McPacketsPage extends AppElement {
       .catch((err: unknown) => this.app.notifications.error('Could not load more', err));
   }
 
-  /** The inspected tx row's send outcome changed (e.g. its ACK arrived): inspect it again. */
+  /**
+   * The inspected packet changed under the panel: a tx row's send outcome (e.g. its ACK arrived),
+   * or its pairings (a reply / ACK linked; willUpdate reads `related` so this runs then): inspect
+   * it again.
+   */
   #refreshInspector(): void {
     const s = this.selected;
     if (s?.tab !== 'packets' || !this.inspector || s.id !== this.#inspectedId) return;
     const row = this.#log.packets.rows.peek().find((r) => r.id === s.id);
-    if (!row) return;
-    const key = JSON.stringify(row.record.send ?? null);
-    if (key === this.#inspectedSend) return;
-    this.#inspectedSend = key;
+    const send = row ? JSON.stringify(row.record.send ?? null) : this.#inspectedSend;
+    const related = relatedKey(this.#log.related(s.id));
+    if (send === this.#inspectedSend && related === this.#inspectedRelated) return;
+    this.#inspectedSend = send;
+    this.#inspectedRelated = related;
     void this.#open('packets', s.id);
   }
 
@@ -452,6 +459,7 @@ export class McPacketsPage extends AppElement {
               if (seq === this.#loadSeq) {
                 this.#inspectedId = id;
                 this.#inspectedSend = JSON.stringify(i.record.send ?? null);
+                this.#inspectedRelated = relatedKey(i.related);
               }
               return packetInspectorProps(i, (p) => this.app.contacts.resolvePath(p), this.app.clock.now());
             })
@@ -805,6 +813,8 @@ export class McPacketsPage extends AppElement {
     const showFrames = this.app.appSettings.showFrames.value;
     // The inspector belongs to the tab its row came from: switching tabs hides it (and back shows it).
     const split = this.tab !== 'stats' && this.wide && this.selected !== null && this.selected.tab === this.tab;
+    // track the inspected packet's pairings (compared in #refreshInspector)
+    if (this.selected?.tab === 'packets' && this.inspector) log.related(this.selected.id);
     return html`
       <mc-packet-filters ?node-route=${!!this.params['key']} ?hidden=${this.tab === 'frames'}></mc-packet-filters>
       <div class="tabs" role="tablist" aria-label="Log">

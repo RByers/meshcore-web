@@ -596,6 +596,35 @@ describe('/packets page', () => {
     expect(t.query('[data-section="related"] dt[data-relation="acked"]')!.textContent).toBe('← Acknowledges');
   });
 
+  it('links a status request to its RESPONSE once the private key is stored, updating the open page and panel', async () => {
+    await page.viewport(375, 800);
+    const t = await openLog();
+    await t.app.connection.client.value!.getStatus(t.emulatorScenario().keys.repeater);
+    await t.until(() => t.query('tr[data-type="REQ"]') && t.query('tr[data-type="RESPONSE"]'), 5000, 'REQ and RESPONSE rows');
+    const reqId = t.query('tr[data-type="REQ"]')!.dataset['packetId']!;
+    const respId = t.query('tr[data-type="RESPONSE"]')!.dataset['packetId']!;
+    expect(t.query('tr[data-type="REQ"] [data-answered]')).toBeNull(); // encrypted: no pairing without the key
+    t.query('tr[data-type="REQ"]')!.click();
+    await t.until(() => t.query('mc-packet-inspector')?.shadowRoot?.textContent?.includes(`Packet #${reqId}`), 3000, 'REQ detail');
+    expect(t.query('[data-section="related"]')).toBeNull();
+
+    // storing the key pairs them; the open detail page shows the Related link without navigating
+    await t.app.packetLog.storeSelfKeyFromDevice();
+    await t.until(() => t.query(`[data-section="related"] a[data-related-id="${respId}"]`), 3000, 'Related appears on the open page');
+    expect(t.query('[data-section="related"] dt[data-relation="reply"]')!.textContent).toBe('Reply →');
+    expect(location.hash).toBe(`#/packets/${reqId}`);
+
+    // the side panel follows too: forgetting the key removes the link while it is open
+    await page.viewport(1400, 900);
+    await t.click('[data-action="back"]');
+    await t.until(() => t.query('tr[data-type="REQ"] [data-answered]'), 3000, 'answered marker');
+    t.query('tr[data-type="REQ"]')!.click();
+    await t.until(() => t.query(`[data-section="related"] a[data-related-id="${respId}"]`), 3000, 'Related in the panel');
+    await t.app.packetLog.setSelfPrivateKey(null);
+    await t.until(() => !t.query('[data-section="related"]') && t.query('mc-packet-inspector')?.shadowRoot?.textContent?.includes(`Packet #${reqId}`), 3000, 'Related gone from the panel');
+    expect(location.hash).toBe('#/packets');
+  });
+
   it('a Related link in the side panel opens that packet in the panel', async () => {
     const t = await openLog();
     const dm = t.app.chat('contact', toHex(t.emulatorScenario().keys.alice));

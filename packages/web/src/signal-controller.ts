@@ -6,7 +6,8 @@
  *     render() { return html`${app.connection.phase.value}`; } // tracked automatically
  *   }
  *
- * Tracking spans hostUpdate → hostUpdated, i.e. willUpdate + render. `watch(sig)` additionally
+ * Tracking spans hostUpdate → hostUpdated, i.e. render (Lit calls willUpdate before hostUpdate,
+ * so reads in willUpdate are not tracked). `watch(sig)` additionally
  * subscribes to a signal that is not read during render (e.g. one used only in `updated`).
  */
 import type { ReactiveController, ReactiveControllerHost } from 'lit';

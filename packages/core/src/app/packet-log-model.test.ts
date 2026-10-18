@@ -629,4 +629,54 @@ describe('PacketLogModel — request ↔ reply pairing', () => {
     expect(log.related((await dmRow()).id).length).toBe(before);
     stop();
   });
+
+  it('pairs our status request with its RESPONSE and a received DM with its ACK only once the private key is stored', async () => {
+    const { app, log, scenario } = await connected();
+    const store = app.connection.store.value!;
+    const client = app.connection.client.value!;
+    expect(log.related(1)).toEqual([]); // build the index (no key yet)
+    await log.settled();
+
+    await client.getStatus(scenario.keys.repeater);
+    await traffic(app, log, scenario); // includes Alice's DM to us and our ACK forwarded back
+    const req = (await store.packets.query({ direction: 'tx', payloadType: PayloadType.REQ })).items[0]!;
+    expect(req.send?.tag).toBeDefined();
+    const responses = (await store.packets.query({ payloadType: PayloadType.RESPONSE })).items;
+    expect(responses.length).toBeGreaterThan(0);
+    const aliceDms = (await store.packets.query({ direction: 'rx', payloadType: PayloadType.TXT_MSG })).items;
+    expect(aliceDms.length).toBeGreaterThan(0);
+    // without the key nothing that needs decryption pairs
+    expect(log.related(req.id)).toEqual([]);
+    expect(aliceDms.flatMap((r) => log.related(r.id))).toEqual([]);
+
+    // storing the key rebuilds the index with the decrypted keys; an effect reading it re-runs
+    const seen: boolean[] = [];
+    const stop = effect(() => {
+      seen.push(log.answered(req.id));
+    });
+    await log.storeSelfKeyFromDevice();
+    await log.settled();
+    expect(log.related(req.id)).toEqual(responses.map((r) => ({ id: r.id, relation: 'reply', rule: 'response' })));
+    expect(log.related(responses[0]!.id)).toEqual([{ id: req.id, relation: 'request', rule: 'response' }]);
+    expect(seen.at(-1)).toBe(true);
+    // Alice's DM (both copies heard) ↔ our ACK, forwarded back by the repeater
+    const acks = (await store.packets.query({ payloadType: PayloadType.ACK })).items;
+    for (const dm of aliceDms) expect(log.related(dm.id).map((r) => [r.id, r.relation])).toEqual(acks.map((a) => [a.id, 'ack']));
+
+    // a live request after the key is stored pairs as its response arrives (decrypted off the event path)
+    await client.getStatus(scenario.keys.repeater);
+    await app.connection.capture!.idle();
+    await log.settled();
+    const reqs = (await store.packets.query({ direction: 'tx', payloadType: PayloadType.REQ })).items;
+    expect(reqs.length).toBe(2);
+    for (const r of reqs) expect(log.related(r.id).map((x) => x.relation)).toEqual(['reply']);
+    expect(new Set(reqs.map((r) => log.related(r.id)[0]!.id)).size).toBe(2);
+
+    // forgetting the key drops the decrypted pairings again
+    await log.setSelfPrivateKey(null);
+    await log.settled();
+    expect(log.related(req.id)).toEqual([]);
+    expect(seen.at(-1)).toBe(false);
+    stop();
+  });
 });

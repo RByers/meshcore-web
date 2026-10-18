@@ -8,6 +8,7 @@ import {
   type PacketInspection,
   type PacketRelation,
   type RelatedGroup,
+  type RelatedPacket,
   type RelationRule,
   type ResolvedHop,
 } from '@meshcore-web/core/app';
@@ -85,7 +86,12 @@ const RELATION_LABEL: Record<PacketRelation, string> = {
 };
 
 /** Rules whose name the relation label already implies (an ACK pairs by the `ack` rule). */
-const IMPLIED_RULE: Partial<Record<PacketRelation, RelationRule>> = { ack: 'ack', acked: 'ack', hop: 'trace' };
+const IMPLIED_RULE: Partial<Record<PacketRelation, RelationRule>> = { ack: 'ack', acked: 'ack', hop: 'trace', reply: 'response', request: 'response' };
+
+/** Identifies a packet's pairings, to notice when the open inspector's Related section is stale. */
+export function relatedKey(related: readonly RelatedPacket[]): string {
+  return related.map((r) => `${r.id}:${r.relation}:${r.rule}`).join(',');
+}
 
 /** "Reply (trace) →" / "← Acknowledges": the arrow points to where the other packet is in time. */
 export function relationLabel(g: RelatedGroup, ts: number): string {

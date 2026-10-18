@@ -6,7 +6,7 @@ import { css, html, nothing, type PropertyValues } from 'lit';
 import { AppElement } from '../../app-context.js';
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
-import { frameInspectorProps, packetInspectorProps, type InspectorProps } from './inspection.js';
+import { frameInspectorProps, packetInspectorProps, relatedKey, type InspectorProps } from './inspection.js';
 import './packet-inspector.js';
 
 export class McPacketDetailPage extends AppElement {
@@ -22,6 +22,11 @@ export class McPacketDetailPage extends AppElement {
   declare props: InspectorProps | null;
   declare missing: boolean;
   #loaded = '';
+  #loadSeq = 0;
+  /** {@link relatedKey} of the shown inspection. */
+  #relatedKey = '';
+  /** {@link relatedKey} as of the last render (null: no packet shown). */
+  #relatedNow: string | null = null;
 
   constructor() {
     super();
@@ -53,10 +58,22 @@ export class McPacketDetailPage extends AppElement {
     }
   }
 
-  async #load(): Promise<void> {
+  protected override updated(): void {
+    // a reply / ACK was paired while the page is open (render read related(), so it re-rendered)
+    if (this.#relatedNow !== null && this.#relatedNow !== this.#relatedKey) {
+      this.#relatedKey = this.#relatedNow;
+      void this.#load(true);
+    }
+  }
+
+  /** Inspects the packet / frame; `refresh` keeps the current view until the new one is ready. */
+  async #load(refresh = false): Promise<void> {
     const id = Number(this.params['id']);
-    this.props = null;
-    this.missing = false;
+    const seq = ++this.#loadSeq;
+    if (!refresh) {
+      this.props = null;
+      this.missing = false;
+    }
     if (!Number.isInteger(id)) {
       this.missing = true;
       return;
@@ -66,7 +83,12 @@ export class McPacketDetailPage extends AppElement {
     const p =
       this.kind === 'frame'
         ? await log.inspectFrame(id).then((i) => (i ? frameInspectorProps(i) : null))
-        : await log.inspect(id).then((i) => (i ? packetInspectorProps(i, (p) => this.app.contacts.resolvePath(p), this.app.clock.now()) : null));
+        : await log.inspect(id).then((i) => {
+            if (!i) return null;
+            if (seq === this.#loadSeq) this.#relatedKey = relatedKey(i.related);
+            return packetInspectorProps(i, (p) => this.app.contacts.resolvePath(p), this.app.clock.now());
+          });
+    if (seq !== this.#loadSeq) return;
     this.props = p;
     this.missing = p === null;
   }
@@ -76,6 +98,8 @@ export class McPacketDetailPage extends AppElement {
     if (!this.app.connection.connected.value) {
       return html`${back}<section class="card"><p><a href=${hrefFor('/')}>Connect a radio</a> to inspect its logs.</p></section>`;
     }
+    // track the shown packet's pairings (compared in updated)
+    this.#relatedNow = this.kind === 'packet' && this.props ? relatedKey(this.app.packetLog.related(Number(this.params['id']))) : null;
     return html`${back}
       <section class="card">
         ${this.props

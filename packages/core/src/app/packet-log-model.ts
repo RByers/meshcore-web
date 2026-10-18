@@ -42,8 +42,19 @@ import {
 import { contactTypeName, type ContactKind } from './messaging.js';
 import { STATS_FIELD_LABEL, filterKey, type StatPacket, type StatsFilter } from './packet-stats-model.js';
 import { StoreBoundModel } from './store-bound.js';
-import { PacketRelationIndex, RELATION_PAYLOAD_TYPES, type PacketRelation, type RelatedPacket, type RelationRule } from './packet-relations.js';
-import { batch, computed, signal, type ReadonlySignal, type Signal } from './signal.js';
+import {
+  DECRYPTED_RELATION_PAYLOAD_TYPES,
+  PacketRelationIndex,
+  RELATION_SCANS,
+  decryptedRelationKeysOf,
+  needsDecryption,
+  relationKeysOf,
+  type PacketRelation,
+  type RelatedPacket,
+  type RelationKey,
+  type RelationRule,
+} from './packet-relations.js';
+import { batch, computed, effect, signal, untracked, type ReadonlySignal, type Signal } from './signal.js';
 import type { Unsubscribe } from '../util/events.js';
 
 /**
@@ -549,6 +560,18 @@ export class PacketLogModel extends StoreBoundModel {
    * snapshot, so they win over it); null otherwise.
    */
   #relationsLive: Map<number, PacketRecord> | null = null;
+  /** The DM keys the current relations build decrypts with (null: no private key stored). */
+  #relationsDm: DmKeys | null = null;
+  /** Keys only decryption reveals, by record id (for {@link #relationsDm}; [] = none). */
+  readonly #relationsDecrypted = new Map<number, readonly RelationKey[]>();
+  /** Live records being decrypted (what {@link settled} waits for). */
+  readonly #relationsDecrypting = new Set<Promise<void>>();
+  /**
+   * What decryption-based pairing depends on: the private key, our public key and the contacts'
+   * keys. The index is rebuilt when it changes (not on every contact update).
+   */
+  readonly #dmFingerprint = computed(() => dmFingerprint(this.#selfKey.value, this.connection.store.value?.pubKey, this.#contactKeys.value));
+  #relationsFingerprint = '';
 
   /** Names / channel hashes used to describe packets. */
   readonly context: ReadonlySignal<SummaryContext> = this.#ctx.readonly;
@@ -559,10 +582,19 @@ export class PacketLogModel extends StoreBoundModel {
    * radio's private key is stored (opt-in). Shared secrets are cached per contact until the key
    * changes. A new object whenever the key or the contact key list changes.
    */
-  readonly dmKeys: ReadonlySignal<DmKeys | null> = computed(() => {
-    const priv = this.#selfKey.value;
-    const pub = this.connection.store.value?.pubKey;
-    const contacts = this.#contactKeys.value;
+  readonly dmKeys: ReadonlySignal<DmKeys | null> = computed(() =>
+    this.#makeDmKeys(this.#selfKey.value, this.connection.store.value?.pubKey, this.#contactKeys.value),
+  );
+
+  /**
+   * {@link dmKeys} from the current signal values, read directly (an effect reacting to the key
+   * can run before the `dmKeys` computed has seen the change).
+   */
+  #currentDmKeys(): DmKeys | null {
+    return this.#makeDmKeys(this.#selfKey.peek(), this.connection.store.peek()?.pubKey, this.#contactKeys.peek());
+  }
+
+  #makeDmKeys(priv: Uint8Array | null, pub: string | undefined, contacts: readonly Uint8Array[]): DmKeys | null {
     if (!priv || !pub) return null;
     return {
       selfPublicKey: fromHex(pub),
@@ -577,7 +609,7 @@ export class PacketLogModel extends StoreBoundModel {
         return s;
       },
     };
-  });
+  }
 
   /** The statistics model matching drill-downs; see {@link attachStats}. */
   #stats: DrillSource | null = null;
@@ -661,6 +693,13 @@ export class PacketLogModel extends StoreBoundModel {
         this.#summaries.clear();
         void this.packets.reload(); // DM rows gain / lose their decrypted text
       }),
+      // the private key was stored / forgotten or the contacts' keys changed: re-pair what needs it
+      effect(() => {
+        const fp = this.#dmFingerprint.value;
+        untracked(() => {
+          if (this.#relationsBuild && fp !== this.#relationsFingerprint) void this.#buildRelations(store);
+        });
+      }),
     ];
     return () => offs.forEach((off) => off());
   }
@@ -682,6 +721,9 @@ export class PacketLogModel extends StoreBoundModel {
     this.#relationsGen++;
     this.#relationsBuild = null;
     this.#relationsLive = null;
+    this.#relationsDm = null;
+    this.#relationsFingerprint = '';
+    this.#relationsDecrypted.clear();
     this.#relations.clear();
     this.#relationsVersion.value++;
   }
@@ -725,25 +767,46 @@ export class PacketLogModel extends StoreBoundModel {
       b = this.#relationsBuild;
       await b;
     }
+    while (this.#relationsDecrypting.size > 0) await Promise.all(this.#relationsDecrypting);
   }
 
-  /** (Re)builds the relations index from the log: one indexed scan per payload type a rule reads. */
+  /**
+   * (Re)builds the relations index from the log: one indexed scan per payload type a rule reads,
+   * plus, with the radio's private key stored, the DMs / responses / PATHs it can decrypt (all
+   * decrypted before the index is published, so readers see one consistent update).
+   */
   #buildRelations(store: RadioStore): Promise<void> {
     const gen = ++this.#relationsGen;
     const live = new Map<number, PacketRecord>();
     this.#relationsLive = live;
+    const dm = this.#currentDmKeys();
+    this.#relationsDm = dm;
+    this.#relationsFingerprint = dmFingerprint(this.#selfKey.peek(), this.connection.store.peek()?.pubKey, this.#contactKeys.peek());
+    this.#relationsDecrypted.clear();
     const build = (async () => {
-      const lists = await Promise.all(
-        RELATION_PAYLOAD_TYPES.map((payloadType) =>
-          // only our own DMs pair without keys; the rx ones need decryption
-          store.packets.all(payloadType === PayloadType.TXT_MSG ? { payloadType, direction: 'tx' } : { payloadType }),
-        ),
-      );
+      const scans = RELATION_SCANS.filter((s) => !(dm && DECRYPTED_RELATION_PAYLOAD_TYPES.includes(s.payloadType)));
+      const lists = await Promise.all([
+        ...scans.map((s) => store.packets.all(s)),
+        // with keys: every DM (tx and rx), RESPONSE and PATH
+        ...(dm ? DECRYPTED_RELATION_PAYLOAD_TYPES.map((payloadType) => store.packets.all({ payloadType })) : []),
+      ]);
       if (gen !== this.#relationsGen) return;
+      const decrypted = new Map<number, readonly RelationKey[]>();
+      if (dm) {
+        const todo = lists.flat().filter(needsDecryption);
+        // in chunks: bounded concurrency, and a superseded build stops early
+        for (let i = 0; i < todo.length; i += 64) {
+          const chunk = todo.slice(i, i + 64);
+          const keys = await Promise.all(chunk.map((r) => decryptedRelationKeysOf(r, dm)));
+          if (gen !== this.#relationsGen) return;
+          chunk.forEach((r, j) => decrypted.set(r.id, keys[j]!));
+        }
+      }
       batch(() => {
+        for (const [id, keys] of decrypted) if (!this.#relationsDecrypted.has(id)) this.#relationsDecrypted.set(id, keys);
         this.#relations.clear();
-        for (const list of lists) for (const r of list) if (!live.has(r.id)) this.#relations.add(r);
-        for (const r of live.values()) this.#relations.add(r);
+        for (const list of lists) for (const r of list) if (!live.has(r.id)) this.#indexRelations(r);
+        for (const r of live.values()) this.#indexRelations(r);
         this.#relationsLive = null;
         this.#relationsVersion.value++;
       });
@@ -752,11 +815,30 @@ export class PacketLogModel extends StoreBoundModel {
     return build;
   }
 
-  /** Follows one appended / updated record once the index exists. */
+  /** Indexes a record by its key-less keys plus any already decrypted ones; true when they changed. */
+  #indexRelations(r: PacketRecord): boolean {
+    const decrypted = this.#relationsDecrypted.get(r.id) ?? [];
+    return this.#relations.set(r.id, r.hash, [...relationKeysOf(r), ...decrypted]);
+  }
+
+  /** Follows one appended / updated record once the index exists (decrypting it off the event path). */
   #relateLive(r: PacketRecord): void {
     if (!this.#relationsBuild) return;
     this.#relationsLive?.set(r.id, r);
-    if (this.#relations.add(r)) this.#relationsVersion.value++;
+    if (this.#indexRelations(r)) this.#relationsVersion.value++;
+    const dm = this.#relationsDm;
+    if (!dm || !needsDecryption(r) || this.#relationsDecrypted.has(r.id)) return;
+    const gen = this.#relationsGen;
+    const job = decryptedRelationKeysOf(r, dm)
+      .then((keys) => {
+        if (gen !== this.#relationsGen) return; // a rebuild decrypts it again
+        this.#relationsDecrypted.set(r.id, keys);
+        if (this.#relationsLive) return; // the running build indexes the live records when it publishes
+        if (this.#indexRelations(r)) this.#relationsVersion.value++;
+      })
+      .catch((err: unknown) => this.onError(err))
+      .finally(() => this.#relationsDecrypting.delete(job));
+    this.#relationsDecrypting.add(job);
   }
 
   /**
@@ -1073,6 +1155,12 @@ function safeParse(text: string): unknown {
   } catch (e) {
     throw new ImportError(`invalid JSON: ${e instanceof Error ? e.message : String(e)}`);
   }
+}
+
+/** What decryption-based pairing depends on, as a string ('' = no private key stored). */
+function dmFingerprint(priv: Uint8Array | null, pub: string | undefined, contacts: readonly Uint8Array[]): string {
+  if (!priv || !pub) return '';
+  return `${toHex(priv)}|${pub}|${contacts.map(toHex).sort().join(',')}`;
 }
 
 function parseKey(v: unknown): Uint8Array | null {

@@ -125,6 +125,8 @@ req_type values (servers: `RPT` L46-51, `SENS` L53-62; companion `CMM.h` L74-76)
 
 `[tag u32][body…]`. tag = the request's timestamp, except for login responses where it is the server's current time. Bodies:
 
+The companion reports a request's tag in `RESP_SENT[2..5]` (`BCM sendRequest` / `sendAnonReq`: `tag = getCurrentTimeUnique()`, also the plaintext's first 4 bytes), so a host can pair its REQ / non-login ANON_REQ with the RESPONSE (or PATH RESPONSE extra) echoing it. For a login, `RESP_SENT[2..5]` is instead the target's first 4 public-key bytes (`pending_login`) and the reply starts with the server's clock, so a login and its response share no tag.
+
 **Login OK** (reply to ANON_REQ login; `RPT handleLoginReq` L135-144, `ROOM` L385-391), 13 bytes:
 
 | Off | Size | Field |
