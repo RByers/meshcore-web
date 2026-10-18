@@ -719,13 +719,15 @@ export class McChatPage extends AppElement {
   }
 
   /**
-   * The message time: room server posts and messages queued on the radio show their sender time,
-   * flagged when they arrived late (room backlog synced on login, or held until the app connected).
+   * The message time: incoming messages show their sender time. Backlog that arrived late is
+   * flagged (room posts synced on login, or held on the radio until the app connected); any other
+   * late message gets a tooltip with both times, since the sender's clock may be slow.
    */
   #time(chat: ChatModel, m: MessageRecord) {
     const now = this.app.clock.now();
-    const { at, synced } = chat.displayTime(m);
-    const time = html`<time datetime=${new Date(at).toISOString()}>${formatTime(at, now)}</time>`;
+    const { at, late, synced } = chat.displayTime(m);
+    const lateTitle = late ? `Sent ${formatTime(at, now)} (sender's clock) · received ${formatTime(m.receivedAt, now)}` : undefined;
+    const time = html`<time datetime=${new Date(at).toISOString()} title=${(!synced && lateTitle) || nothing}>${formatTime(at, now)}</time>`;
     if (!synced) return time;
     const room = chat.isRoom;
     const title = room

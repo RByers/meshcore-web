@@ -6,7 +6,7 @@ import type { MessageRecord } from '../store/schema.js';
 import { hashtagChannelSecret, publicChannelSecret, scenarioKey } from '../emulator/scenarios.js';
 import type { AppModelOptions } from './app-model.js';
 import { connectedApp } from './testing.js';
-import { firstUnreadId, messageDisplayTime, MIN_PLAUSIBLE_POST_MS, ROOM_CLOCK_SKEW_MS, ROOM_SYNC_THRESHOLD_MS } from './chat-model.js';
+import { CLOCK_AHEAD_LIMIT_MS, CLOCK_BEHIND_LIMIT_MS, firstUnreadId, LATE_THRESHOLD_MS, messageDisplayTime } from './chat-model.js';
 import { base64Encode } from './messaging.js';
 import { messagePreview } from './contacts-model.js';
 
@@ -403,41 +403,46 @@ describe('messagePreview', () => {
   });
 });
 
-describe('messageDisplayTime (room server post times)', () => {
+describe('messageDisplayTime (sender time by default)', () => {
   const now = Date.UTC(2026, 5, 1, 12, 0, 0);
-  const m = (direction: 'in' | 'out', postedMs: number) => ({ direction, timestamp: Math.floor(postedMs / 1000), receivedAt: now });
-
-  it('room backlog shows the post time, marked synced', () => {
-    const posted = now - ROOM_SYNC_THRESHOLD_MS - 60_000;
-    expect(messageDisplayTime(m('in', posted), true)).toEqual({ at: posted, synced: true });
+  const m = (direction: 'in' | 'out', sentMs: number, queued?: boolean) => ({
+    direction,
+    timestamp: Math.floor(sentMs / 1000),
+    receivedAt: now,
+    ...(queued ? { queued } : {}),
   });
 
-  it('a live room post shows the post time, not synced', () => {
-    const posted = now - 30_000;
-    expect(messageDisplayTime(m('in', posted), true)).toEqual({ at: posted, synced: false });
-    // slightly ahead (within the skew allowance) still counts as the post time
-    expect(messageDisplayTime(m('in', now + 60_000), true)).toEqual({ at: now + 60_000, synced: false });
+  it('a live incoming message shows its sender time', () => {
+    const sent = now - 30_000;
+    expect(messageDisplayTime(m('in', sent), false)).toEqual({ at: sent, late: false, synced: false });
+    // slightly ahead (within the allowance) still counts
+    expect(messageDisplayTime(m('in', now + 60_000), false)).toEqual({ at: now + 60_000, late: false, synced: false });
   });
 
-  it('falls back to the receive time when the server clock is in the future or unset', () => {
-    expect(messageDisplayTime(m('in', now + ROOM_CLOCK_SKEW_MS + 60_000), true)).toEqual({ at: now, synced: false });
-    expect(messageDisplayTime(m('in', MIN_PLAUSIBLE_POST_MS - 1000), true)).toEqual({ at: now, synced: false });
-    expect(messageDisplayTime(m('in', 60_000), true)).toEqual({ at: now, synced: false });
+  it('a late live message shows its sender time, late but not synced', () => {
+    const sent = now - LATE_THRESHOLD_MS - 60_000;
+    expect(messageDisplayTime(m('in', sent), false)).toEqual({ at: sent, late: true, synced: false });
   });
 
-  it('live contact and channel messages, and our own room posts, keep the receive time', () => {
-    const posted = now - 3_600_000;
-    expect(messageDisplayTime(m('in', posted), false)).toEqual({ at: now, synced: false });
-    expect(messageDisplayTime(m('out', posted), true)).toEqual({ at: now, synced: false });
+  it('late room backlog and messages queued on the radio are marked synced', () => {
+    const sent = now - 1_800_000;
+    expect(messageDisplayTime(m('in', sent), true)).toEqual({ at: sent, late: true, synced: true });
+    expect(messageDisplayTime(m('in', sent, true), false)).toEqual({ at: sent, late: true, synced: true });
+    // not late: no marker even when queued
+    expect(messageDisplayTime(m('in', now - 60_000, true), false)).toEqual({ at: now - 60_000, late: false, synced: false });
   });
 
-  it('a message drained from the radio queue on connect shows its sender time', () => {
-    const q = (postedMs: number) => ({ ...m('in', postedMs), queued: true });
-    const old = now - 1_800_000;
-    expect(messageDisplayTime(q(old), false)).toEqual({ at: old, synced: true });
-    expect(messageDisplayTime(q(now - 60_000), false)).toEqual({ at: now - 60_000, synced: false });
-    // a sender clock in the future or never set falls back to the download time
-    expect(messageDisplayTime(q(now + ROOM_CLOCK_SKEW_MS + 60_000), false)).toEqual({ at: now, synced: false });
-    expect(messageDisplayTime(q(60_000), false)).toEqual({ at: now, synced: false });
+  it('falls back to the receive time when the sender clock is too fast or over a year slow', () => {
+    const received = { at: now, late: false, synced: false };
+    expect(messageDisplayTime(m('in', now + CLOCK_AHEAD_LIMIT_MS + 1000), false)).toEqual(received);
+    expect(messageDisplayTime(m('in', now - CLOCK_BEHIND_LIMIT_MS - 1000, true), false)).toEqual(received);
+    expect(messageDisplayTime(m('in', 60_000), true)).toEqual(received);
+    // just under a year behind is still shown
+    const old = now - CLOCK_BEHIND_LIMIT_MS + 60_000;
+    expect(messageDisplayTime(m('in', old), false)).toEqual({ at: old, late: true, synced: false });
+  });
+
+  it('our own messages keep the time we sent them', () => {
+    expect(messageDisplayTime(m('out', now - 3_600_000), true)).toEqual({ at: now, late: false, synced: false });
   });
 });

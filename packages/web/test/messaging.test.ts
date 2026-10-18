@@ -348,14 +348,29 @@ describe('messages queued on the radio', () => {
     expect(marker.getAttribute('title')).toMatch(/^Sent .* · downloaded .* \(held on the radio until the app connected\)$/);
   });
 
-  it('a live channel message keeps its receive time and no marker', async () => {
+  it('a late live channel message shows its sender time with both times in a tooltip, no marker', async () => {
     const t = await connected();
     await t.go(`/channel/${await channelKeyForPsk(publicChannelSecret())}`, '.msg [data-field="text"]');
-    t.emulatorScenario().emulator.injectChannelMessage(0, 'Eve', 'live hello', { senderTimestamp: t.emulatorScenario().startSecs - 3600 });
+    const sentAt = (t.emulatorScenario().startSecs - 3600) * 1000;
+    t.emulatorScenario().emulator.injectChannelMessage(0, 'Eve', 'live hello', { senderTimestamp: sentAt / 1000 });
     const msg = () => t.queryAll<HTMLElement>('.msg[data-dir="in"]').find((e) => e.querySelector('[data-field="text"]')?.textContent === 'live hello');
     await t.until(() => msg(), 3000, 'live message');
     expect(msg()!.querySelector('[data-field="synced"]')).toBeNull();
-    expect(msg()!.querySelector('time')!.getAttribute('datetime')).not.toBe(new Date((t.emulatorScenario().startSecs - 3600) * 1000).toISOString());
+    const time = msg()!.querySelector('time')!;
+    expect(time.getAttribute('datetime')).toBe(new Date(sentAt).toISOString());
+    expect(time.getAttribute('title')).toMatch(/^Sent .* \(sender's clock\) · received .*$/);
+  });
+
+  it('a sender clock over a year slow shows the receive time', async () => {
+    const t = await connected();
+    await t.go(`/channel/${await channelKeyForPsk(publicChannelSecret())}`, '.msg [data-field="text"]');
+    const sentSecs = t.emulatorScenario().startSecs - 400 * 86_400;
+    t.emulatorScenario().emulator.injectChannelMessage(0, 'Eve', 'old clock', { senderTimestamp: sentSecs });
+    const msg = () => t.queryAll<HTMLElement>('.msg[data-dir="in"]').find((e) => e.querySelector('[data-field="text"]')?.textContent === 'old clock');
+    await t.until(() => msg(), 3000, 'old-clock message');
+    const time = msg()!.querySelector('time')!;
+    expect(new Date(time.getAttribute('datetime')!).getTime()).toBeGreaterThan(sentSecs * 1000 + 300 * 86_400_000);
+    expect(time.hasAttribute('title')).toBe(false);
   });
 });
 

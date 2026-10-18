@@ -613,39 +613,40 @@ function checkRegion(region: string): string {
   return n;
 }
 
-/** A message received this long after its sender time arrived late (synced / queued backlog). */
-export const ROOM_SYNC_THRESHOLD_MS = 5 * 60_000;
-/** A sender time this far ahead of when we received it means the sender's clock is wrong. */
-export const ROOM_CLOCK_SKEW_MS = 2 * 60_000;
-/** Sender times before this (2020-01-01) mean the sender's clock was never set. */
-export const MIN_PLAUSIBLE_POST_MS = Date.UTC(2020, 0, 1);
+/** A message received this long after its sender time arrived late. */
+export const LATE_THRESHOLD_MS = 5 * 60_000;
+/** A sender time this far ahead of when we received it means the sender's clock is fast. */
+export const CLOCK_AHEAD_LIMIT_MS = 2 * 60_000;
+/** A sender time this far behind when we received it means the sender's clock is wrong (or unset). */
+export const CLOCK_BEHIND_LIMIT_MS = 365 * 24 * 3_600_000;
 
 export interface MessageDisplayTime {
   /** Epoch ms to show as the message's time. */
   at: number;
+  /** `at` is the sender's time and we received it more than `LATE_THRESHOLD_MS` later. */
+  late: boolean;
   /**
-   * Received well after it was sent: a room server post replayed on login, or a message held in
-   * the radio's offline queue until the app connected (`MessageRecord.queued`).
+   * Late because it was backlog: a room server post replayed on login, or a message held in the
+   * radio's offline queue until the app connected (`MessageRecord.queued`).
    */
   synced: boolean;
 }
 
 /**
- * The time to show for `m`: normally when we received it. Two kinds of incoming message show the
- * sender timestamp instead, because their receive time is only when the backlog reached the app:
- * a room server post (on login the server replays posts newer than our last sync), and a message
- * drained from the radio's offline queue on connect (the queued frame has no device receive
- * time). Received more than `ROOM_SYNC_THRESHOLD_MS` after its sender time, it is marked
- * `synced`. A sender time ahead of the receive time by more than `ROOM_CLOCK_SKEW_MS`, or before
- * 2020, means the sender's clock is wrong, so the receive time is shown. Live messages keep the
- * receive time: it is accurate, and many senders' clocks are not.
+ * The time to show for `m`. An incoming message shows its sender time (as MeshCore Open does), so
+ * backlog downloaded later (room server replays, the radio's offline queue) shows when it was
+ * sent. If the sender's clock is clearly wrong (more than `CLOCK_AHEAD_LIMIT_MS` ahead of when we
+ * received it, or more than `CLOCK_BEHIND_LIMIT_MS` behind), the receive time is shown instead.
+ * Our own messages show when we sent them. Lists still sort by receive time.
  */
 export function messageDisplayTime(m: Pick<MessageRecord, 'direction' | 'timestamp' | 'receivedAt' | 'queued'>, isRoom: boolean): MessageDisplayTime {
-  const received = { at: m.receivedAt, synced: false };
-  if (m.direction !== 'in' || !(isRoom || m.queued)) return received;
-  const posted = m.timestamp * 1000;
-  if (posted < MIN_PLAUSIBLE_POST_MS || posted - m.receivedAt > ROOM_CLOCK_SKEW_MS) return received;
-  return { at: posted, synced: m.receivedAt - posted > ROOM_SYNC_THRESHOLD_MS };
+  const received = { at: m.receivedAt, late: false, synced: false };
+  if (m.direction !== 'in') return received;
+  const sent = m.timestamp * 1000;
+  const delay = m.receivedAt - sent;
+  if (delay < -CLOCK_AHEAD_LIMIT_MS || delay > CLOCK_BEHIND_LIMIT_MS) return received;
+  const late = delay > LATE_THRESHOLD_MS;
+  return { at: sent, late, synced: late && (isRoom || m.queued === true) };
 }
 
 /** A delivered message never goes back; a failed one only moves on a late ACK. */
