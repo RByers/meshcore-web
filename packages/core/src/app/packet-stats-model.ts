@@ -17,7 +17,7 @@
 
 import { TxtType, decodePathLen, isValidPathLen } from '../protocol/constants.js';
 import type { SelfInfo } from '../protocol/types.js';
-import { PayloadType, hasTransportCodes, payloadTypeName } from '../packet/constants.js';
+import { PayloadType, hasTransportCodes, isDirectRoute, isFloodRoute, payloadTypeName } from '../packet/constants.js';
 import { decryptPayload, parseGrpTxtPlaintext } from '../packet/payloads.js';
 import { decodeReceivedText } from '../store/messages.js';
 import type { RadioStore } from '../store/radio-store.js';
@@ -27,7 +27,9 @@ import { loraAirtimeMs, loraParamsFromSelfInfo, type LoraParams } from './airtim
 import type { ConnectionModel } from './connection.js';
 import { haversineMeters, hasLocation, type LatLon } from './geo.js';
 import { decryptDm, viewPacket, type DmKeys, type PacketView, type SummaryContext } from './packet-summary.js';
+import type { PathEndpoint } from './path-geometry.js';
 import { resolveHop } from './path-resolver.js';
+import type { PathUsageRoute } from './path-usage.js';
 import { batch, computed, effect, signal, untracked, type ReadonlySignal } from './signal.js';
 import { StoreBoundModel } from './store-bound.js';
 
@@ -108,6 +110,8 @@ export interface StatPacket {
   path: readonly NodeRef[];
   /** Hop hashes joined with '>' ('' = direct): the identity of a path. */
   pathKey: string;
+  /** The payload's destination hash hex (TXT_MSG, REQ, RESPONSE, PATH, ANON_REQ); null for the others. */
+  destHash: string | null;
   /** Metres from this radio to the source (or the earliest located hop); null when unknown. */
   distanceM: number | null;
   /** Estimated time on air at the radio's current LoRa parameters; null when unknown. */
@@ -356,6 +360,75 @@ export function trafficCategory(payloadType: number): TrafficCategory {
 export function nodeId(n: NodeRef): string {
   if (n.key) return n.key;
   return n.hash ? `#${n.hash}` : `@${n.label}`;
+}
+
+/** The path-map endpoint of a node reference: this radio, a contact, a hash, a channel sender name, or unknown (null). */
+export function nodeEndpoint(n: NodeRef | null): PathEndpoint {
+  if (!n) return { kind: 'unknown', label: 'Origin' };
+  if (n.self) return { kind: 'self' };
+  if (n.key) return { kind: 'contact', key: n.key };
+  if (n.hash) return { kind: 'hash', hash: n.hash };
+  return { kind: 'name', name: n.label };
+}
+
+/** The fields of a {@link StatPacket} its route depends on. */
+export type RoutablePacket = Pick<StatPacket, 'direction' | 'routeType' | 'payloadType' | 'hops' | 'pathKey' | 'source' | 'destHash'>;
+
+/**
+ * The route a packet's path describes (docs/packet-stats.md §1.7, mesh-packet-format.md §1.3), or
+ * null when it has none worth drawing:
+ * - FLOOD / TRANSPORT_FLOOD received: the hops taken so far, so source → hops → this radio (a
+ *   0-hop packet is the source heard directly; unattributed with 0 hops: null). Sent floods
+ *   carry no path yet: null.
+ * - DIRECT / TRANSPORT_DIRECT: the hops still to travel, so (this radio when sent, else an unknown
+ *   origin) → hops → the destination hash (unknown when the payload has none). A received direct
+ *   packet with no hops left (delivered to us), or any direct packet with neither hops nor a
+ *   destination, says nothing: null.
+ * - TRACE (path = SNRs) and unknown hop counts: null. An unknown route type is read as a flood
+ *   when it has hops, else null.
+ */
+export function statPacketRoute(p: RoutablePacket): Omit<PathUsageRoute, 'count'> | null {
+  if (p.payloadType === PayloadType.TRACE || p.hops === null) return null;
+  const hashes = p.pathKey ? p.pathKey.split('>') : [];
+  if (isDirectRoute(p.routeType)) {
+    const to: PathEndpoint = p.destHash ? { kind: 'hash', hash: p.destHash } : { kind: 'unknown', label: 'Destination' };
+    if (!hashes.length && (p.direction === 'in' || to.kind === 'unknown')) return null;
+    return { hashes, from: p.direction === 'out' ? { kind: 'self' } : { kind: 'unknown', label: 'Origin' }, to };
+  }
+  if (!isFloodRoute(p.routeType) && !hashes.length) return null;
+  if (p.direction === 'out' || (!p.source && !hashes.length)) return null;
+  return { hashes, from: nodeEndpoint(p.source), to: { kind: 'self' } };
+}
+
+function endpointId(e: PathEndpoint): string {
+  switch (e.kind) {
+    case 'self':
+      return 'self';
+    case 'contact':
+      return `k:${e.key}`;
+    case 'hash':
+      return `h:${e.hash}`;
+    case 'name':
+      return `n:${e.name}`;
+    case 'point':
+      return `p:${e.key ?? e.name}@${e.lat},${e.lon}`;
+    case 'unknown':
+      return `?:${e.label}`;
+  }
+}
+
+/** The routes of `points` ({@link statPacketRoute}), one per distinct (from, path, to), busiest first. */
+export function packetRoutes(points: readonly RoutablePacket[]): PathUsageRoute[] {
+  const m = new Map<string, PathUsageRoute>();
+  for (const p of points) {
+    const r = statPacketRoute(p);
+    if (!r) continue;
+    const id = `${endpointId(r.from)}|${p.pathKey}|${endpointId(r.to)}`;
+    const g = m.get(id);
+    if (g) g.count++;
+    else m.set(id, { ...r, count: 1 });
+  }
+  return [...m.entries()].sort(([ia, a], [ib, b]) => b.count - a.count || ia.localeCompare(ib)).map(([, r]) => r);
 }
 
 /** On-air size of a record (see {@link StatPacket.bytes}). */
@@ -669,6 +742,7 @@ function toStat(raw: RawPoint, R: Resolver, channels: Channels, radio: LoraParam
     direct,
     path,
     pathKey: isTrace ? '' : view.path.join('>'),
+    destHash: p && (p.kind === 'txtMsg' || p.kind === 'req' || p.kind === 'response' || p.kind === 'path' || p.kind === 'anonReq') ? hex2(p.destHash) : null,
     distanceM,
     airtimeMs: radio && bytes > 0 ? loraAirtimeMs(bytes, radio) : null,
     compression: raw.compression,
@@ -861,6 +935,8 @@ export class PacketStatsModel extends StoreBoundModel {
   readonly hops: ReadonlySignal<HopCount[]>;
   /** SMAZ compression usage of the text messages in `points`. */
   readonly compression: ReadonlySignal<CompressionStats>;
+  /** The routes of `points` for the "packet paths" map ({@link packetRoutes}). */
+  readonly routes: ReadonlySignal<readonly PathUsageRoute[]>;
 
   constructor(connection: ConnectionModel, deps: PacketStatsDeps) {
     super(connection);
@@ -990,6 +1066,7 @@ export class PacketStatsModel extends StoreBoundModel {
 
     this.hops = computed(() => hopCounts(this.points.value));
     this.compression = computed(() => compressionStats(this.points.value));
+    this.routes = computed(() => packetRoutes(this.points.value));
   }
 
   /** Statistics of one contact (public key hex), from `allPoints` (the filters don't apply); cached per key. */

@@ -1,11 +1,13 @@
 /** The Stats tab of /packets (docs/packet-stats.md §3). */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { page } from 'vitest/browser';
-import { buildPacket, packetTypeNameDescription, PayloadType, RouteType } from '@meshcore-web/core/packet';
+import { buildPacket, encodeAdvertAppData, packetTypeNameDescription, PayloadType, RouteType } from '@meshcore-web/core/packet';
+import { concatBytes, toHex } from '@meshcore-web/core/util/bytes';
 import '../src/mc-app.js';
 import '../src/pages/packets/index.js';
 import { smazEncodeIfSmaller } from '@meshcore-web/core/util/smaz';
 import { createHarness, type Harness } from '../src/testing/harness.js';
+import type { McTileMap } from '../src/components/tile-map.js';
 import { timelinePalette, timelineSeries, type McPacketStats } from '../src/pages/packets/packet-stats.js';
 
 let h: Harness | undefined;
@@ -342,5 +344,135 @@ describe('/packets Stats text compression', () => {
     await t.until(() => inChart(el, 'dots', 'mc-dot-plot', '[data-legend] li').length > 0, 3000, 'legend');
     const keys = inChart(el, 'dots', 'mc-dot-plot', '[data-legend] li').map((li) => li.dataset['legendKey']);
     expect(keys).toEqual(expect.arrayContaining(['smaz', 'plain']));
+  });
+});
+
+describe('/packets Stats packet paths map', () => {
+  afterEach(() => localStorage.clear());
+
+  /** A flood ADVERT from `key` (mesh-packet-format.md §1 envelope, §3.5 payload; signature zeros). */
+  function advert(key: Uint8Array, name: string, path: number[]): Uint8Array {
+    const payload = concatBytes(key, new Uint8Array(4), new Uint8Array(64), encodeAdvertAppData({ nodeType: 1, name }));
+    return buildPacket({ routeType: RouteType.FLOOD, payloadType: PayloadType.ADVERT, path: Uint8Array.from(path), payload });
+  }
+
+  function within(root: Element | null | undefined, selector: string): Element[] {
+    return root?.shadowRoot ? [...root.shadowRoot.querySelectorAll(selector)] : [];
+  }
+
+  /**
+   * Logs (directly, so the emulator's repeater adds no relayed copies) Alice's adverts once direct,
+   * twice via Hilltop and once via unknown hop 55 then Hilltop, and one of Bob's (no location) via
+   * Hilltop; then opens the Stats tab. Alice, Hilltop and this radio have locations.
+   */
+  async function openWithPaths(): Promise<{ t: Harness; el: McPacketStats; hill: string; self: string; alice: string }> {
+    const t = (h = createHarness());
+    await t.mount();
+    await t.connectEmulator('/packets');
+    await t.until(() => t.query('[data-tab="stats"]'), 3000, 'stats tab');
+    await t.app.connection.capture!.idle();
+    const s = t.emulatorScenario();
+    const hill = s.keys.repeater[0]!;
+    const store = t.app.connection.store.value!;
+    const now = t.clock.now();
+    const rx = (bytes: Uint8Array, dt: number) => store.packets.append({ direction: 'rx', source: 'logRxData', bytes, ts: now + dt, snr: 4, rssi: -100 });
+    await rx(advert(s.keys.alice, 'Alice', []), 0);
+    await rx(advert(s.keys.alice, 'Alice', [hill]), 1);
+    await rx(advert(s.keys.alice, 'Alice', [hill]), 2);
+    await rx(advert(s.keys.alice, 'Alice', [0x55, hill]), 3);
+    await rx(advert(s.keys.bob, 'Bob', [hill]), 4);
+    await t.app.packetStats.settled();
+    await t.until(() => t.app.packetStats.routes.value.reduce((n, r) => n + r.count, 0) === 5, 5000, 'routes');
+    await t.click('[data-tab="stats"]');
+    await t.until(() => t.query('mc-packet-stats'), 3000, 'stats element');
+    const el = t.query<McPacketStats>('mc-packet-stats')!;
+    await settle(t, el);
+    return { t, el, hill: toHex(s.keys.repeater), self: toHex(s.keys.self), alice: toHex(s.keys.alice) };
+  }
+
+  const lineWidths = (map: Element | null) => within(map, 'path[data-line]').map((p) => parseFloat((p as SVGPathElement).style.strokeWidth));
+  const markerSize = (m: Element) => parseFloat((m as HTMLElement).style.getPropertyValue('--marker-size'));
+
+  it('draws each hop as thick as its packet count, with dots sized by use; filters narrow it; hides again', async () => {
+    const { t, el, hill, self, alice } = await openWithPaths();
+    const card = el.shadowRoot!.querySelector('[data-section="paths"]')!;
+    expect(card.querySelector('h3')!.textContent).toBe('Packet paths');
+    // hidden by default: a summary line
+    const button = card.querySelector<HTMLButtonElement>('[data-action="paths-map"]')!;
+    expect(button.getAttribute('aria-pressed')).toBe('false');
+    expect(button.textContent!.trim()).toBe('Map');
+    expect(card.querySelector('mc-tile-map')).toBeNull();
+    expect(card.querySelector('[data-field="paths-summary"]')!.textContent).toMatch(/5 packets with a known route, 4\s+distinct paths/);
+
+    // estimates off: hop 55 and Bob (no location) are left off. Hilltop–me 4 (busiest), Alice–Hilltop
+    // 3 (one skipping 55), Alice–me 1
+    expect(t.app.appSettings.approximatePositions.peek()).toBe(false);
+    await t.click('[data-section="paths"] [data-action="paths-map"]');
+    await el.updateComplete;
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    expect(button.textContent!.trim()).toBe('Hide map');
+    expect(card.querySelector('[data-field="paths-summary"]')).toBeNull();
+    const map = t.query('[data-field="paths-map"]');
+    expect(map).not.toBeNull();
+    await t.until(() => within(map, 'path[data-line]').length === 3, 3000, 'paths map lines');
+    expect(lineWidths(map).map((w) => w.toFixed(2)).sort()).toEqual(['10.50', '14.00', '3.50']);
+    const busiest = within(map, 'path[data-line]').find((p) => (p as SVGPathElement).style.strokeWidth === '14px')!;
+    expect(busiest.getAttribute('data-line')).toContain(hill);
+    expect(busiest.getAttribute('data-line')).toContain(self);
+
+    // one marker per placed node, with its packet count; this radio is the 'self' kind
+    const markers = () => [...card.querySelectorAll<HTMLElement>('mc-map-marker')];
+    const marker = (id: string) => markers().find((m) => m.dataset['stop'] === id)!;
+    expect(markers()).toHaveLength(3);
+    expect(marker(self).dataset['count']).toBe('5');
+    expect(marker(self).getAttribute('kind')).toBe('self');
+    expect(marker(hill).dataset['count']).toBe('4');
+    expect(marker(hill).getAttribute('kind')).toBe('repeater');
+    expect(marker(alice).dataset['count']).toBe('4');
+    // dot size ∝ √use: the busiest is 2rem, the rest smaller but at least 1.1rem
+    expect(markerSize(marker(self))).toBe(2);
+    expect(markerSize(marker(hill))).toBeLessThan(2);
+    expect(markerSize(marker(hill))).toBeGreaterThan(1.1);
+    const note = card.querySelector('[data-field="paths-map-note"]')!.textContent!;
+    expect(note).toMatch(/5 packets.*busiest: 4/s);
+    expect(note).toMatch(/2 packets came over hops with no known location/);
+
+    // a drill-down filter narrows the map: 1-hop packets only (Alice ×2 and Bob via Hilltop)
+    t.app.packetStats.addFilter({ field: 'hops', value: '1', label: '1 hop' });
+    await settle(t, el);
+    await t.until(() => within(t.query('[data-field="paths-map"]'), 'path[data-line]').length === 2, 3000, 'filtered lines');
+    expect(lineWidths(t.query('[data-field="paths-map"]')).map((w) => w.toFixed(2)).sort()).toEqual(['14.00', '9.33']);
+    expect(marker(self).dataset['count']).toBe('3');
+    t.app.packetStats.clearFilters();
+    await settle(t, el);
+
+    // estimates on: 55 is placed between Alice and Hilltop, on dashed lines
+    const box = card.querySelector<HTMLInputElement>('[data-approximate]')!;
+    box.click();
+    await el.updateComplete;
+    expect(t.app.appSettings.approximatePositions.peek()).toBe(true);
+    await t.until(() => within(t.query('[data-field="paths-map"]'), 'path[data-dashed]').length > 0, 3000, 'dashed lines');
+    expect(Math.max(...lineWidths(t.query('[data-field="paths-map"]')))).toBe(14);
+
+    // a live packet over nodes already on the map keeps the user's pan / zoom (no re-fit)
+    const tileMap = t.query<McTileMap>('[data-field="paths-map"]')!;
+    let fits = 0;
+    const fit = tileMap.fitBounds.bind(tileMap);
+    tileMap.fitBounds = (...a: Parameters<McTileMap['fitBounds']>) => {
+      fits++;
+      fit(...a);
+    };
+    const hillByte = t.emulatorScenario().keys.repeater[0]!;
+    await t.app.connection.store.value!.packets.append({ direction: 'rx', source: 'logRxData', bytes: advert(t.emulatorScenario().keys.alice, 'Alice', [hillByte]), ts: t.clock.now() + 5, snr: 4, rssi: -100 });
+    await t.until(() => marker(self)?.dataset['count'] === '6', 5000, 'live packet drawn');
+    await settle(t, el);
+    expect(fits).toBe(0);
+
+    // Hide map returns to the summary
+    await t.click('[data-section="paths"] [data-action="paths-map"]');
+    await el.updateComplete;
+    expect(card.querySelector('mc-tile-map')).toBeNull();
+    expect(card.querySelector('[data-field="paths-summary"]')).not.toBeNull();
+    expect(button.getAttribute('aria-pressed')).toBe('false');
   });
 });

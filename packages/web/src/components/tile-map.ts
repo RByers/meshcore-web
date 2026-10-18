@@ -550,7 +550,10 @@ export class McTileMap extends LitElement {
   };
 }
 
-/** A labelled, focusable map pin. Colour from `kind` or the `--marker-color` custom property. */
+/**
+ * A labelled, focusable map pin. Colour from `kind` or the `--marker-color` custom property; size
+ * from `--marker-size` (default 1.5rem).
+ */
 export class McMapMarker extends LitElement {
   static override properties = {
     lat: { type: Number, reflect: true },
@@ -589,8 +592,8 @@ export class McMapMarker extends LitElement {
       }
       button {
         min-height: 0;
-        width: 1.5rem;
-        height: 1.5rem;
+        width: var(--marker-size, 1.5rem);
+        height: var(--marker-size, 1.5rem);
         padding: 0;
         border-radius: 50%;
         border: 3px solid #fff;
@@ -627,7 +630,7 @@ export class McMapMarker extends LitElement {
       .label {
         display: none;
         position: absolute;
-        inset-inline-start: 1.75rem;
+        inset-inline-start: calc(var(--marker-size, 1.5rem) + 0.25rem);
         padding: 1px 6px;
         border-radius: 6px;
         font-size: 0.75rem;

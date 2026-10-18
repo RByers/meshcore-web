@@ -1,6 +1,7 @@
 /**
  * `<mc-packet-stats>`: the Stats tab of `/packets` (docs/packet-stats.md §3). Renders the core
- * `PacketStatsModel` (`app.packetStats`) as tiles and charts: packets per source node, packets
+ * `PacketStatsModel` (`app.packetStats`) as tiles and charts: a "Packet paths" map (on demand: each
+ * hop's line as thick as the packets that crossed it, each node's dot sized by use), packets per source node, packets
  * over time (dot plot with y / colour selectors), packet rate, network utilisation, text compression and the hop
  * count distribution. The date range and bin size live in the model (`<mc-stats-range>`); only
  * the chart selectors are local state. Everything here maps model output to chart props.
@@ -19,6 +20,9 @@ import {
   type HopCount,
   type LoraParams,
   type NodeRef,
+  type Bounds,
+  type PathUsageMap,
+  type PathUsageRoute,
   type SourceStats,
   type StatPacket,
   type StatsFilter,
@@ -48,9 +52,16 @@ import {
   type LineSeries,
   type SeriesPalette,
 } from '../../charts/index.js';
+import type { McTileMap } from '../../components/tile-map.js';
+import { usageLines, usageMarkerSize } from '../../components/path-usage-lines.js';
 import '../../components/stats-range.js';
+import '../../components/tile-map.js';
 
 // ------------------------------------------------------------------------------ selectors
+
+function sameBounds(a: Bounds | null, b: Bounds | null): boolean {
+  return a === b || (!!a && !!b && a.south === b.south && a.west === b.west && a.north === b.north && a.east === b.east);
+}
 
 export type YField = 'snr' | 'rssi' | 'distance' | 'hops' | 'size';
 export type ColorField = 'type' | 'route' | 'lastHop' | 'source' | 'channel' | 'direction' | 'compression';
@@ -280,10 +291,13 @@ export class McPacketStats extends AppElement {
     yField: { state: true },
     colorField: { state: true },
     stacked: { state: true },
+    showMap: { state: true },
   };
   declare yField: YField;
   declare colorField: ColorField;
   declare stacked: boolean;
+  /** The "Packet paths" card shows its map (else a one-line summary). */
+  declare showMap: boolean;
 
   static override styles = [
     shared,
@@ -332,6 +346,28 @@ export class McPacketStats extends AppElement {
         display: grid;
         gap: 12px;
         margin-block-start: 12px;
+      }
+      .head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-block-end: 8px;
+      }
+      .head h3 {
+        margin: 0;
+      }
+      mc-tile-map {
+        height: clamp(260px, 50dvh, 460px);
+      }
+      label.estimate {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-block-start: 6px;
+        font-size: 13px;
+        color: var(--mc-text-muted);
       }
       mc-bar-chart.sources {
         --mc-bar-label-width: 40%;
@@ -396,6 +432,101 @@ export class McPacketStats extends AppElement {
     this.yField = 'snr';
     this.colorField = 'type';
     this.stacked = false;
+    this.showMap = false;
+  }
+
+  /** Fit the paths map to its routes on the next update (map opened, estimate toggled, routes changed). */
+  #fitPending = false;
+  /** The bounds the paths map was last fitted to: new routes re-fit only when they move them. */
+  #fittedBounds: Bounds | null = null;
+
+  #pathsCard(routes: readonly PathUsageRoute[]): TemplateResult {
+    const packets = routes.reduce((n, r) => n + r.count, 0);
+    return html`<section class="card" data-section="paths">
+      <div class="head">
+        <h3>Packet paths</h3>
+        <button
+          class="small"
+          data-action="paths-map"
+          aria-pressed=${this.showMap ? 'true' : 'false'}
+          @click=${() => {
+            this.showMap = !this.showMap;
+            this.#fitPending = this.showMap;
+          }}
+        >
+          ${this.showMap ? 'Hide map' : 'Map'}
+        </button>
+      </div>
+      ${this.showMap
+        ? this.#pathsMap(routes)
+        : html`<p class="note muted" data-field="paths-summary">
+            ${formatNumber(packets, 0)} ${packets === 1 ? 'packet' : 'packets'} with a known route, ${formatNumber(routes.length, 0)}
+            distinct ${routes.length === 1 ? 'path' : 'paths'}.
+          </p>`}
+    </section>`;
+  }
+
+  #pathsMap(routes: readonly PathUsageRoute[]): TemplateResult {
+    const m: PathUsageMap = this.app.paths.routesUsage(routes);
+    const estimate = this.app.appSettings.approximatePositions.value;
+    const toggle =
+      estimate || m.incomplete > 0
+        ? html`<label class="estimate"
+            ><input
+              type="checkbox"
+              data-approximate
+              .checked=${estimate}
+              @change=${(e: Event) => {
+                this.app.appSettings.setApproximatePositions((e.target as HTMLInputElement).checked);
+                this.#fitPending = true;
+              }}
+            />
+            Approximate positions of nodes without a location</label
+          >`
+        : nothing;
+    if (m.edges.length === 0) {
+      return html`<p class="note muted" data-field="no-map">None of these paths can be drawn: the nodes on them have no known location.</p>
+        ${toggle}`;
+    }
+    const maxStop = m.stops.reduce((n, st) => Math.max(n, st.count), 0);
+    return html`
+      <mc-tile-map .tileUrl=${this.app.map.tileUrl.value} .lines=${usageLines(m)} label="Packet paths" data-field="paths-map">
+        ${m.stops.map(
+          (st) => html`<mc-map-marker
+            data-stop=${st.id}
+            data-count=${st.count}
+            kind=${st.node?.kind ?? ''}
+            style=${`--marker-size: ${usageMarkerSize(st.count, maxStop).toFixed(2)}rem`}
+            lat=${st.lat}
+            lon=${st.lon}
+            label=${st.label}
+            description=${`${formatNumber(st.count, 0)} packet${st.count === 1 ? '' : 's'}${st.approximate ? ', approximate location' : ''}`}
+            ?approximate=${st.approximate}
+          ></mc-map-marker>`,
+        )}
+      </mc-tile-map>
+      <p class="note muted" data-field="paths-map-note">
+        Line thickness shows how many of the ${formatNumber(m.total, 0)} packets crossed each hop (busiest: ${formatNumber(m.maxCount, 0)}); dot size shows
+        how many passed through each node. Dashed lines lead to estimated positions or skip hops with no known location.${m.incomplete
+          ? ` ${formatNumber(m.incomplete, 0)} packet${m.incomplete === 1 ? '' : 's'} came over hops with no known location.`
+          : ''}
+      </p>
+      ${toggle}
+    `;
+  }
+
+  protected override updated(): void {
+    if (!this.showMap) return;
+    const map = this.renderRoot.querySelector<McTileMap>('mc-tile-map');
+    if (!map) return;
+    const b = this.app.paths.routesUsage(this.app.packetStats.routes.peek()).bounds;
+    // a live packet over already-drawn nodes keeps the user's pan / zoom; a filter that moves the
+    // bounds (or opening the map, toggling estimates) re-fits
+    const moved = !sameBounds(b, this.#fittedBounds);
+    if (!this.#fitPending && !moved) return;
+    if (b) map.fitBounds(b, { maxZoom: 15, padding: 40 });
+    this.#fittedBounds = b;
+    this.#fitPending = false;
   }
 
   /** Dot plot props for the last (points, y, colour): a new array would re-lay-out every dot. */
@@ -532,6 +663,8 @@ export class McPacketStats extends AppElement {
         <mc-stat-tile data-tile="sources" label="Unique sources" .value=${s.sources}></mc-stat-tile>
         <mc-stat-tile data-tile="span" label="Span" .value=${formatDuration(s.spanMs)}></mc-stat-tile>
       </div>
+
+      ${this.#pathsCard(stats.routes.value)}
 
       <section class="card" data-section="sources">
         <h3>Packets per source node</h3>

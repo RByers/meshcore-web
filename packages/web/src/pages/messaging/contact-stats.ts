@@ -12,26 +12,13 @@ import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
 import { assignSlots, type BarItem, type DotPoint, type DotSelectDetail, type LineSeries, type SeriesPalette } from '../../charts/index.js';
 import { timelinePalette, timelineSeries } from '../packets/packet-stats.js';
-import type { MapLine, McTileMap } from '../../components/tile-map.js';
+import type { McTileMap } from '../../components/tile-map.js';
+import { usageLines } from '../../components/path-usage-lines.js';
 import '../../components/stats-range.js';
 import '../../components/tile-map.js';
 
 /** Paths that get their own colour in the signal plot (the rest are "Other"). */
 const TOP_PATHS = 8;
-/** Line widths (px) on the paths map: the busiest hop gets MAX, others scale linearly down to MIN. */
-const MIN_LINE = 2;
-const MAX_LINE = 14;
-
-/** Map lines for a paths-usage map: width proportional to how many packets crossed each hop. */
-export function usageLines(m: PathUsageMap): MapLine[] {
-  return m.edges.map((e) => ({
-    points: [e.a, e.b],
-    width: m.maxCount ? Math.max(MIN_LINE, (MAX_LINE * e.count) / m.maxCount) : MIN_LINE,
-    dashed: e.approximate,
-    id: e.id,
-  }));
-}
-
 export type YField = 'snr' | 'rssi' | 'hops';
 
 const Y_FIELDS: Record<YField, { option: string; label: string; format: (v: number) => string; missing: string }> = {

@@ -1,9 +1,10 @@
 /**
- * "Paths heard via" map (contact Stats tab): merges every path a contact's packets arrived over
- * into one set of hop segments, each weighted by how many packets crossed it, so the UI can draw
- * line thickness proportional to use.
+ * Weighted path maps: the "paths heard via" map (contact Stats tab) merges every path a contact's
+ * packets arrived over, and the "packet paths" map (packet Stats tab) every route of the selected
+ * packets ({@link buildRouteUsageMap}), into one set of hop segments, each weighted by how many
+ * packets crossed it, so the UI can draw line thickness proportional to use.
  *
- * Each path is placed with {@link buildPathGeometry} (contact → hops → this radio), so hop
+ * Each path is placed with {@link buildPathGeometry} (e.g. contact → hops → this radio), so hop
  * resolution, ambiguous picks and interpolated positions match the single-path dialog. Stops are
  * merged by node (public key) when resolved, otherwise by hash + position, so the same unknown
  * repeater estimated at two different spots stays two stops. Estimated positions are only placed
@@ -12,7 +13,7 @@
  */
 
 import { boundsOf, type Bounds, type LatLon } from './geo.js';
-import { buildPathGeometry, isApproximate, type PathGeoNode, type PathGeometryOptions, type PathStop } from './path-geometry.js';
+import { buildPathGeometry, isApproximate, type PathEndpoint, type PathGeoNode, type PathGeometryOptions, type PathStop } from './path-geometry.js';
 
 /** One observed path: hop hashes in travel order (empty = direct) and how many packets used it. */
 export interface PathUsageInput {
@@ -66,6 +67,14 @@ function stopId(s: PathStop & LatLon): string {
   return `${s.hash ?? s.role}@${posKey(s)}`;
 }
 
+/** One route to merge: `from` → each of `hashes` (travel order) → `to`, taken by `count` packets. */
+export interface PathUsageRoute {
+  hashes: readonly string[];
+  from: PathEndpoint;
+  to: PathEndpoint;
+  count: number;
+}
+
 /** Aggregates the paths packets from `contactKey` took to this radio into weighted segments. */
 export function buildPathUsageMap(
   paths: readonly PathUsageInput[],
@@ -74,18 +83,43 @@ export function buildPathUsageMap(
   self: PathGeoNode | null,
   opts: PathGeometryOptions = {},
 ): PathUsageMap {
+  const from: PathEndpoint = { kind: 'contact', key: contactKey };
+  const to: PathEndpoint = { kind: 'self' };
+  return buildRouteUsageMap(
+    paths.map((p) => ({ hashes: p.hashes, from, to, count: p.count })),
+    nodes,
+    self,
+    opts,
+  );
+}
+
+/**
+ * Aggregates routes with arbitrary ends into weighted segments. Stop ids are global, so a node
+ * (this radio included) merges across routes whichever end or hop it appears as. An endpoint of
+ * kind `unknown` (the origin of a direct packet we only relay, an unknown destination…) is never
+ * drawn and never makes a route incomplete, even when `estimate` could extrapolate it.
+ */
+export function buildRouteUsageMap(
+  routes: readonly PathUsageRoute[],
+  nodes: readonly PathGeoNode[],
+  self: PathGeoNode | null,
+  opts: PathGeometryOptions = {},
+): PathUsageMap {
   const stops = new Map<string, PathUsageStop>();
   const edges = new Map<string, PathUsageEdge>();
   let total = 0;
   let incomplete = 0;
-  for (const p of paths) {
+  for (const p of routes) {
     if (p.count <= 0) continue;
     total += p.count;
-    const g = buildPathGeometry({ title: '', hashes: p.hashes, from: { kind: 'contact', key: contactKey }, to: { kind: 'self' } }, nodes, self, opts);
-    if (g.placed < g.stops.length) incomplete += p.count;
+    const g = buildPathGeometry({ title: '', hashes: p.hashes, from: p.from, to: p.to }, nodes, self, opts);
+    const first = p.from.kind === 'unknown' ? 1 : 0;
+    const end = g.stops.length - (p.to.kind === 'unknown' ? 1 : 0);
+    const drawn = g.stops.slice(first, Math.max(first, end));
+    if (drawn.some((s) => s.lat === undefined || s.lon === undefined)) incomplete += p.count;
     let prev: PathUsageStop | undefined;
     let skipped = false;
-    for (const s of g.stops) {
+    for (const s of drawn) {
       if (s.lat === undefined || s.lon === undefined) {
         skipped = true;
         continue;

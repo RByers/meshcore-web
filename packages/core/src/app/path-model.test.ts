@@ -271,4 +271,24 @@ describe('PathModel', () => {
     expect(await model.resolve({ kind: 'packet', id: 999 })).toBeNull();
     store.close();
   });
+
+  it('routesUsage merges routes, follows the setting and memoises unchanged inputs', async () => {
+    const { store, model, approximatePositions } = await setup(false);
+    const routes = [
+      { hashes: ['7e', '22'], from: { kind: 'contact' as const, key: ALICE.key }, to: { kind: 'self' as const }, count: 2 },
+      { hashes: ['7e'], from: { kind: 'self' as const }, to: { kind: 'hash' as const, hash: 'a1' }, count: 1 },
+    ];
+    const m = model.routesUsage(routes);
+    expect(m.stops.some((s) => s.label === '22')).toBe(false); // not estimated with the setting off
+    expect(m.edges.find((e) => e.id === [HILL.key, hexKey(0x01)].sort().join('|'))?.count).toBe(3);
+    expect(m.incomplete).toBe(2);
+    expect(model.routesUsage(routes)).toBe(m);
+    approximatePositions.value = true;
+    const est = model.routesUsage(routes);
+    expect(est).not.toBe(m);
+    expect(est.stops.find((s) => s.label === '22')?.approximate).toBe(true);
+    expect(model.routesUsage(routes, { estimate: false })).not.toBe(est);
+    expect(model.routesUsage([...routes])).not.toBe(m);
+    store.close();
+  });
 });

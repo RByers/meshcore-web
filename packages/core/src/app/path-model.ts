@@ -23,7 +23,7 @@ import { toHex } from '../util/bytes.js';
 import type { ContactView } from './contacts-model.js';
 import { hasLocation } from './geo.js';
 import { buildPathGeometry, type PathEndpoint, type PathGeoNode, type PathGeometry, type PathSpec } from './path-geometry.js';
-import { buildPathUsageMap, type PathUsageInput, type PathUsageMap } from './path-usage.js';
+import { buildPathUsageMap, buildRouteUsageMap, type PathUsageInput, type PathUsageMap, type PathUsageRoute } from './path-usage.js';
 import { viewPacket } from './packet-summary.js';
 import { computed, type ReadonlySignal } from './signal.js';
 
@@ -229,6 +229,26 @@ export class PathModel {
     const estimate = opts.estimate ?? this.src.approximatePositions?.value ?? false;
     return buildPathUsageMap(paths, contactKey, this.nodes.value, this.self.value, { estimate });
   }
+
+  /**
+   * Merges `routes` (any ends, e.g. the packet Stats tab's `PacketStatsModel.routes`) into
+   * weighted hop segments. Reads the contact / SELF_INFO signals (reactive in a render); memoised
+   * on the last (routes, contacts, selfInfo, estimate), so re-rendering with unchanged inputs
+   * returns the same map. (Keyed on the source signals: `nodes` / `self` recompute on every read
+   * while nothing watches them.)
+   */
+  routesUsage(routes: readonly PathUsageRoute[], opts: { estimate?: boolean } = {}): PathUsageMap {
+    const estimate = opts.estimate ?? this.src.approximatePositions?.value ?? false;
+    const contacts = this.src.contacts.value;
+    const selfInfo = this.src.selfInfo.value;
+    const m = this.#routesMemo;
+    if (m && m.routes === routes && m.contacts === contacts && m.selfInfo === selfInfo && m.estimate === estimate) return m.map;
+    const map = buildRouteUsageMap(routes, this.nodes.value, this.self.value, { estimate });
+    this.#routesMemo = { routes, contacts, selfInfo, estimate, map };
+    return map;
+  }
+
+  #routesMemo: { routes: readonly PathUsageRoute[]; contacts: readonly ContactView[]; selfInfo: SelfInfo | null; estimate: boolean; map: PathUsageMap } | null = null;
 
   contactSpec(key: string): PathSpec | null {
     const k = key.toLowerCase();

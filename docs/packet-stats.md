@@ -47,6 +47,8 @@ interface NodeRef {
   label: string;
   /** True when resolved uniquely to a contact / self. */
   resolved: boolean;
+  /** True when the node is this radio. */
+  self?: boolean;
 }
 
 type TrafficCategory = 'dm' | 'channel' | 'advert' | 'ack' | 'trace' | 'path' | 'control' | 'other';
@@ -72,6 +74,8 @@ interface StatPacket {
   airtimeMs: number | null; // see 1.5
   compression: 'smaz' | 'plain' | 'unknown' | null; // text messages only, see below
   textBytes: { plain: number; sent: number } | null; // UTF-8 sizes of the text / of what went on air
+  destHash: string | null; // payload dest hash hex (TXT_MSG, REQ, RESPONSE, PATH, ANON_REQ), else null — see 1.7
+  // path / pathKey: see §5
 }
 points: ReadonlySignal<readonly StatPacket[]> // ascending ts, within range
 ```
@@ -148,6 +152,7 @@ utilization: {
 }
 hops: { hops: number; count: number }[]
 compression: CompressionStats   // text messages only (compression !== null)
+routes: readonly PathUsageRoute[] // the "packet paths" map's routes, see 1.7
 interface CompressionCounts { text: number; smaz: number; plain: number; unknown: number }
 interface CompressionStats extends CompressionCounts {
   compressedShare: number | null;   // smaz / (smaz + plain); null when nothing decrypted
@@ -163,7 +168,34 @@ interface CompressionStats extends CompressionCounts {
 
 Keep the series naming stable (color follows the entity: the UI maps series name → palette slot).
 
-### 1.7 Tests (`packet-stats-model.test.ts`, node vitest)
+### 1.7 Routes (the "packet paths" map)
+
+Each point's path is turned into a route `from → hashes → to` (`PathUsageRoute`, path-usage.ts)
+by `statPacketRoute(p)`, following the path semantics of mesh-packet-format.md §1.3 (as
+`packetPathSpec` does for one packet):
+
+| packet | route |
+|---|---|
+| FLOOD / TRANSPORT_FLOOD, received | `nodeEndpoint(source)` → hops so far → this radio (0 hops: source → this radio; 0 hops and no source: none) |
+| FLOOD / TRANSPORT_FLOOD, sent | none (a flood leaves with an empty path) |
+| DIRECT / TRANSPORT_DIRECT | (sent: this radio; received: unknown origin) → hops still to travel → `destHash` (unknown when null) |
+| DIRECT received with no hops left, or DIRECT with neither hops nor `destHash` | none |
+| TRACE (path = SNRs), `hops === null` | none |
+| unknown route type | as a flood when it has hops, else none |
+
+`nodeEndpoint(n)`: null → unknown origin; `self` → this radio; a resolved `key` → that contact;
+else the `hash` (hex prefix / key); else (a channel sender known only by name) the name. An
+advert's own position is not used (the point does not keep it): an advertiser is placed only once
+it is a contact with a location.
+
+`packetRoutes(points)` groups identical (from, pathKey, to) routes with a count, busiest first;
+`routes` is `packetRoutes(points)`, so it follows the date range and the §6 filters.
+`app.paths.routesUsage(routes)` merges them with `buildRouteUsageMap` (path-usage.ts) into stops
+and segments weighted by packet count, as the contact "paths heard via" map does (stops merge by
+node key, else hash + position; estimated positions only with the "approximate positions"
+setting). An `unknown` endpoint is never drawn and doesn't count the route as incomplete.
+
+### 1.8 Tests (`packet-stats-model.test.ts`, node vitest)
 
 Build records with `store.packets.append(...)` (real packets via `buildPacket` and the payload
 encoders, like the other model tests) for a radio with a position and a few contacts with
@@ -219,23 +251,36 @@ filters of the list tabs are not shown; the inspector split is hidden). Layout, 
    `datetime-local` inputs for a custom range; bin size *auto / 1 min / 5 min / 1 h / 1 d*. The
    range and bin are kept in the model (not URL). A line of stat tiles: packets, bytes, airtime %
    (with the radio params in the tooltip, "—" when unknown), unique sources, span.
-2. **Packets per source node** (`mc-bar-chart`, top 50, count desc): the label links to
+2. **Packet paths** (`data-section="paths"`, from `routes`, §1.7): hidden by default behind a
+   *Map* / *Hide map* toggle (`aria-pressed`); while hidden, one line "N packets with a known
+   route, M distinct paths". Shown, it is an `<mc-tile-map>` of `app.paths.routesUsage(routes)`
+   drawn like the contact "paths heard via" map (§5, shared `usageLines` in
+   `components/path-usage-lines.ts`): one line per hop segment, 2–14 px wide in proportion to the
+   packets that crossed it (busiest 14 px), dashed when it leads to an estimated position or skips
+   an unplaced hop; one marker per stop (kind from its node, so this radio is `self`) with its
+   packet count in the tooltip, its diameter 1.1–2 rem ∝ √(count / busiest stop) via the marker's
+   `--marker-size`; a note with the total, the busiest count and how many packets crossed hops
+   with no known location; the "Approximate positions of nodes without a location" checkbox
+   (shown when estimating or anything is incomplete); nothing placeable → a one-line empty state.
+   The map fits its bounds when opened, when the checkbox changes and when the routes change
+   (range / filters), and follows the §6 filters like every other chart.
+3. **Packets per source node** (`mc-bar-chart`, top 50, count desc): the label links to
    `/contact/:key` (via `hrefFor`) when the node resolved to a contact, plain text for self /
    unresolved; footer line "n packets could not be attributed, m more nodes".
-3. **Packets over time** (`mc-dot-plot`): x = time (range or log bounds), y selector
+4. **Packets over time** (`mc-dot-plot`): x = time (range or log bounds), y selector
    (*SNR* default, *RSSI*, *Distance*, *Hops*, *Size*), colour selector (*Packet type* default,
    *Route type*, *Last hop*, *Source*, *Channel*, *Direction*, *Compression*), dot area ∝ bytes. Clicking a dot
    navigates to `/packets/:id`. Payload types get a fixed slot map (TXT_MSG 1, GRP_TXT 2, ADVERT 3,
    ACK 4, PATH 5, TRACE 6, REQ/RESPONSE 7, CONTROL 8, rest Other); for node / channel colourings
    the top 8 by count in the current points take slots in count order, rest "Other". *Compression*
    uses fixed slots (Compressed 1, Plain 2, Not decrypted / non-text packets "Other").
-4. **Packet rate** (`mc-line-chart`): the `timeline` series (per channel, unknown channels, DMs,
+5. **Packet rate** (`mc-line-chart`): the `timeline` series (per channel, unknown channels, DMs,
    adverts, ACKs, paths, traces, requests, control); the 8 biggest get a line, the rest are summed into *Other*; toggle *stacked*.
-5. **Network utilisation**: `mc-line-chart` of airtime fraction over time (single series, %), then
+6. **Network utilisation**: `mc-line-chart` of airtime fraction over time (single series, %), then
    `mc-breakdown` rows for payload type, route type, direction, channel / category — each showing
    airtime share (with packet count in the tooltip). When airtime is unknown, fall back to bytes
    and say so.
-6. **Text compression** (`compression`, §1.6): a summary line ("X% of decrypted text messages
+7. **Text compression** (`compression`, §1.6): a summary line ("X% of decrypted text messages
    compressed · N B saved (Y%) across M compressed messages · S senders using compression"), a
    muted "n messages could not be decrypted (no key)" note when any are `'unknown'`, then
    `mc-breakdown` rows of message counts — all text, DMs, Channels, Sent, Received (rows with no
@@ -243,7 +288,7 @@ filters of the list tabs are not shown; the inspector split is hidden). Layout, 
    tooltip says why: no channel PSK, or no stored private key / unknown contact for DMs). Every
    segment is keyed by the compression filter value (chip "Compression: Compressed"). No text
    messages in the shown packets → one-line empty state.
-7. **Hop count** distribution (`mc-bar-chart`, vertical-ish is fine as horizontal rows 0,1,2…).
+8. **Hop count** distribution (`mc-bar-chart`, vertical-ish is fine as horizontal rows 0,1,2…).
 
 **Drill-down** (model side in §6): clicking a source bar, a hop-count bar, or a breakdown segment /
 legend entry (type, route, direction, category, channel, compression) adds a filter for that value; clicking the
@@ -261,7 +306,9 @@ emulator scenario that produces packets): the tab appears and renders tiles and 
 elements; the source chart has links to `/contact/…`; the y/colour selectors change the dot plot's
 axis label / legend; a date preset shrinks the packet count tile; source-bar / segment / keyboard
 filtering, chip removal, *Clear filters* and the no-match state; the compression section's counts,
-summary, *Compressed* filter, empty state and the *Compression* dot colouring.
+summary, *Compressed* filter, empty state and the *Compression* dot colouring; the paths card's
+summary, map lines and widths, sized markers with counts (this radio `self`), note, filter
+narrowing, the approximate toggle's dashed lines and *Hide map*.
 
 ## 4. Docs
 

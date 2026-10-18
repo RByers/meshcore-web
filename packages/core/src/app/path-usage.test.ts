@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PathGeoNode } from './path-geometry.js';
-import { buildPathUsageMap } from './path-usage.js';
+import { buildPathUsageMap, buildRouteUsageMap } from './path-usage.js';
 
 const node = (key: string, name: string, kind: PathGeoNode['kind'], lat?: number, lon?: number): PathGeoNode =>
   lat === undefined || lon === undefined ? { key, name, kind } : { key, name, kind, lat, lon };
@@ -69,5 +69,69 @@ describe('buildPathUsageMap', () => {
     expect(m.incomplete).toBe(4);
     expect(counts(m)).toEqual({}); // only Alpha has a position: nothing to connect
     expect(buildPathUsageMap([], CONTACT.key, NODES, SELF)).toMatchObject({ edges: [], maxCount: 0, total: 0, bounds: null });
+  });
+});
+
+describe('buildRouteUsageMap', () => {
+  const ECHO = node('ee05'.padEnd(64, '0'), 'Echo', 'chat', 47.9, -122.0);
+  const ALL = [...NODES, ECHO];
+
+  it('merges routes from different origins through a shared hop into one map', () => {
+    const m = buildRouteUsageMap(
+      [
+        { hashes: ['aa'], from: { kind: 'contact', key: CONTACT.key }, to: { kind: 'self' }, count: 3 },
+        { hashes: ['bb', 'aa'], from: { kind: 'hash', hash: 'ee' }, to: { kind: 'self' }, count: 2 },
+      ],
+      ALL,
+      SELF,
+    );
+    expect(counts(m)).toEqual({ 'Alpha-Delta': 3, 'Alpha-Me (you)': 5, 'Bravo-Echo': 2, 'Alpha-Bravo': 2 });
+    expect(m.stops.find((s) => s.node === ALPHA)!.count).toBe(5);
+    expect(m.total).toBe(5);
+    expect(m.incomplete).toBe(0);
+  });
+
+  it('merges this radio whether it starts or ends a route', () => {
+    const m = buildRouteUsageMap(
+      [
+        { hashes: ['aa'], from: { kind: 'contact', key: CONTACT.key }, to: { kind: 'self' }, count: 1 }, // rx flood
+        { hashes: ['aa'], from: { kind: 'self' }, to: { kind: 'hash', hash: 'dd' }, count: 2 }, // tx direct
+      ],
+      ALL,
+      SELF,
+    );
+    expect(counts(m)).toEqual({ 'Alpha-Delta': 3, 'Alpha-Me (you)': 3 });
+    expect(m.stops.filter((s) => s.node === SELF)).toHaveLength(1);
+    expect(m.stops.find((s) => s.node === SELF)!.count).toBe(3);
+  });
+
+  it('never draws an unknown endpoint or counts it as incomplete, even with estimate', () => {
+    for (const estimate of [false, true]) {
+      const m = buildRouteUsageMap(
+        [
+          { hashes: ['aa'], from: { kind: 'unknown', label: 'Origin' }, to: { kind: 'self' }, count: 2 },
+          { hashes: ['bb'], from: { kind: 'unknown', label: 'Origin' }, to: { kind: 'unknown', label: 'Destination' }, count: 1 },
+        ],
+        ALL,
+        SELF,
+        { estimate },
+      );
+      expect(m.stops.map((s) => s.label).sort()).toEqual(['Alpha', 'Bravo', 'Me (you)']);
+      expect(counts(m)).toEqual({ 'Alpha-Me (you)': 2 });
+      expect(m.incomplete).toBe(0);
+      expect(m.total).toBe(3);
+    }
+  });
+
+  it('places a hash endpoint without candidates only when estimating', () => {
+    const route = [{ hashes: ['aa'], from: { kind: 'self' as const }, to: { kind: 'hash' as const, hash: '77' }, count: 1 }];
+    const off = buildRouteUsageMap(route, ALL, SELF);
+    expect(off.stops.find((s) => s.label === '77')).toBeUndefined();
+    expect(off.incomplete).toBe(1);
+    expect(counts(off)).toEqual({ 'Alpha-Me (you)': 1 });
+    const on = buildRouteUsageMap(route, ALL, SELF, { estimate: true });
+    expect(on.stops.find((s) => s.label === '77')).toMatchObject({ approximate: true, role: 'to' });
+    expect(on.incomplete).toBe(0);
+    expect(on.edges.find((e) => [e.a.label, e.b.label].includes('77'))).toMatchObject({ count: 1, approximate: true });
   });
 });

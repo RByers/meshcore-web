@@ -35,7 +35,10 @@ import {
   SERIES_UNKNOWN_CHANNELS,
   autoBinMs,
   matchesFilter,
+  nodeEndpoint,
   nodeId,
+  packetRoutes,
+  statPacketRoute,
   type StatPacket,
   type StatsFilter,
 } from './packet-stats-model.js';
@@ -670,6 +673,84 @@ describe('PacketStatsModel — SMAZ compression (§1.2, §1.6)', () => {
     expect(byTs(model.allPoints.value, T + 3).compression).toBe('smaz');
     expect(byTs(model.allPoints.value, T + 4).compression).toBeNull();
     expect(byTs(model.allPoints.value, T).compression).toBe('smaz');
+  });
+});
+
+describe('PacketStatsModel — paths map routes (§1.7)', () => {
+  const SELF_EP = { kind: 'self' } as const;
+  const ORIGIN = { kind: 'unknown', label: 'Origin' } as const;
+
+  it('derives a route per packet from its route type, path and ends', async () => {
+    const { model } = await harness([
+      rx(advert(key32(0xa1), { nodeType: 1, name: 'Alice' }, [0x7e]), T + 1), // flood: Alice → Hilltop → me
+      rx(ack([0x7e, 0x22]), T + 2), // unattributed flood with hops: unknown origin
+      rx(grpUnknown(0x00), T + 3), // unattributed, heard directly: nothing to draw
+      rx(datagram(PayloadType.PATH, 0xa1, 0x01, [], RouteType.DIRECT), T + 4), // direct, delivered to us
+      rx(datagram(PayloadType.TXT_MSG, 0xa1, 0x22, [0x7e], RouteType.DIRECT), T + 5), // direct, still to travel
+      rx(buildTracePayload({ tag: 1, authCode: 2, hashes: Uint8Array.of(0x7e) }), T + 6, { format: 'payload', source: 'traceData', payloadType: PayloadType.TRACE, routeType: RouteType.DIRECT, pathLen: 1 }),
+      { direction: 'tx', bytes: datagram(PayloadType.TXT_MSG, 0x01, 0xd4, [0x7e, 0x22], RouteType.DIRECT), ts: T + 7 }, // tx direct
+      { direction: 'tx', bytes: datagram(PayloadType.TXT_MSG, 0x01, 0xd4), ts: T + 8 }, // tx flood: no path yet
+      rx(await grpTxt(PSK, 'Zed', 'yo'), T + 9), // channel sender known only by name, heard directly
+      rx(datagram(PayloadType.REQ, 0x99, 0x01), T + 10), // unknown src hash
+    ]);
+    const pts = model.points.value;
+    const route = (ts: number) => statPacketRoute(byTs(pts, ts));
+
+    expect(byTs(pts, T + 1).destHash).toBeNull();
+    expect(route(T + 1)).toEqual({ hashes: ['7e'], from: { kind: 'contact', key: ALICE.key }, to: SELF_EP });
+    expect(route(T + 2)).toEqual({ hashes: ['7e', '22'], from: ORIGIN, to: SELF_EP });
+    expect(route(T + 3)).toBeNull();
+    expect(byTs(pts, T + 4).destHash).toBe('01');
+    expect(route(T + 4)).toBeNull();
+    expect(byTs(pts, T + 5).destHash).toBe('22');
+    expect(route(T + 5)).toEqual({ hashes: ['7e'], from: ORIGIN, to: { kind: 'hash', hash: '22' } });
+    expect(route(T + 6)).toBeNull();
+    expect(route(T + 7)).toEqual({ hashes: ['7e', '22'], from: SELF_EP, to: { kind: 'hash', hash: 'd4' } });
+    expect(route(T + 8)).toBeNull();
+    expect(route(T + 9)).toEqual({ hashes: [], from: { kind: 'name', name: 'Zed' }, to: SELF_EP });
+    expect(route(T + 10)).toEqual({ hashes: [], from: { kind: 'hash', hash: '99' }, to: SELF_EP });
+  });
+
+  it('nodeEndpoint maps each kind of node reference', () => {
+    expect(nodeEndpoint(null)).toEqual(ORIGIN);
+    expect(nodeEndpoint({ hash: '01', key: hexKey(0x01), label: 'Me', resolved: true, self: true })).toEqual(SELF_EP);
+    expect(nodeEndpoint({ hash: 'a1', key: ALICE.key, label: 'Alice', resolved: true })).toEqual({ kind: 'contact', key: ALICE.key });
+    expect(nodeEndpoint({ hash: 'c3', label: 'c3?', resolved: false })).toEqual({ kind: 'hash', hash: 'c3' });
+    expect(nodeEndpoint({ hash: '', label: 'Zed', resolved: false })).toEqual({ kind: 'name', name: 'Zed' });
+  });
+
+  it('statPacketRoute: unknown route types count as floods only with hops', () => {
+    const base = { direction: 'in', payloadType: PayloadType.TXT_MSG, routeType: -1, hops: 0, pathKey: '', source: null, destHash: null } as const;
+    expect(statPacketRoute(base)).toBeNull();
+    expect(statPacketRoute({ ...base, hops: 1, pathKey: '7e' })).toEqual({ hashes: ['7e'], from: ORIGIN, to: SELF_EP });
+    expect(statPacketRoute({ ...base, routeType: RouteType.FLOOD, hops: null })).toBeNull();
+    // a sent direct packet with neither hops nor a destination says nothing
+    expect(statPacketRoute({ ...base, direction: 'out', routeType: RouteType.DIRECT })).toBeNull();
+  });
+
+  it('packetRoutes groups identical routes, busiest first; model.routes follows the filters', async () => {
+    const { model } = await harness([
+      rx(datagram(PayloadType.TXT_MSG, 0xa1, 0x01, [0x7e]), T),
+      rx(datagram(PayloadType.TXT_MSG, 0xa1, 0x01, [0x7e]), T + 1),
+      rx(datagram(PayloadType.REQ, 0xa1, 0x01, [0x7e]), T + 2),
+      rx(datagram(PayloadType.TXT_MSG, 0xa1, 0x01, [0x22, 0x7e]), T + 3),
+      rx(datagram(PayloadType.TXT_MSG, 0xd4, 0x01, [0x7e]), T + 4),
+      rx(buildTracePayload({ tag: 1, authCode: 2, hashes: Uint8Array.of(0x7e) }), T + 5, { format: 'payload', source: 'traceData', payloadType: PayloadType.TRACE, routeType: RouteType.DIRECT, pathLen: 1 }),
+    ]);
+    const alice = { kind: 'contact', key: ALICE.key } as const;
+    const carol = { kind: 'contact', key: CAROL.key } as const;
+    expect(packetRoutes(model.points.value)).toEqual([
+      { hashes: ['7e'], from: alice, to: SELF_EP, count: 3 },
+      { hashes: ['22', '7e'], from: alice, to: SELF_EP, count: 1 },
+      { hashes: ['7e'], from: carol, to: SELF_EP, count: 1 },
+    ]);
+    expect(model.routes.value).toEqual(packetRoutes(model.points.value));
+    model.addFilter({ field: 'category', value: 'dm', label: 'dm' });
+    expect(model.routes.value).toEqual([
+      { hashes: ['7e'], from: alice, to: SELF_EP, count: 2 },
+      { hashes: ['22', '7e'], from: alice, to: SELF_EP, count: 1 },
+      { hashes: ['7e'], from: carol, to: SELF_EP, count: 1 },
+    ]);
   });
 });
 
