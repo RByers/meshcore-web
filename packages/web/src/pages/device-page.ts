@@ -1,10 +1,17 @@
-/** Device overview: identity, firmware, battery, radio parameters, link. */
-import { css, html, nothing } from 'lit';
-import { CONNECTION_KIND_LABEL } from '@meshcore-web/core/app';
+/** Device overview: identity, firmware, battery, radio parameters, link, statistics and adverts. */
+import { css, html, nothing, type TemplateResult } from 'lit';
+import { CONNECTION_KIND_LABEL, effect } from '@meshcore-web/core/app';
 import { AppElement } from '../app-context.js';
 import { PHASE_LABEL, batteryPercent } from '../format.js';
 import { hrefFor } from '../router.js';
 import { shared } from '../styles.js';
+
+function formatDuration(secs: number): string {
+  const d = Math.floor(secs / 86400);
+  const h = Math.floor((secs % 86400) / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  return d > 0 ? `${d} d ${h} h` : h > 0 ? `${h} h ${m} min` : `${m} min ${secs % 60} s`;
+}
 
 export class McDevicePage extends AppElement {
   static override styles = [
@@ -53,8 +60,67 @@ export class McDevicePage extends AppElement {
       h3 {
         font-size: 1rem;
       }
+      .wide {
+        grid-column: 1 / -1;
+      }
+      .hint {
+        color: var(--mc-text-muted);
+        font-size: 0.85rem;
+        margin: 0;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        margin-block: 10px;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 0.9rem;
+      }
+      th,
+      td {
+        text-align: start;
+        padding: 4px 6px;
+        border-block-end: 1px solid var(--mc-border);
+      }
+      td.num {
+        text-align: end;
+        font-variant-numeric: tabular-nums;
+      }
+      .saving {
+        font-size: 0.85rem;
+        color: var(--mc-text-muted);
+      }
     `,
   ];
+
+  #off: (() => void) | undefined;
+  #tick: ReturnType<typeof setInterval> | undefined;
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    // poll statistics while a radio is connected and the page is shown
+    this.#off = effect(() => {
+      const client = this.app.connection.client.value;
+      if (!client || !this.app.connection.connected.value) return;
+      const ds = this.app.deviceSettings;
+      void ds.refreshStats().catch(() => undefined);
+      return ds.pollStats(5000);
+    });
+    // re-render once a second for the advert cooldown
+    this.#tick = setInterval(() => this.requestUpdate(), 1000);
+  }
+
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this.#off?.();
+    this.#off = undefined;
+    if (this.#tick !== undefined) clearInterval(this.#tick);
+    this.#tick = undefined;
+  }
 
   override render() {
     const conn = this.app.connection;
@@ -131,9 +197,88 @@ export class McDevicePage extends AppElement {
             <dd>${si.lat || si.lon ? `${si.lat.toFixed(5)}, ${si.lon.toFixed(5)}` : 'not set'}</dd>
           </dl>
         </section>
+        ${this.#advert()} ${this.#stats()}
       </div>
     `;
   }
+
+  #advert(): TemplateResult {
+    const ds = this.app.deviceSettings;
+    const wait = ds.advertCooldownRemaining(this.app.clock.now());
+    void ds.advertCooldownUntil.value; // re-render when the cooldown ends
+    const last = ds.lastAdvert.value;
+    const busy = ds.busy.value.has('advert');
+    return html`<section class="card" data-section="advert" aria-labelledby="advert-h">
+      <h3 id="advert-h">Advert</h3>
+      <p class="hint">
+        Announce this radio so others can add it. A zero-hop advert reaches direct neighbours only; a flood advert is repeated across the
+        mesh (and uses airtime on every repeater).
+      </p>
+      <div class="actions">
+        <button data-action="advert-zero-hop" ?disabled=${busy || wait > 0} @click=${() => this.#sendAdvert('zeroHop')}>Send zero-hop advert</button>
+        <button data-action="advert-flood" ?disabled=${busy || wait > 0} @click=${() => this.#sendAdvert('flood')}>Send flood advert</button>
+        ${wait > 0 ? html`<span class="saving" data-field="advert-cooldown">Wait ${Math.ceil(wait / 1000)} s</span>` : nothing}
+      </div>
+      ${last
+        ? html`<p class="hint" data-field="last-advert">Last: ${last.mode === 'flood' ? 'flood' : 'zero-hop'} at ${this.app.appSettings.formatTime(last.at, { seconds: true })}</p>`
+        : nothing}
+      <p class="hint">Automatic advert intervals are not configurable on companion firmware (v1.18 has no command for them).</p>
+    </section>`;
+  }
+
+  #sendAdvert(mode: 'flood' | 'zeroHop'): void {
+    const n = this.app.notifications;
+    this.app.deviceSettings.sendAdvert(mode).then(
+      () => n.success(mode === 'flood' ? 'Flood advert sent' : 'Zero-hop advert sent'),
+      (err: unknown) => n.error('Could not send the advert', err),
+    );
+  }
+
+  #stats(): TemplateResult {
+    const ds = this.app.deviceSettings;
+    const stats = ds.stats.value;
+    const busy = ds.busy.value.has('stats');
+    return html`<section class="card wide" data-section="stats" aria-labelledby="stats-h">
+      <h3 id="stats-h">Statistics</h3>
+      ${stats
+        ? html`<table data-field="stats">
+            <tbody>
+              ${stats.core
+                ? html`<tr><th scope="row">Uptime</th><td class="num">${formatDuration(stats.core.uptimeSecs)}</td></tr>
+                    <tr><th scope="row">Queue</th><td class="num">${stats.core.outboundQueueLen}</td></tr>
+                    <tr><th scope="row">Error flags</th><td class="num">0x${stats.core.errFlags.toString(16).padStart(4, '0')}</td></tr>`
+                : nothing}
+              ${stats.radio
+                ? html`<tr><th scope="row">Noise floor</th><td class="num">${stats.radio.noiseFloorDbm} dBm</td></tr>
+                    <tr><th scope="row">Last RSSI / SNR</th><td class="num">${stats.radio.lastRssiDbm} dBm / ${stats.radio.lastSnr} dB</td></tr>
+                    <tr><th scope="row">Airtime TX / RX</th><td class="num">${stats.radio.txAirSecs} s / ${stats.radio.rxAirSecs} s</td></tr>`
+                : nothing}
+              ${stats.packets
+                ? html`<tr><th scope="row">Received</th><td class="num">${stats.packets.recv} (${stats.packets.recvFlood} flood, ${stats.packets.recvDirect} direct)</td></tr>
+                    <tr><th scope="row">Sent</th><td class="num">${stats.packets.sent} (${stats.packets.sentFlood} flood, ${stats.packets.sentDirect} direct)</td></tr>
+                    ${stats.packets.recvErrors !== undefined
+                      ? html`<tr><th scope="row">Receive errors</th><td class="num">${stats.packets.recvErrors}</td></tr>`
+                      : nothing}`
+                : nothing}
+              ${!stats.core && !stats.radio && !stats.packets ? html`<tr><td>Not supported by this firmware (needs v8+).</td></tr>` : nothing}
+            </tbody>
+          </table>
+          <p class="hint">Updated ${this.app.appSettings.formatTime(stats.at, { seconds: true })}; refreshes every 5 s while this page is open.</p>`
+        : html`<p class="hint">Loading…</p>`}
+      <div class="actions">
+        <button data-action="refresh-stats" ?disabled=${busy} aria-busy=${busy ? 'true' : 'false'} @click=${this.#refreshStats}>
+          Refresh
+        </button>
+      </div>
+    </section>`;
+  }
+
+  #refreshStats = (): void => {
+    const ds = this.app.deviceSettings;
+    Promise.all([ds.refreshStats(), ds.refreshBattery()]).catch((err: unknown) =>
+      this.app.notifications.error('Could not refresh the statistics', err),
+    );
+  };
 }
 
 customElements.define('mc-device-page', McDevicePage);

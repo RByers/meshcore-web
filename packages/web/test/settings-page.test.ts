@@ -19,7 +19,7 @@ async function openSettings(opts: HarnessOptions = {}): Promise<Harness> {
   await t.connectEmulator('/settings');
   await t.until(() => t.query('[data-section="identity"]'), 5000, 'settings page');
   // wait for loadAll (tuning, stats…) to finish
-  await t.until(() => t.query('[data-field="stats"]'), 5000, 'stats');
+  await t.until(() => t.app.deviceSettings.stats.value, 5000, 'stats');
   return t;
 }
 
@@ -108,19 +108,10 @@ describe('settings page', () => {
     expect(t.emulatorScenario().emulator.prefs.radio).toEqual(before);
   });
 
-  it('send advert puts an advert on the air and starts a 10 s cooldown', async () => {
+  it('device stats and adverts are not on the settings page', async () => {
     const t = await openSettings();
-    const emu = t.emulatorScenario().emulator;
-    const before = emu.airLog.filter((e) => e.type === 'advert').length;
-    await t.click('[data-action="advert-flood"]');
-    await t.until(() => emu.airLog.filter((e) => e.type === 'advert' && e.flood).length > 0 && emu.airLog.filter((e) => e.type === 'advert').length > before, 3000, 'advert');
-    await t.until(() => t.query('[data-field="advert-cooldown"]'), 2000, 'cooldown');
-    expect(t.query<HTMLButtonElement>('[data-action="advert-zero-hop"]')!.disabled).toBe(true);
-    await t.elapse(9_000);
-    expect(t.query('[data-field="advert-cooldown"]')).not.toBeNull();
-    await t.elapse(1_000);
-    await t.until(() => !t.query('[data-field="advert-cooldown"]'), 2000, 'cooldown over');
-    expect(t.query<HTMLButtonElement>('[data-action="advert-zero-hop"]')!.disabled).toBe(false);
+    expect(t.query('[data-section="advert"]')).toBeNull();
+    expect(t.query('[data-field="stats"]')).toBeNull();
   });
 
   it('time sync button sets a lagging device clock', async () => {

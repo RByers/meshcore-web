@@ -1,6 +1,6 @@
 /**
- * Settings page (Phase 11): device settings of the connected radio (identity, radio, adverts,
- * device status, contacts policy, advanced) and local app settings. Thin view over
+ * Settings page (Phase 11): device settings of the connected radio (identity, radio, clock and
+ * PIN, contacts policy, advanced) and local app settings. Thin view over
  * `app.deviceSettings` (DeviceSettingsModel) and `app.appSettings` (AppSettingsModel).
  */
 import { css, html, nothing, type TemplateResult } from 'lit';
@@ -22,7 +22,6 @@ import {
 } from '@meshcore-web/core/app';
 import { AppElement } from '../../app-context.js';
 import { APP_VERSION, BUILD_DATE, MESHCORE_FIRMWARE_URL, MESHCORE_URL, REPO_URL } from '../../build-info.js';
-import { batteryPercent } from '../../format.js';
 import { getInstallPrompt } from '../../pwa.js';
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
@@ -61,13 +60,6 @@ function str(form: HTMLFormElement, name: string): string {
 
 function checked(form: HTMLFormElement, name: string): boolean {
   return new FormData(form).get(name) !== null;
-}
-
-function formatDuration(secs: number): string {
-  const d = Math.floor(secs / 86400);
-  const h = Math.floor((secs % 86400) / 3600);
-  const m = Math.floor((secs % 3600) / 60);
-  return d > 0 ? `${d} d ${h} h` : h > 0 ? `${h} h ${m} min` : `${m} min ${secs % 60} s`;
 }
 
 function formatDrift(drift: number): string {
@@ -261,22 +253,20 @@ export class McSettingsPage extends AppElement {
 
   override connectedCallback(): void {
     super.connectedCallback();
-    // load extra settings and poll stats while a radio is connected and the page is shown
+    // load extra settings while a radio is connected and the page is shown
     this.#off = effect(() => {
       const client = this.app.connection.client.value;
       if (!client || !this.app.connection.connected.value) return;
       const ds = this.#ds;
       void ds.loadAll().catch((err: unknown) => this.app.notifications.error('Could not load device settings', err));
-      const stop = ds.pollStats(5000);
       return () => {
-        stop();
         this.#radioDraft = null;
         this.#txDraft = null;
         this.#exportedKey = null;
         this.#errors = {};
       };
     });
-    // re-render once a second for the advert cooldown and clock display
+    // re-render once a second for the clock display
     this.#tick = setInterval(() => this.requestUpdate(), 1000);
   }
 
@@ -369,7 +359,7 @@ export class McSettingsPage extends AppElement {
       <h2 class="visually-hidden">Settings</h2>
       <div class="sections">
         ${connected
-          ? html`${this.#identity()} ${this.#radio()} ${this.#advert()} ${this.#device()} ${this.#contactsPolicy()} ${this.#advanced()}`
+          ? html`${this.#identity()} ${this.#radio()} ${this.#device()} ${this.#contactsPolicy()} ${this.#advanced()}`
           : html`<section class="card" data-section="no-radio">
               <h2>Radio settings</h2>
               <p><a href=${hrefFor('/')}>Connect a radio</a> to change its settings.</p>
@@ -598,41 +588,9 @@ export class McSettingsPage extends AppElement {
     if (await this.#do('save the TX power', () => this.#ds.setTxPower(dbm), `TX power set to ${dbm} dBm`)) this.#txDraft = null;
   };
 
-  #advert(): TemplateResult {
-    const ds = this.#ds;
-    const wait = ds.advertCooldownRemaining(this.app.clock.now());
-    void ds.advertCooldownUntil.value; // re-render when the cooldown ends
-    const last = ds.lastAdvert.value;
-    const busy = this.#busy('advert');
-    return html`<section class="card" data-section="advert" aria-labelledby="s-advert">
-      <h2 id="s-advert">Advert</h2>
-      <p class="hint">
-        Announce this radio so others can add it. A zero-hop advert reaches direct neighbours only; a flood advert is repeated across the
-        mesh (and uses airtime on every repeater).
-      </p>
-      <div class="actions">
-        <button data-action="advert-zero-hop" ?disabled=${busy || wait > 0} @click=${() => this.#sendAdvert('zeroHop')}>Send zero-hop advert</button>
-        <button data-action="advert-flood" ?disabled=${busy || wait > 0} @click=${() => this.#sendAdvert('flood')}>Send flood advert</button>
-        ${wait > 0 ? html`<span class="saving" data-field="advert-cooldown">Wait ${Math.ceil(wait / 1000)} s</span>` : nothing}
-      </div>
-      ${this.#err('advert')}
-      ${last
-        ? html`<p class="hint" data-field="last-advert">Last: ${last.mode === 'flood' ? 'flood' : 'zero-hop'} at ${this.app.appSettings.formatTime(last.at, { seconds: true })}</p>`
-        : nothing}
-      <p class="hint">Automatic advert intervals are not configurable on companion firmware (v1.18 has no command for them).</p>
-    </section>`;
-  }
-
-  #sendAdvert(mode: 'flood' | 'zeroHop'): void {
-    void this.#do('send the advert', () => this.#ds.sendAdvert(mode), mode === 'flood' ? 'Flood advert sent' : 'Zero-hop advert sent');
-  }
-
   #device(): TemplateResult {
     const ds = this.#ds;
-    const di = ds.deviceInfo.value;
-    const batt = ds.battery.value;
     const t = ds.deviceTime.value;
-    const stats = ds.stats.value;
     const fmt = this.app.appSettings;
     const nowDevice = t ? t.deviceSecs * 1000 + (this.app.clock.now() - t.at) : null;
     const pin = ds.pin.value;
@@ -648,57 +606,6 @@ export class McSettingsPage extends AppElement {
       <div class="actions" style="margin-block-start: 8px">
         ${this.#btn('time', 'Sync time', 'sync-time', { type: 'button', onClick: this.#syncTime })}
       </div>
-
-      <h3>Power &amp; storage</h3>
-      <dl>
-        <dt>Battery</dt>
-        <dd data-field="battery">${batt ? `${(batt.batteryMv / 1000).toFixed(2)} V (~${batteryPercent(batt.batteryMv)} %)` : '—'}</dd>
-        <dt>Storage</dt>
-        <dd data-field="storage">${batt?.storageTotalKb ? `${batt.storageUsedKb ?? 0} / ${batt.storageTotalKb} KB` : '—'}</dd>
-      </dl>
-
-      <h3>Statistics</h3>
-      ${stats
-        ? html`<table data-field="stats">
-            <tbody>
-              ${stats.core
-                ? html`<tr><th scope="row">Uptime</th><td class="num">${formatDuration(stats.core.uptimeSecs)}</td></tr>
-                    <tr><th scope="row">Queue</th><td class="num">${stats.core.outboundQueueLen}</td></tr>
-                    <tr><th scope="row">Error flags</th><td class="num">0x${stats.core.errFlags.toString(16).padStart(4, '0')}</td></tr>`
-                : nothing}
-              ${stats.radio
-                ? html`<tr><th scope="row">Noise floor</th><td class="num">${stats.radio.noiseFloorDbm} dBm</td></tr>
-                    <tr><th scope="row">Last RSSI / SNR</th><td class="num">${stats.radio.lastRssiDbm} dBm / ${stats.radio.lastSnr} dB</td></tr>
-                    <tr><th scope="row">Airtime TX / RX</th><td class="num">${stats.radio.txAirSecs} s / ${stats.radio.rxAirSecs} s</td></tr>`
-                : nothing}
-              ${stats.packets
-                ? html`<tr><th scope="row">Received</th><td class="num">${stats.packets.recv} (${stats.packets.recvFlood} flood, ${stats.packets.recvDirect} direct)</td></tr>
-                    <tr><th scope="row">Sent</th><td class="num">${stats.packets.sent} (${stats.packets.sentFlood} flood, ${stats.packets.sentDirect} direct)</td></tr>
-                    ${stats.packets.recvErrors !== undefined
-                      ? html`<tr><th scope="row">Receive errors</th><td class="num">${stats.packets.recvErrors}</td></tr>`
-                      : nothing}`
-                : nothing}
-              ${!stats.core && !stats.radio && !stats.packets ? html`<tr><td>Not supported by this firmware (needs v8+).</td></tr>` : nothing}
-            </tbody>
-          </table>
-          <p class="hint">Updated ${fmt.formatTime(stats.at, { seconds: true })}; refreshes every 5 s while this page is open.</p>`
-        : html`<p class="hint">Loading…</p>`}
-      <div class="actions">
-        ${this.#btn('stats', 'Refresh', 'refresh-stats', {
-          type: 'button',
-          onClick: () => void this.#do('refresh the statistics', () => Promise.all([ds.refreshStats(), ds.refreshBattery()])),
-        })}
-      </div>
-
-      <h3>Firmware</h3>
-      <dl data-field="firmware-info">
-        <dt>Version</dt>
-        <dd>${di?.firmwareVersion ?? 'unknown'}${di ? html` <span class="muted">(protocol v${di.firmwareVerCode})</span>` : nothing}</dd>
-        <dt>Build date</dt>
-        <dd>${di?.buildDate ?? '—'}</dd>
-        <dt>Hardware</dt>
-        <dd>${di?.manufacturer ?? '—'}</dd>
-      </dl>
 
       <form data-form="pin" @submit=${this.#savePin} novalidate>
         <label class="field"

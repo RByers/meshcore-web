@@ -690,7 +690,7 @@ export class DeviceSettingsModel {
 
   /**
    * Refreshes stats and battery every `intervalMs` while the returned stop function has not been
-   * called (the settings page calls this while it is shown). Nested callers share one timer.
+   * called (the device page calls this while it is shown). Nested callers share one timer.
    */
   pollStats(intervalMs = 5000): () => void {
     this.#pollers++;
