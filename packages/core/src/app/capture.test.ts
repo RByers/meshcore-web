@@ -87,6 +87,21 @@ describe('channel messages on a slot missing from the store', () => {
   });
 });
 
+describe('messages drained from the offline queue on connect', () => {
+  it('are stored as queued; messages that arrive while connected are not', async () => {
+    const { app, emu, store, s } = await connected();
+    const pub = (await store.channels.byDeviceIndex(0))!.key;
+    const backlog = (await store.messages.list(pub)).items.find((m) => m.text === 'Good morning everyone');
+    expect(backlog).toMatchObject({ queued: true, timestamp: s.startSecs - 1800 });
+    const dm = (await store.messages.list(toHex(s.keys.alice))).items.find((m) => m.text === 'Hi! Are you on the mesh today?');
+    expect(dm?.queued).toBe(true);
+
+    emu.injectChannelMessage(0, 'Eve', 'live one');
+    const live = await messageArrives(app, store, pub, 'live one');
+    expect(live.queued).toBeUndefined();
+  });
+});
+
 describe('DMs from a sender that is not a contact', () => {
   it('lands under the 12-hex-char sender prefix and creates no contact record', async () => {
     const { app, emu, store } = await connected();

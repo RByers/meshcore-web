@@ -296,6 +296,11 @@ export interface MessageRecord {
   /** Epoch ms of the status change to delivered (for outgoing DMs). */
   deliveredAt?: number;
   roundTripMs?: number;
+  /**
+   * Incoming: drained from the device's offline queue on connect, so `receivedAt` is when the app
+   * downloaded it, not when the radio heard it. Set only when true.
+   */
+  queued?: boolean;
   /** Sent / received SMAZ-compressed ("s:" envelope, feature-inventory.md §2.4a); `text` is plain. */
   compressed?: boolean;
   /**

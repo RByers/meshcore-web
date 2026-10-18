@@ -225,7 +225,7 @@ export class CapturePipeline {
     let key = e.contact ? toHex(e.contact.pubKey) : undefined;
     if (!key) key = (await store.contacts.findByPrefix(f.senderPrefix))[0]?.key;
     key ??= toHex(f.senderPrefix);
-    const meta = this.#meta();
+    const meta = this.#meta(e.queued);
     const input = messageInputFromContactFrame(f, key, meta);
     const path = this.#rx.claimContactMessage({
       pathLen: f.route.pathLen,
@@ -258,7 +258,7 @@ export class CapturePipeline {
       }
     }
     const key = ch?.key ?? unknownChannelKey(f.channelIdx);
-    const meta = this.#meta();
+    const meta = this.#meta(e.queued);
     const input = messageInputFromChannelFrame(f, key, meta);
     if (ch) {
       let hash = this.#channelHashes.get(ch.key);
@@ -277,9 +277,11 @@ export class CapturePipeline {
     await this.#append(store, input);
   }
 
-  #meta(): { receivedAt: number; rawFrameId?: number } {
-    const receivedAt = this.client.clock.now();
-    return this.#lastInFrameId !== undefined ? { receivedAt, rawFrameId: this.#lastInFrameId } : { receivedAt };
+  #meta(queued = false): { receivedAt: number; rawFrameId?: number; queued?: boolean } {
+    const meta: { receivedAt: number; rawFrameId?: number; queued?: boolean } = { receivedAt: this.client.clock.now() };
+    if (this.#lastInFrameId !== undefined) meta.rawFrameId = this.#lastInFrameId;
+    if (queued) meta.queued = true;
+    return meta;
   }
 
   async #contactsChanged(store: RadioStore, e: ContactsChangedEvent): Promise<void> {

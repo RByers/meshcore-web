@@ -718,14 +718,22 @@ export class McChatPage extends AppElement {
     </li>`;
   }
 
-  /** The message time: a room server post shows its post time, flagged when synced backlog. */
+  /**
+   * The message time: room server posts and messages queued on the radio show their sender time,
+   * flagged when they arrived late (room backlog synced on login, or held until the app connected).
+   */
   #time(chat: ChatModel, m: MessageRecord) {
     const now = this.app.clock.now();
     const { at, synced } = chat.displayTime(m);
     const time = html`<time datetime=${new Date(at).toISOString()}>${formatTime(at, now)}</time>`;
     if (!synced) return time;
-    const title = `Posted ${formatTime(at, now)} · received ${formatTime(m.receivedAt, now)} (synced from the room server)`;
-    return html`${time}<span class="synced" data-field="synced" title=${title} aria-label=${title}>⟲ synced</span>`;
+    const room = chat.isRoom;
+    const title = room
+      ? `Posted ${formatTime(at, now)} · received ${formatTime(m.receivedAt, now)} (synced from the room server)`
+      : `Sent ${formatTime(at, now)} · downloaded ${formatTime(m.receivedAt, now)} (held on the radio until the app connected)`;
+    return html`${time}<span class="synced" data-field="synced" data-kind=${room ? 'room' : 'queued'} title=${title} aria-label=${title}
+      >${room ? '⟲ synced' : '⟲ queued'}</span
+    >`;
   }
 
   /**

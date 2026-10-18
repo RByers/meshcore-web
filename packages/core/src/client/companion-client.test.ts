@@ -244,6 +244,8 @@ describe('message versions and draining', () => {
     expect(chans.map((c) => [c.message.version, c.message.channelIdx, c.message.senderName, c.message.message])).toEqual([
       [3, 0, 'Dave', 'Good morning everyone'],
     ]);
+    // drained while connecting: the backlog the device queued while no app was attached
+    expect([...msgs, ...chans].every((m) => m.queued)).toBe(true);
   });
 
   it('keeps queued V3 history but receives new messages as V1 after DEVICE_QUERY(1)', async () => {

@@ -308,10 +308,31 @@ describe('room server chat', () => {
     expect(msg()!.querySelector('time')!.getAttribute('datetime')).toBe(new Date(postedAt).toISOString());
     expect(msg()!.querySelector('[data-field="synced"]')!.getAttribute('title')).toMatch(/^Posted .* · received .* \(synced from the room server\)$/);
 
-    // a direct contact's message keeps its receive time and no marker
-    await t.go(`/node/${k.alice}/messages`, '.msg [data-field="text"]');
-    await t.until(() => t.queryAll('.msg [data-field="text"]').some((e) => e.textContent === 'Hi! Are you on the mesh today?'), 3000, 'alice chat');
-    expect(t.query('[data-field="synced"]')).toBeNull();
+  });
+});
+
+describe('messages queued on the radio', () => {
+  it('a channel message drained on connect shows its sender time, marked queued', async () => {
+    const t = await connected();
+    // the scenario's Public message was sent 30 minutes before the app connected
+    const sentAt = (t.emulatorScenario().startSecs - 1800) * 1000;
+    await t.go(`/channel/${await channelKeyForPsk(publicChannelSecret())}`, '.msg [data-field="text"]');
+    const msg = () => t.queryAll<HTMLElement>('.msg[data-dir="in"]').find((e) => e.querySelector('[data-field="text"]')?.textContent === 'Good morning everyone');
+    await t.until(() => msg()?.querySelector('[data-field="synced"]'), 3000, 'queued marker');
+    expect(msg()!.querySelector('time')!.getAttribute('datetime')).toBe(new Date(sentAt).toISOString());
+    const marker = msg()!.querySelector('[data-field="synced"]')!;
+    expect(marker.textContent).toContain('queued');
+    expect(marker.getAttribute('title')).toMatch(/^Sent .* · downloaded .* \(held on the radio until the app connected\)$/);
+  });
+
+  it('a live channel message keeps its receive time and no marker', async () => {
+    const t = await connected();
+    await t.go(`/channel/${await channelKeyForPsk(publicChannelSecret())}`, '.msg [data-field="text"]');
+    t.emulatorScenario().emulator.injectChannelMessage(0, 'Eve', 'live hello', { senderTimestamp: t.emulatorScenario().startSecs - 3600 });
+    const msg = () => t.queryAll<HTMLElement>('.msg[data-dir="in"]').find((e) => e.querySelector('[data-field="text"]')?.textContent === 'live hello');
+    await t.until(() => msg(), 3000, 'live message');
+    expect(msg()!.querySelector('[data-field="synced"]')).toBeNull();
+    expect(msg()!.querySelector('time')!.getAttribute('datetime')).not.toBe(new Date((t.emulatorScenario().startSecs - 3600) * 1000).toISOString());
   });
 });
 

@@ -50,6 +50,8 @@ export interface MessageInput {
   path?: Uint8Array;
   /** Channel messages: the region (flood scope name, no '#') it was sent / received in. */
   region?: string;
+  /** Incoming: drained from the device's offline queue on connect (`receivedAt` is the download time). */
+  queued?: boolean;
 }
 
 export interface AppendOptions {
@@ -100,7 +102,7 @@ export function decodeReceivedText(text: string, txtType: number): { text: strin
 export function messageInputFromContactFrame(
   f: ContactMsgFrame,
   convKey: string,
-  meta: { receivedAt?: number; rawFrameId?: number } = {},
+  meta: { receivedAt?: number; rawFrameId?: number; queued?: boolean } = {},
 ): MessageInput {
   const m: MessageInput = {
     convKey: convKey.toLowerCase(),
@@ -121,7 +123,7 @@ export function messageInputFromContactFrame(
 export function messageInputFromChannelFrame(
   f: ChannelMsgFrame,
   convKey: string,
-  meta: { receivedAt?: number; rawFrameId?: number } = {},
+  meta: { receivedAt?: number; rawFrameId?: number; queued?: boolean } = {},
 ): MessageInput {
   const m: MessageInput = {
     convKey: convKey.toLowerCase(),
@@ -163,7 +165,7 @@ export class MessagesRepo {
       status: input.status ?? (input.direction === 'in' ? 'delivered' : 'pending'),
       pathLen: input.pathLen ?? 0xff,
     };
-    for (const k of ['ackCode', 'attempt', 'snr', 'senderName', 'senderPrefix', 'rawFrameId', 'compressed', 'path', 'region'] as const) {
+    for (const k of ['ackCode', 'attempt', 'snr', 'senderName', 'senderPrefix', 'rawFrameId', 'compressed', 'path', 'region', 'queued'] as const) {
       if (input[k] !== undefined) (base as Record<string, unknown>)[k] = input[k];
     }
     const wantUnread = base.direction === 'in' && opts.countUnread !== false && !isCli(base.txtType);

@@ -930,12 +930,14 @@ export class CompanionClient {
   }
 
   #dispatchMessage(f: FrameOfKind<'contactMsg' | 'channelMsg' | 'channelData'>): void {
+    // the connect-time drain empties the backlog heard while no app was attached
+    const queued = this.#state === 'connecting';
     switch (f.kind) {
       case 'contactMsg':
-        this.#emit('contactMessage', { message: f, contact: this.findContact(f.senderPrefix) });
+        this.#emit('contactMessage', { message: f, contact: this.findContact(f.senderPrefix), queued });
         break;
       case 'channelMsg':
-        this.#emit('channelMessage', { message: f });
+        this.#emit('channelMessage', { message: f, queued });
         break;
       case 'channelData':
         this.#emit('channelData', { message: f });

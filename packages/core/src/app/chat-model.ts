@@ -451,7 +451,7 @@ export class ChatModel extends StoreBoundModel {
     return this.convType === 'contact' && this.#contact.value?.type === ContactType.ROOM;
   }
 
-  /** When to show `m` as sent, and whether it is synced room backlog (see `messageDisplayTime`). */
+  /** When to show `m` as sent, and whether it arrived late (see `messageDisplayTime`). */
   displayTime(m: MessageRecord): MessageDisplayTime {
     return messageDisplayTime(m, this.isRoom);
   }
@@ -613,31 +613,36 @@ function checkRegion(region: string): string {
   return n;
 }
 
-/** A room post received this long after its post time was synced from the server's backlog. */
+/** A message received this long after its sender time arrived late (synced / queued backlog). */
 export const ROOM_SYNC_THRESHOLD_MS = 5 * 60_000;
-/** A room post time this far ahead of when we received it means the server's clock is wrong. */
+/** A sender time this far ahead of when we received it means the sender's clock is wrong. */
 export const ROOM_CLOCK_SKEW_MS = 2 * 60_000;
-/** Post times before this (2020-01-01) mean the room server's clock was never set. */
+/** Sender times before this (2020-01-01) mean the sender's clock was never set. */
 export const MIN_PLAUSIBLE_POST_MS = Date.UTC(2020, 0, 1);
 
 export interface MessageDisplayTime {
   /** Epoch ms to show as the message's time. */
   at: number;
-  /** A room server post pushed to us well after it was posted (backlog synced on login). */
+  /**
+   * Received well after it was sent: a room server post replayed on login, or a message held in
+   * the radio's offline queue until the app connected (`MessageRecord.queued`).
+   */
   synced: boolean;
 }
 
 /**
- * The time to show for `m`: normally when we received it. An incoming room server post shows its
- * post time instead (the sender timestamp, on the server's clock), because on login the server
- * replays its backlog of posts newer than our last sync; received more than
- * `ROOM_SYNC_THRESHOLD_MS` after that, it is marked `synced`. A post time ahead of the receive
- * time by more than `ROOM_CLOCK_SKEW_MS`, or before 2020, means the server's clock is wrong, so
- * the receive time is shown.
+ * The time to show for `m`: normally when we received it. Two kinds of incoming message show the
+ * sender timestamp instead, because their receive time is only when the backlog reached the app:
+ * a room server post (on login the server replays posts newer than our last sync), and a message
+ * drained from the radio's offline queue on connect (the queued frame has no device receive
+ * time). Received more than `ROOM_SYNC_THRESHOLD_MS` after its sender time, it is marked
+ * `synced`. A sender time ahead of the receive time by more than `ROOM_CLOCK_SKEW_MS`, or before
+ * 2020, means the sender's clock is wrong, so the receive time is shown. Live messages keep the
+ * receive time: it is accurate, and many senders' clocks are not.
  */
-export function messageDisplayTime(m: Pick<MessageRecord, 'direction' | 'timestamp' | 'receivedAt'>, isRoom: boolean): MessageDisplayTime {
+export function messageDisplayTime(m: Pick<MessageRecord, 'direction' | 'timestamp' | 'receivedAt' | 'queued'>, isRoom: boolean): MessageDisplayTime {
   const received = { at: m.receivedAt, synced: false };
-  if (!isRoom || m.direction !== 'in') return received;
+  if (m.direction !== 'in' || !(isRoom || m.queued)) return received;
   const posted = m.timestamp * 1000;
   if (posted < MIN_PLAUSIBLE_POST_MS || posted - m.receivedAt > ROOM_CLOCK_SKEW_MS) return received;
   return { at: posted, synced: m.receivedAt - posted > ROOM_SYNC_THRESHOLD_MS };

@@ -425,9 +425,19 @@ describe('messageDisplayTime (room server post times)', () => {
     expect(messageDisplayTime(m('in', 60_000), true)).toEqual({ at: now, synced: false });
   });
 
-  it('contacts, channels and our own room posts keep the receive time', () => {
+  it('live contact and channel messages, and our own room posts, keep the receive time', () => {
     const posted = now - 3_600_000;
     expect(messageDisplayTime(m('in', posted), false)).toEqual({ at: now, synced: false });
     expect(messageDisplayTime(m('out', posted), true)).toEqual({ at: now, synced: false });
+  });
+
+  it('a message drained from the radio queue on connect shows its sender time', () => {
+    const q = (postedMs: number) => ({ ...m('in', postedMs), queued: true });
+    const old = now - 1_800_000;
+    expect(messageDisplayTime(q(old), false)).toEqual({ at: old, synced: true });
+    expect(messageDisplayTime(q(now - 60_000), false)).toEqual({ at: now - 60_000, synced: false });
+    // a sender clock in the future or never set falls back to the download time
+    expect(messageDisplayTime(q(now + ROOM_CLOCK_SKEW_MS + 60_000), false)).toEqual({ at: now, synced: false });
+    expect(messageDisplayTime(q(60_000), false)).toEqual({ at: now, synced: false });
   });
 });

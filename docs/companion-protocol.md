@@ -331,6 +331,8 @@ Note: there is no host command to enable or disable LOG_RX_DATA in v1.18 (no "SE
 
 Contact messages, channel messages and channel datagrams are **never** sent to the host as pushes. They are encoded into a frame, appended to the offline queue, then a 1-byte `MSG_WAITING` (0x83) is sent if connected (`MM queueMessage`, `onChannelMessageRecv`, `onChannelDataRecv`). The host must drain the queue with `CMD_SYNC_NEXT_MESSAGE` until `NO_MORE_MESSAGES` (0x0A). FIFO order.
 
+The queued frames carry **no device receive time**, only the sender's timestamp (sender's clock). The queue is RAM-only. A message heard while no host was attached is therefore delivered at drain time with nothing recording when the radio heard it; the client marks messages drained during connect as `queued` and shows their sender time.
+
 Queue full (`MM addToOfflineQueue` L224-246): the **oldest channel-type frame** (0x08/0x11/0x1B) is removed and the new frame appended. If the queue holds no channel frames, **the new frame is silently dropped**, but MSG_WAITING is still sent.
 
 ### 6.2 CONTACT_MSG_RECV (0x07) / _V3 (0x10) — `MM queueMessage` L440-479

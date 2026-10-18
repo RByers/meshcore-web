@@ -106,10 +106,18 @@ export interface ContactMessageEvent {
   message: ContactMsgFrame;
   /** The sender from the contact cache, if known. */
   contact: Contact | undefined;
+  /** Drained from the device's offline queue while connecting (see `ChannelMessageEvent.queued`). */
+  queued: boolean;
 }
 
 export interface ChannelMessageEvent {
   message: ChannelMsgFrame;
+  /**
+   * Drained from the device's offline queue while connecting: heard while no app was attached, so
+   * it arrives now but was received earlier. The frame carries no device receive time, only the
+   * sender's timestamp (companion-protocol.md §6.1).
+   */
+  queued: boolean;
 }
 
 export interface ChannelDataEvent {
