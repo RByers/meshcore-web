@@ -317,6 +317,32 @@ describe('ChannelsModel', () => {
     ]);
   });
 
+  it('details: key as hex / base64, channel hash, slot and settings', async () => {
+    const { app } = await connected();
+    const m = app.channels;
+    await vi.waitFor(() => expect(m.views.value).toHaveLength(2));
+    const psk = Uint8Array.from({ length: 16 }, (_, i) => i + 1);
+    const team = await m.add({ name: 'Team', psk: base64Encode(psk) });
+    await m.setSmaz(team.key, true);
+    await vi.waitFor(() => expect(m.find(team.key)?.smaz).toBe(true));
+    // Hash = SHA256(psk)[0] (mesh-packet-format §2); the record id is the same digest in hex.
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', psk));
+    expect(await m.details(team.key.toUpperCase())).toEqual({
+      name: 'Team',
+      kind: 'private',
+      slot: 2,
+      keyHex: '0102030405060708090a0b0c0d0e0f10',
+      keyBase64: 'AQIDBAUGBwgJCgsMDQ4PEA==',
+      hash: digest[0],
+      id: team.key,
+      muted: false,
+      smaz: true,
+    });
+    const pub = await m.details(await channelKeyForPsk(publicChannelSecret()));
+    expect([pub?.name, pub?.kind, pub?.slot, pub?.hash]).toEqual(['Public', 'public', 0, 0x11]);
+    expect(await m.details('00')).toBeUndefined();
+  });
+
   it('renaming a #hashtag channel without a key joins the new hashtag', async () => {
     const { app, s } = await connected();
     const m = app.channels;

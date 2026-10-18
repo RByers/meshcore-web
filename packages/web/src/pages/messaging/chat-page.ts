@@ -5,16 +5,18 @@
  * composer with byte counter (Enter sends, Shift+Enter newline) and replies. A "New messages"
  * divider marks where the unread messages began when the conversation was opened
  * (`ChatModel.firstUnreadId`); on open the log scrolls to it instead of the bottom.
+ * A channel's "⋯" header button opens its details (key, channel hash, slot): `[data-action="details"]`,
+ * `dialog#channel-details` with `[data-field="detail-*"]` values.
  */
 import { css, html, nothing, type PropertyValues, type TemplateResult } from 'lit';
-import { parseReply, receivedSignal, type ChatModel } from '@meshcore-web/core/app';
+import { parseReply, receivedSignal, type ChannelDetails, type ChatModel } from '@meshcore-web/core/app';
 import type { ConversationType, MessageRecord } from '@meshcore-web/core/store';
 import { smazSizes } from '@meshcore-web/core/util/smaz';
 import { AppElement } from '../../app-context.js';
 import { formatDuration, formatSnr, formatTime } from '../../format.js';
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
-import { avatar, listStyles } from './common.js';
+import { avatar, copyText, listStyles, TYPE_LABEL } from './common.js';
 import { contactNote, nodeHref, pathLabelView } from '../../components/node-link.js';
 import { LongPress, reactionChipsTemplate, reactionStyles, type McReactionPicker } from './reactions.js';
 
@@ -301,6 +303,34 @@ export class McChatPage extends AppElement {
         text-align: end;
         margin-inline-start: auto;
       }
+      dl.details {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: 6px 16px;
+        margin: 0;
+      }
+      dl.details dt {
+        color: var(--mc-text-muted);
+      }
+      dl.details dd {
+        margin: 0;
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        min-width: 0;
+      }
+      dl.details .mono {
+        font-family: var(--mc-mono);
+        font-size: 0.85rem;
+        overflow-wrap: anywhere;
+        min-width: 0;
+      }
+      dl.details dd button {
+        min-height: 0;
+        padding: 0 8px;
+        font-size: 0.8rem;
+        flex: none;
+      }
       .bytes[data-over] {
         color: var(--mc-danger);
         font-weight: 600;
@@ -317,6 +347,8 @@ export class McChatPage extends AppElement {
   /** The message the reaction picker is open for. */
   #reactTo: number | undefined;
   #longPress = new LongPress();
+  /** The channel details dialog's content (loaded when it opens). */
+  #details: ChannelDetails | undefined;
 
   get convType(): ConversationType {
     return this.mode === 'channel' ? 'channel' : 'contact';
@@ -477,6 +509,48 @@ export class McChatPage extends AppElement {
     }
   }
 
+  async #openDetails(): Promise<void> {
+    this.#details = await this.app.channels.details(this.key);
+    this.requestUpdate();
+    await this.updateComplete;
+    this.renderRoot.querySelector<HTMLDialogElement>('#channel-details')?.showModal();
+  }
+
+  async #copy(label: string, text: string): Promise<void> {
+    const ok = await copyText(text);
+    this.app.notifications.info(ok ? `${label} copied` : `${label}: ${text}`);
+  }
+
+  #detailsDialog() {
+    const d = this.#details;
+    const row = (label: string, field: string, value: string, copy?: string) =>
+      html`<dt>${label}</dt>
+        <dd>
+          <span class=${copy ? 'mono' : ''} data-field=${`detail-${field}`}>${value}</span>
+          ${copy ? html`<button type="button" data-action=${`copy-${field}`} aria-label=${`Copy ${label.toLowerCase()}`} @click=${() => void this.#copy(label, copy)}>Copy</button>` : nothing}
+        </dd>`;
+    const hash = d && d.hash >= 0 ? d.hash.toString(16).padStart(2, '0') : '';
+    return html`<dialog id="channel-details" aria-labelledby="channel-details-h">
+      <form method="dialog">
+        <h3 id="channel-details-h">${d?.name ?? 'Channel'}</h3>
+        ${d
+          ? html`<dl class="details">
+              ${row('Type', 'kind', TYPE_LABEL[d.kind])}
+              ${row('Slot', 'slot', d.slot !== null ? String(d.slot) : 'not on radio')}
+              ${row('Key (base64)', 'key-base64', d.keyBase64, d.keyBase64)}
+              ${row('Key (hex)', 'key-hex', d.keyHex, d.keyHex)}
+              ${row('Channel hash', 'hash', hash ? `0x${hash} (${d.hash})` : 'invalid key', hash || undefined)}
+              ${row('Muted', 'muted', d.muted ? 'yes' : 'no')}
+              ${row('SMAZ', 'smaz', d.smaz ? 'outgoing messages compressed' : 'off')}
+              ${row('Storage id', 'id', d.id, d.id)}
+            </dl>
+            <p class="hint muted">The channel hash is the first byte of SHA-256(key); every group message on the mesh carries it so radios can pick the right key. Anyone with the key can read the channel.</p>`
+          : html`<p class="muted">This channel is no longer stored.</p>`}
+        <div class="actions"><button data-action="details-close">Close</button></div>
+      </form>
+    </dialog>`;
+  }
+
   #status(m: MessageRecord) {
     if (m.direction !== 'out') return nothing;
     const attempts = (m.attempt ?? 0) + 1;
@@ -607,7 +681,9 @@ export class McChatPage extends AppElement {
             <button data-action="mute" aria-pressed=${ch?.muted ? 'true' : 'false'} @click=${() => void this.#toggleMute()}>
               ${ch?.muted ? '🔕 Muted' : '🔔 Mute'}
             </button>
-          </div>`
+            <button data-action="details" aria-label="Channel details" title="Channel details" @click=${() => void this.#openDetails()}>⋯</button>
+          </div>
+          ${this.#detailsDialog()}`
         : nothing}
     </header>`;
   }

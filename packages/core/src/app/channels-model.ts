@@ -8,6 +8,8 @@ import type { RadioStore } from '../store/radio-store.js';
 import type { ChannelRecord, MessageRecord } from '../store/schema.js';
 import { StoreBoundModel } from './store-bound.js';
 import { computed, signal, type ReadonlySignal } from './signal.js';
+import { channelHash } from '../packet/payloads.js';
+import { base64Encode, toHex } from '../util/bytes.js';
 import { channelKind, channelNameError, parsePsk, resolveChannelPsk, type ChannelKind } from './messaging.js';
 
 export interface ChannelView {
@@ -22,6 +24,22 @@ export interface ChannelView {
   /** SMAZ compression of outgoing messages (MeshCore Open compatible). */
   smaz: boolean;
   lastMessage: MessageRecord | undefined;
+}
+
+/** Everything shown in a channel's details dialog. */
+export interface ChannelDetails {
+  name: string;
+  kind: ChannelKind;
+  slot: number | null;
+  /** The PSK (shared secret) as hex and base64. */
+  keyHex: string;
+  keyBase64: string;
+  /** 1-byte channel hash carried in GRP_TXT / GRP_DATA packets (SHA256(psk)[0]); -1 if the PSK is malformed. */
+  hash: number;
+  /** Local storage id: sha256(psk) hex. */
+  id: string;
+  muted: boolean;
+  smaz: boolean;
 }
 
 export interface ChannelInput {
@@ -69,6 +87,23 @@ export class ChannelsModel extends StoreBoundModel {
   find(key: string): ChannelRecord | undefined {
     const k = key.toLowerCase();
     return this.#channels.peek().find((c) => c.key === k);
+  }
+
+  /** Key, hash and settings of a stored channel (undefined if unknown). */
+  async details(key: string): Promise<ChannelDetails | undefined> {
+    const c = this.find(key);
+    if (!c) return undefined;
+    return {
+      name: c.name,
+      kind: channelKind(c.name, c.psk),
+      slot: c.deviceIndex,
+      keyHex: toHex(c.psk),
+      keyBase64: base64Encode(c.psk),
+      hash: await channelHash(c.psk).catch(() => -1),
+      id: c.key,
+      muted: c.muted,
+      smaz: c.smaz === true,
+    };
   }
 
   protected override bind(store: RadioStore) {

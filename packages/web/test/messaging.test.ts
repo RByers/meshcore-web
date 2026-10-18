@@ -362,6 +362,23 @@ describe('channels', () => {
     await t.until(() => !t.query(`[data-channel="${test}"]`), 5000, 'deleted');
     expect(t.emulatorScenario().emulator.channels[1]!.name).toBe('');
   });
+
+  it('shows channel details (key, hash, slot) from the chat header', async () => {
+    const t = await connected();
+    const pub = await channelKeyForPsk(publicChannelSecret());
+    await t.go(`/channel/${pub}`, '[data-action="details"]');
+    await t.click('[data-action="details"]');
+    await t.until(() => t.query<HTMLDialogElement>('#channel-details')?.open, 3000, 'details open');
+    const field = (f: string) => t.query(`[data-field="detail-${f}"]`)!.textContent;
+    expect(field('kind')).toBe('Public channel');
+    expect(field('slot')).toBe('0');
+    expect(field('key-hex')).toBe(toHex(publicChannelSecret()));
+    expect(field('key-base64')).toBe('izOH6cXN6mrJ5e26oRXNcg==');
+    expect(field('hash')).toBe('0x11 (17)'); // the well-known Public channel hash
+    expect(field('id')).toBe(pub);
+    await t.click('[data-action="details-close"]');
+    await t.until(() => !t.query<HTMLDialogElement>('#channel-details')!.open, 3000, 'details closed');
+  });
 });
 
 describe('unread and persistence', () => {
