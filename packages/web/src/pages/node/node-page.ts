@@ -9,7 +9,7 @@
  * Test hooks: `[data-field="header"]` with `name` / `type` / `key-short` / `session`,
  * `[data-action="show-on-map"]`, `[data-action="ping"]` / `[data-field="ping-result"]` (with
  * `data-state` ok / failed; repeaters, rooms and sensors); `nav [data-tab]` anchors; `section[data-panel]`;
- * `[data-field="subtitle"]` (Messages tab header); `[data-field="room-login-hint"]`.
+ * `[data-field="subtitle"]` (contacts: path · SNR · last seen, on every tab); `[data-field="room-login-hint"]`.
  * The host carries `data-active-tab` (not `data-tab`, so `[data-tab=…]` only matches the tab links).
  */
 import { css, html, nothing, type TemplateResult } from 'lit';
@@ -174,7 +174,7 @@ export class McNodePage extends AppElement {
     const key = identityKey(id, node.ref);
     const tabs = node.tabs.value;
     return html`
-      ${this.#header(id, key, tab)}
+      ${this.#header(id, key)}
       <nav class="tabs" role="tablist" aria-label="Node">
         ${tabs.map(
           (t) => html`<a role="tab" data-tab=${t} aria-selected=${t === tab ? 'true' : 'false'} href=${nodeHref(key, t)}>${TAB_LABEL[t]}</a>`,
@@ -215,7 +215,7 @@ export class McNodePage extends AppElement {
     }
   }
 
-  #header(id: NodeIdentity, key: string, tab: NodeTab): TemplateResult {
+  #header(id: NodeIdentity, key: string): TemplateResult {
     let name: string | TemplateResult;
     let type: string;
     let icon: TemplateResult;
@@ -260,7 +260,7 @@ export class McNodePage extends AppElement {
           <span class="type-badge" data-field="type">${type}</span>
           <span class="mono" data-field="key-short" title=${key}>${shortKey(key, 16)}</span>
         </div>
-        ${tab === 'messages' && id.kind === 'contact' ? html`<div class="muted" data-field="subtitle">${this.#subtitle(id, key)}</div>` : nothing}
+        ${id.kind === 'contact' ? html`<div class="muted" data-field="subtitle">${this.#subtitle(id, key)}</div>` : nothing}
       </div>
       ${session} ${ping}
       ${map
@@ -311,7 +311,7 @@ export class McNodePage extends AppElement {
     </span>`;
   }
 
-  /** Messages tab: how messages reach the contact (path · direct SNR · last seen). */
+  /** How messages reach the contact (path · direct SNR · last seen). */
   #subtitle(id: Extract<NodeIdentity, { kind: 'contact' }>, key: string): TemplateResult {
     const v = id.contact;
     const path = this.app.contacts.outPathLabel(v, this.app.appSettings.pathNames.value);

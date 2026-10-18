@@ -103,6 +103,15 @@ describe('node page', () => {
     expect(selected(t)).toBe('messages');
   });
 
+  it('shows the contact subtitle (path · last seen) on every tab, not just Messages', async () => {
+    const t = await connected();
+    const alice = key(t, 'alice');
+    await t.go(`/node/${alice}/info`, '[data-field="header"] [data-field="subtitle"]');
+    await t.go(`/node/${alice}/path`, '[data-field="header"] [data-field="subtitle"]');
+    await t.until(() => selected(t) === 'path', 3000, 'path tab');
+    expect(t.query('[data-field="header"] [data-field="subtitle"]')).not.toBeNull();
+  });
+
   it('the Messages tab embeds the chat without its own header; a DM sends and is delivered', async () => {
     const t = await connected();
     const alice = key(t, 'alice');

@@ -77,7 +77,7 @@ describe('channel senders', () => {
 });
 
 describe('DM header', () => {
-  it('the Messages tab header shows the direct signal, also on the Info tab', async () => {
+  it('the header shows the direct signal on the Messages tab and the Info tab', async () => {
     const t = await connected();
     const s = t.emulatorScenario();
     const bob = toHex(s.keys.bob);
@@ -92,7 +92,7 @@ describe('DM header', () => {
     tab.click();
     await t.until(() => info(t, 'direct-signal')?.textContent?.includes('8 dB'), 5000, 'node info');
     expect(info(t, 'direct-signal')!.textContent).toMatch(/8 dB\s*\(just now\)/);
-    expect(header(t, 'subtitle')).toBeNull();
+    expect(header(t, 'subtitle')!.textContent).toContain('direct SNR 8 dB');
   });
 
   it('offers node info from the contacts list menu', async () => {
