@@ -795,9 +795,7 @@ export class McPacketsPage extends AppElement {
       <mc-packet-filters ?node-route=${!!this.params['key']} ?hidden=${this.tab === 'frames'}></mc-packet-filters>
       <div class="tabs" role="tablist" aria-label="Log">
         <button role="tab" data-tab="stats" aria-selected=${this.tab === 'stats' ? 'true' : 'false'} @click=${() => this.#setTab('stats')}>Stats</button>
-        <button role="tab" data-tab="packets" aria-selected=${this.tab === 'packets' ? 'true' : 'false'} @click=${() => this.#setTab('packets')}>
-          List <span class="muted">(${log.packets.total.value})</span>
-        </button>
+        <button role="tab" data-tab="packets" aria-selected=${this.tab === 'packets' ? 'true' : 'false'} @click=${() => this.#setTab('packets')}>List</button>
         ${showFrames
           ? html`<button role="tab" data-tab="frames" aria-selected=${this.tab === 'frames' ? 'true' : 'false'} @click=${() => this.#setTab('frames')}>
               Frames <span class="muted">(${log.frames.total.value})</span>

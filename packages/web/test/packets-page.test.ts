@@ -52,7 +52,7 @@ describe('/packets page', () => {
     const tabs = t.queryAll('[role="tab"]');
     expect(tabs.map((b) => b.dataset['tab'])).toEqual(['stats', 'packets']);
     expect(tabs[0]!.getAttribute('aria-selected')).toBe('true');
-    expect(tabs[1]!.textContent!.trim()).toMatch(/^List \(\d+\)$/);
+    expect(tabs[1]!.textContent!.trim()).toBe('List');
     expect(t.query('table[data-table="packets"]')).toBeNull();
   });
 
