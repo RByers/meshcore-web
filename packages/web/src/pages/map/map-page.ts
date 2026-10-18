@@ -21,7 +21,7 @@ import { AppElement } from '../../app-context.js';
 import '../../components/tile-map.js';
 import { KIND_COLORS, type McTileMap, type TileMapView } from '../../components/tile-map.js';
 import { hopsLink } from '../../components/path-dialog.js';
-import { contactNote } from '../../components/node-link.js';
+import { contactNote, nodeHref } from '../../components/node-link.js';
 import { formatRelative } from '../../format.js';
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
@@ -392,8 +392,8 @@ export class McMapPage extends AppElement {
       </dl>
       <div class="actions">
         ${x.kind === 'chat'
-          ? html`<a class="button" data-action="chat" href=${hrefFor(`/chat/${x.key}`)}>Chat</a>`
-          : html`<a class="button" data-action="node" href=${hrefFor(`/node/${x.key}`)}>Node</a>`}
+          ? html`<a class="button" data-action="chat" href=${nodeHref(x.key, 'messages')}>Chat</a>`
+          : html`<a class="button" data-action="node" href=${nodeHref(x.key)}>Node</a>`}
       </div>
     </section>`;
   }

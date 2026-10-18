@@ -25,13 +25,18 @@ function msgWith(t: Harness, text: string): HTMLElement | undefined {
   return t.queryAll('.msg').find((li) => li.querySelector('[data-field="text"]')?.textContent === text);
 }
 
-/** A field of the contact info page. */
+/** A field of the node page's Info tab. */
 function info(t: Harness, field: string): HTMLElement | null {
-  return t.query('mc-contact-info-page')?.shadowRoot?.querySelector<HTMLElement>(`[data-field="${field}"]`) ?? null;
+  return t.query('mc-node-info')?.shadowRoot?.querySelector<HTMLElement>(`[data-field="${field}"]`) ?? null;
+}
+
+/** A field of the node page header. */
+function header(t: Harness, field: string): HTMLElement | null {
+  return t.query('mc-node-page')?.shadowRoot?.querySelector<HTMLElement>(`[data-field="header"] [data-field="${field}"]`) ?? null;
 }
 
 describe('channel senders', () => {
-  it('links a known sender to their contact info and leaves unknown senders as text', async () => {
+  it('links a known sender to their node page and leaves unknown senders as text', async () => {
     const t = await connected();
     const s = t.emulatorScenario();
     const pub = await channelKeyForPsk(publicChannelSecret());
@@ -46,10 +51,10 @@ describe('channel senders', () => {
     await t.until(() => msgWith(t, 'hello from carol'), 5000, 'Carol message');
     const link = msgWith(t, 'hello from carol')!.querySelector<HTMLAnchorElement>('a[data-field="sender"]')!;
     expect(link.textContent).toBe('Carol');
-    expect(link.getAttribute('href')).toBe(`#/contact/${toHex(s.keys.carol)}`);
+    expect(link.getAttribute('href')).toBe(`#/node/${toHex(s.keys.carol)}`);
     link.click();
-    await t.until(() => info(t, 'name'), 5000, 'contact info');
-    expect(info(t, 'name')!.textContent).toBe('Carol');
+    await t.until(() => header(t, 'name') && info(t, 'key'), 5000, 'node info');
+    expect(header(t, 'name')!.textContent).toBe('Carol');
     expect(info(t, 'key')!.textContent).toBe(toHex(s.keys.carol));
     expect(info(t, 'direct-signal')!.textContent).toContain('not heard directly');
   });
@@ -72,26 +77,28 @@ describe('channel senders', () => {
 });
 
 describe('DM header', () => {
-  it('links the contact name to contact info, which shows the direct signal', async () => {
+  it('the Messages tab header shows the direct signal, also on the Info tab', async () => {
     const t = await connected();
     const s = t.emulatorScenario();
     const bob = toHex(s.keys.bob);
-    await t.go(`/chat/${bob}`, '[data-field="title"] a');
+    await t.go(`/node/${bob}/messages`, '[data-field="composer"]');
+    expect(header(t, 'name')!.textContent).toBe('Bob');
     s.nodes.bob.sendText(s.keys.self, 'right here');
     await t.until(() => msgWith(t, 'right here'), 5000, 'Bob DM');
-    const title = t.query<HTMLAnchorElement>('[data-field="title"] a')!;
-    expect(title.textContent).toBe('Bob');
-    expect(title.getAttribute('href')).toBe(`#/contact/${bob}`);
-    title.click();
-    await t.until(() => info(t, 'direct-signal')?.textContent?.includes('8 dB'), 5000, 'contact info');
+    await t.until(() => header(t, 'subtitle')?.textContent?.includes('direct SNR 8 dB'), 5000, 'subtitle');
+    expect(t.query<HTMLAnchorElement>('[data-tab="messages"]')!.getAttribute('href')).toBe(`#/node/${bob}/messages`);
+    const tab = t.query<HTMLAnchorElement>('[data-tab="info"]')!;
+    expect(tab.getAttribute('href')).toBe(`#/node/${bob}`);
+    tab.click();
+    await t.until(() => info(t, 'direct-signal')?.textContent?.includes('8 dB'), 5000, 'node info');
     expect(info(t, 'direct-signal')!.textContent).toMatch(/8 dB\s*\(just now\)/);
-    expect(t.query('mc-contact-info-page')!.shadowRoot!.querySelector('[data-action="message"]')!.getAttribute('href')).toBe(`#/chat/${bob}`);
+    expect(header(t, 'subtitle')).toBeNull();
   });
 
-  it('offers contact info from the contacts list menu', async () => {
+  it('offers node info from the contacts list menu', async () => {
     const t = await connected();
     const rep = toHex(t.emulatorScenario().keys.repeater);
     await t.go('/contacts', `[data-menu="${rep}"]`);
-    expect(t.query(`#menu-${rep} [data-action="info"]`)!.getAttribute('href')).toBe(`#/contact/${rep}`);
+    expect(t.query(`#menu-${rep} [data-action="info"]`)!.getAttribute('href')).toBe(`#/node/${rep}`);
   });
 });

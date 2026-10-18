@@ -44,7 +44,7 @@ describe('message signal', () => {
     const t = await connected();
     const s = t.emulatorScenario();
     const bob = toHex(s.keys.bob);
-    await t.go(`/chat/${bob}`, '[data-field="title"]');
+    await t.go(`/node/${bob}/messages`, '[data-field="name"]');
     // Bob has no path to us and is in range: the DM floods and arrives zero hop
     s.nodes.bob.sendText(s.keys.self, 'right here');
     await t.until(() => msgWith(t, 'right here'), 5000, 'Bob DM');

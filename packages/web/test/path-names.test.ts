@@ -54,9 +54,9 @@ describe('path as node names', () => {
     expect(t.app.appSettings.pathNames.value).toBe(true);
     await t.go('/contacts', `[data-contact="${alice}"]`);
     expect(t.query(`[data-contact="${alice}"] [data-field="meta"]`)!.textContent).toContain('Hilltop Repeater');
-    await t.go(`/contact/${alice}`, 'mc-contact-info-page');
-    await t.until(() => t.query('mc-contact-info-page')!.shadowRoot!.querySelector('[data-field="path"]'), 3000, 'info path');
-    const path = t.query('mc-contact-info-page')!.shadowRoot!.querySelector('[data-field="path"]')!;
+    await t.go(`/node/${alice}`, 'mc-node-info');
+    await t.until(() => t.query('mc-node-info')!.shadowRoot!.querySelector('[data-field="path"]'), 3000, 'info path');
+    const path = t.query('mc-node-info')!.shadowRoot!.querySelector('[data-field="path"]')!;
     expect(path.textContent).toBe('Hilltop Repeater');
     expect(path.getAttribute('title')).toMatch(/^[0-9a-f]{2}: Hilltop Repeater$/);
   });

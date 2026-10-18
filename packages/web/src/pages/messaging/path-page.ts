@@ -303,7 +303,7 @@ export class McPathPage extends AppElement {
     const history = paths.history(this.key);
     const draftHex = this.#draft.map((h) => toHex(h.hash)).join(',');
     const curHex = cur?.kind === 'hops' ? cur.hops.map((h) => h.hex).join(',') : cur?.kind === 'direct' ? '' : null;
-    const back = contact.typeName === 'chat' ? `/chat/${contact.key}` : `/node/${contact.key}`;
+    const back = `/node/${contact.key}`;
     return html`
       <div class="page-head">
         <a href=${hrefFor(back)} aria-label="Back">←</a>

@@ -8,6 +8,7 @@ import {
   CONTACT_FILTERS,
   contactLastHeard,
   contactsNotHeardSince,
+  entryTab,
   messagePreview,
   STALE_PERIODS,
   type ContactFilter,
@@ -19,7 +20,7 @@ import { formatRelative, formatSnr } from '../../format.js';
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
 import { avatar, copyText, errorText, listStyles, unreadBadge } from './common.js';
-import { contactNote } from '../../components/node-link.js';
+import { contactNote, nodeHref } from '../../components/node-link.js';
 
 const FILTER_LABEL: Record<ContactFilter, string> = {
   all: 'All',
@@ -31,9 +32,9 @@ const FILTER_LABEL: Record<ContactFilter, string> = {
   unread: 'Unread',
 };
 
-/** Where a contact opens: chat for users, the node page for repeaters / rooms / sensors. */
+/** Where a contact opens: its node page, on Messages for users and rooms, else on Info. */
 export function contactHref(v: Pick<ContactView, 'key' | 'typeName'>): string {
-  return hrefFor(v.typeName === 'chat' ? `/chat/${v.key}` : `/node/${v.key}`);
+  return nodeHref(v.key, entryTab(v.typeName));
 }
 
 export class McContactsPage extends AppElement {
@@ -362,7 +363,7 @@ export class McContactsPage extends AppElement {
       </button>
       <button class="menu-btn" popovertarget=${menuId} aria-label=${`Actions for ${v.name}`} data-menu=${v.key}>⋮</button>
       <div class="menu" id=${menuId} popover>
-        <a data-action="info" href=${hrefFor(`/contact/${v.key}`)}>Contact info</a>
+        <a data-action="info" href=${nodeHref(v.key)}>Info</a>
         <button data-action="set-path" @click=${() => (location.hash = hrefFor(`/path/${v.key}`))}>Set path…</button>
         <button data-action="reset-path" ?disabled=${!v.onDevice} @click=${() => void this.#act(v, 'reset')}>Reset path</button>
         <button data-action="share" ?disabled=${!v.onDevice} @click=${() => void this.#act(v, 'share')}>Share (zero hop)</button>

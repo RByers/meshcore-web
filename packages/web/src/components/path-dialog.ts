@@ -7,10 +7,11 @@
  * only while the "approximate positions" setting is on (the dialog has a checkbox for it).
  * Resolution and layout live in core (`app.paths`, path-geometry.ts).
  *
- * Each stop that resolves to one known node links to its contact page.
+ * Each stop that resolves to one known node links to its node page; an unknown / ambiguous hash
+ * links to the node page of the bare hash.
  *
  * Test hooks: `mc-hops-link`, `[data-path-dialog]`, `[data-path-list] li[data-stop]` with
- * `data-role` / `data-position`, `a[data-node-link]`, `mc-map-marker[data-stop]`, `[data-action="close-path"]`,
+ * `data-role` / `data-position`, `a[data-node-link]`, `a[data-hash-link]`, `mc-map-marker[data-stop]`, `[data-action="close-path"]`,
  * `[data-approximate]` (the estimate checkbox), `[data-field="unplaced"]`.
  */
 import { LitElement, css, html, nothing, type TemplateResult } from 'lit';
@@ -25,7 +26,7 @@ import {
 import { AppElement } from '../app-context.js';
 import { hrefFor } from '../router.js';
 import { shared } from '../styles.js';
-import { contactNote } from './node-link.js';
+import { contactNote, nodeHref } from './node-link.js';
 import './tile-map.js';
 import type { MapLine, McTileMap } from './tile-map.js';
 
@@ -330,8 +331,10 @@ export class McPathDialog extends AppElement {
       <span class="role">${s.role === 'hop' ? `Hop ${hopNo}` : ROLE_LABEL[s.role]}</span>
       <span class="who">
         ${s.node && s.node.kind !== 'self'
-          ? html`<a data-field="label" data-node-link=${s.node.key} href=${hrefFor(`/contact/${s.node.key}`)} title="Contact details" @click=${() => this.close()}>${s.label}</a>${contactNote(this.app.contacts.noteFor(s.node.key))}`
-          : html`<span data-field="label">${s.label}</span>`}
+          ? html`<a data-field="label" data-node-link=${s.node.key} href=${nodeHref(s.node.key)} title="Node details" @click=${() => this.close()}>${s.label}</a>${contactNote(this.app.contacts.noteFor(s.node.key))}`
+          : !s.node && s.hash
+            ? html`<a data-field="label" data-hash-link=${s.hash} href=${nodeHref(s.hash)} title="Nodes with this hash" @click=${() => this.close()}>${s.label}</a>`
+            : html`<span data-field="label">${s.label}</span>`}
         ${s.hash && s.label !== s.hash ? html` <span class="hash">${s.hash}</span>` : nothing}
       </span>
       ${s.candidates.length > 1 && !s.node

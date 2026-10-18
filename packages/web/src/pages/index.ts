@@ -10,7 +10,7 @@ registerPage({ path: '/', title: 'Connect', icon: '🔗', tag: 'mc-connect-page'
 registerPage({ path: '/device', title: 'Device', icon: '📟', tag: 'mc-device-page', order: 10, requiresConnection: true });
 
 import './messaging/index.js';
-import './admin/index.js';
+import './node/index.js';
 import './packets/index.js';
 import './map/index.js';
 import './settings/index.js';

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { toHex } from '@meshcore-web/core/util/bytes';
 import '../src/mc-app.js';
 import '../src/pages/messaging/index.js';
-import '../src/pages/admin/index.js';
+import '../src/pages/node/index.js';
 import { createHarness, type Harness } from '../src/testing/harness.js';
 
 let h: Harness | undefined;
@@ -45,7 +45,9 @@ describe('node admin page', () => {
     await t.until(() => location.hash === '#/messages', 5000, 'landing page');
     await t.go('/contacts', `[data-contact="${k}"] a`);
     t.query<HTMLAnchorElement>(`[data-contact="${k}"] a`)!.click();
-    await t.until(() => location.hash === `#/node/${k}` && t.query('mc-node-admin-page') && t.query('[data-field="password"]'), 5000, 'admin page');
+    await t.until(() => location.hash === `#/node/${k}` && t.query('mc-node-page')?.dataset['activeTab'] === 'info', 5000, 'node page (Info)');
+    await t.click('[data-tab="overview"]');
+    await t.until(() => location.hash === `#/node/${k}/overview` && t.query('[data-field="password"]'), 5000, 'admin overview');
     await expect.poll(() => t.query('[data-field="name"]')?.textContent, { timeout: 3000 }).toBe('Hilltop Repeater');
     expect(t.query('[data-field="type"]')!.textContent).toBe('Repeater');
     await login(t, 'password');
@@ -58,7 +60,7 @@ describe('node admin page', () => {
 
   it('shows an error for a wrong password', async () => {
     const t = await connected();
-    await t.go(`/node/${key(t, 'repeater')}`, '[data-field="password"]');
+    await t.go(`/node/${key(t, 'repeater')}/overview`, '[data-field="password"]');
     // the client arms the timeout when the device answers SEND_LOGIN with SENT
     let sent = false;
     t.app.connection.client.value!.events.on('frame', (f) => {
@@ -76,7 +78,7 @@ describe('node admin page', () => {
   it('runs a CLI command and shows the reply in the transcript', async () => {
     const t = await connected();
     const k = key(t, 'repeater');
-    await t.go(`/node/${k}`, '[data-field="password"]');
+    await t.go(`/node/${k}/overview`, '[data-field="password"]');
     await login(t, 'password');
     await t.until(() => t.app.remoteAdmin.node(k).isAdmin.value, 8000, 'admin');
     await t.go(`/node/${k}/cli`, '[data-field="cli-input"]');
@@ -135,7 +137,7 @@ describe('node admin page', () => {
   it('graphs repeater battery from status reports (hollow) and telemetry (filled)', async () => {
     const t = await connected();
     const k = key(t, 'repeater');
-    await t.go(`/node/${k}`, '[data-field="password"]');
+    await t.go(`/node/${k}/overview`, '[data-field="password"]');
     await login(t, 'password');
     await t.until(() => t.query('[data-stat="battery"]'), 8000, 'status cards');
     await t.go(`/node/${k}/telemetry`, '[data-action="refresh-telemetry"]');
@@ -164,15 +166,20 @@ describe('node admin page', () => {
     expect(hop.querySelector('[data-field="snr"]')!.textContent).toBe('8 dB');
   });
 
-  it('logs in to the room server as guest and links to the room chat', async () => {
+  it('logs in to the room server as guest and shows the room chat in its Messages tab', async () => {
     const t = await connected();
     const k = key(t, 'room');
-    await t.go(`/node/${k}`, '[data-field="password"]');
+    await t.go(`/node/${k}/overview`, '[data-field="password"]');
     expect(t.query('[data-field="type"]')!.textContent).toBe('Room server');
     await login(t, '');
     await t.until(() => t.query('[data-field="login-state"]')?.textContent?.includes('guest'), 8000, 'guest login');
     await t.until(() => t.query('[data-stat="posted"]'), 8000, 'room status');
-    await t.go(`/node/${k}/messages`, '[data-action="open-chat"]');
-    expect(t.query<HTMLAnchorElement>('[data-action="open-chat"]')!.getAttribute('href')).toBe(`#/chat/${k}`);
+    // the Messages tab is the room chat itself, without the login hint once logged in
+    expect(t.query<HTMLAnchorElement>('[data-tab="messages"]')!.getAttribute('href')).toBe(`#/node/${k}/messages`);
+    await t.click('[data-tab="messages"]');
+    await t.until(() => location.hash === `#/node/${k}/messages` && t.query('[data-field="composer"]'), 5000, 'room chat');
+    expect(t.query('mc-chat-page')!.hasAttribute('embedded')).toBe(true);
+    expect(t.query('[data-action="open-chat"]')).toBeNull();
+    expect(t.query('[data-field="room-login-hint"]')).toBeNull();
   });
 });

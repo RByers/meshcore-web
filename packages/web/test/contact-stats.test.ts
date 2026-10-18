@@ -50,15 +50,14 @@ describe('contact Stats tab', () => {
     await t.app.packetStats.settled();
     expect(t.app.packetStats.forContact(alice).value.from).toHaveLength(4);
 
-    location.hash = `#/contact/${alice}`;
-    await t.until(() => t.query('[data-tab="stats"]'), 5000, 'stats tab');
-    const info = t.query('mc-contact-info-page')!;
+    location.hash = `#/node/${alice}`;
+    await t.until(() => t.query('[data-tab="stats"]') && t.query('[data-field="key"]'), 5000, 'stats tab');
+    expect(t.query('mc-node-page')).not.toBeNull();
     expect(t.query('[data-tab="info"]')!.getAttribute('aria-selected')).toBe('true');
-    expect(t.query('[data-field="key"]')).not.toBeNull();
+    expect(t.query('[data-tab="stats"]')!.getAttribute('href')).toBe(`#/node/${alice}/stats`);
 
     await t.click('[data-tab="stats"]');
-    await (info as unknown as { updateComplete: Promise<unknown> }).updateComplete;
-    expect(t.query('[data-tab="stats"]')!.getAttribute('aria-selected')).toBe('true');
+    await t.until(() => location.hash === `#/node/${alice}/stats` && t.query('[data-tab="stats"]')?.getAttribute('aria-selected') === 'true' && stats(t), 3000, 'stats tab selected');
     expect(t.query('[data-field="key"]')).toBeNull();
     const el = stats(t);
     expect(el).not.toBeNull();
@@ -146,7 +145,7 @@ describe('contact Stats tab', () => {
     await t.app.connection.capture!.idle();
     await t.app.packetStats.settled();
     const carol = toHex(t.emulatorScenario().keys.carol);
-    location.hash = `#/contact/${carol}`;
+    location.hash = `#/node/${carol}`;
     await t.click('[data-tab="stats"]');
     await t.until(() => stats(t), 3000, 'stats element');
     await stats(t).updateComplete;

@@ -4,7 +4,7 @@
  *   import { registerPage } from '../router.js';
  *   import './contacts-page.js'; // defines <mc-contacts-page>
  *   registerPage({ path: '/contacts', title: 'Contacts', icon: '👥', tag: 'mc-contacts-page', order: 20 });
- *   registerPage({ path: '/contacts/:key', title: 'Chat', icon: '💬', tag: 'mc-chat-page', nav: false, requiresConnection: true });
+ *   registerPage({ path: '/channel/:key', title: 'Channel', icon: '#', tag: 'mc-chat-page', nav: false, requiresConnection: true, attrs: { mode: 'channel' } });
  *
  * Registering an existing path replaces it (later registrations win). Page
  * elements receive `.app` (the AppModel) and `.params` (path parameters) properties.

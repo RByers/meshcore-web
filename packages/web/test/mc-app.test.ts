@@ -40,8 +40,13 @@ describe('<mc-app> shell', () => {
       await t.until(() => location.hash === '#/' && t.query('mc-connect-page'), 3000, `redirect from ${path}`);
     }
     expect(t.query('mc-channels-page')).toBeNull();
-    location.hash = '#/nope';
-    await t.until(() => t.text().includes('Page not found'), 3000, 'not found');
+    // /chat/:key and /contact/:key were merged into /node/:key and are gone
+    for (const path of ['/nope', '/chat/aabbcc', '/contact/aabbcc']) {
+      location.hash = '#/';
+      await t.until(() => t.query('mc-connect-page'), 3000, 'connect page');
+      location.hash = `#${path}`;
+      await t.until(() => t.text().includes('Page not found'), 3000, `not found: ${path}`);
+    }
 
     location.hash = '#/';
     await t.until(() => t.query('mc-connect-page'), 3000, 'connect page');

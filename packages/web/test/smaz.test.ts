@@ -33,7 +33,7 @@ describe('SMAZ compression', () => {
     const alice = toHex(s.keys.alice);
     const env = smazEncodeIfSmaller(LONG);
     const sizes = `${utf8Encode(LONG).length} → ${env.length} bytes`;
-    await t.go(`/chat/${alice}`, '[data-field="composer"]');
+    await t.go(`/node/${alice}/messages`, '[data-field="composer"]');
     expect(t.query('[data-action="smaz"]')).toBeNull(); // no composer toggle any more
 
     s.nodes.alice.sendText(s.keys.self, env);
@@ -46,17 +46,17 @@ describe('SMAZ compression', () => {
     // the auto-enable setting is off by default, so receiving does not turn compression on
     expect(t.app.contacts.find(alice)?.smaz).toBeUndefined();
 
-    await t.go(`/contact/${alice}`, '[data-section="smaz"] [data-action="smaz"]');
+    await t.go(`/node/${alice}`, '[data-section="smaz"] [data-action="smaz"]');
     expect(t.query<HTMLInputElement>('[data-action="smaz"]')!.checked).toBe(false);
     await t.click('[data-action="smaz"]');
     await t.until(() => t.app.contacts.find(alice)?.smaz === true, 3000, 'setting stored');
 
     // reopening the contact page shows the stored setting
-    await t.go(`/chat/${alice}`, '[data-field="composer"]');
-    await t.go(`/contact/${alice}`, '[data-section="smaz"] [data-action="smaz"]');
+    await t.go(`/node/${alice}/messages`, '[data-field="composer"]');
+    await t.go(`/node/${alice}`, '[data-section="smaz"] [data-action="smaz"]');
     await t.until(() => t.query<HTMLInputElement>('[data-action="smaz"]')!.checked, 3000, 'checked on reopen');
 
-    await t.go(`/chat/${alice}`, '[data-field="composer"]');
+    await t.go(`/node/${alice}/messages`, '[data-field="composer"]');
     await t.fill('[data-field="composer"]', LONG);
     await t.until(() => t.query('[data-field="bytes"]')!.textContent!.includes(`${160 - env.length} / 160 bytes left (compressed)`), 3000, 'compressed budget');
     await t.click('[data-action="send"]');
@@ -67,7 +67,7 @@ describe('SMAZ compression', () => {
     expect(s.nodes.alice.inbox.at(-1)?.text).toBe(env);
 
     // turning it off stores an explicit false (which also blocks auto-enable)
-    await t.go(`/contact/${alice}`, '[data-section="smaz"] [data-action="smaz"]');
+    await t.go(`/node/${alice}`, '[data-section="smaz"] [data-action="smaz"]');
     await t.until(() => t.query<HTMLInputElement>('[data-action="smaz"]')!.checked, 3000, 'checked');
     await t.click('[data-action="smaz"]');
     await t.until(() => t.app.contacts.find(alice)?.smaz === false, 3000, 'explicit off stored');
@@ -86,7 +86,7 @@ describe('SMAZ compression', () => {
 
     s.nodes.alice.sendText(s.keys.self, smazEncodeIfSmaller(LONG));
     await t.until(() => t.app.contacts.find(alice)?.smaz === true, 5000, 'auto-enabled');
-    await t.go(`/contact/${alice}`, '[data-section="smaz"] [data-action="smaz"]');
+    await t.go(`/node/${alice}`, '[data-section="smaz"] [data-action="smaz"]');
     await t.until(() => t.query<HTMLInputElement>('[data-action="smaz"]')!.checked, 3000, 'shown on the contact page');
 
     await t.go('/settings', 'input[name="smazAutoEnable"]');

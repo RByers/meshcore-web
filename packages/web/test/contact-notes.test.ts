@@ -28,13 +28,13 @@ function noteIn(t: Harness, selector: string): string | undefined {
 }
 
 async function saveNote(t: Harness, key: string, text: string): Promise<void> {
-  await t.go(`/contact/${key}`, '[data-section="note"] [data-field="note-input"]');
+  await t.go(`/node/${key}`, '[data-section="note"] [data-field="note-input"]');
   await t.fill('[data-field="note-input"]', text);
   await t.click('[data-action="save-note"]');
 }
 
 describe('contact notes', () => {
-  it('saves a note on the contact page and shows it after the name in lists, chat and channel senders', async () => {
+  it('saves a note on the node page and shows it after the name in lists, chat and channel senders', async () => {
     const t = await connected();
     const s = t.emulatorScenario();
     const carol = toHex(s.keys.carol);
@@ -50,14 +50,14 @@ describe('contact notes', () => {
     await t.go('/contacts', `[data-contact="${carol}"]`);
     await t.until(() => noteIn(t, `[data-contact="${carol}"] .name`) === NOTE, 3000, 'contacts row note');
 
-    // a DM conversation in /messages and the chat header
+    // a DM conversation in /messages and the Messages tab header
     s.nodes.carol.sendText(s.keys.self, 'hi there');
     await t.until(() => t.app.conversations.items.value.some((c) => c.convType === 'contact' && c.key === carol), 5000, 'conversation');
     await t.go('/messages', `[data-conv="contact:${carol}"]`);
     await t.until(() => noteIn(t, `[data-conv="contact:${carol}"] .name`) === NOTE, 3000, 'conversation note');
-    await t.go(`/chat/${carol}`, '[data-field="title"] a');
-    await t.until(() => noteIn(t, '[data-field="title"]') === NOTE, 3000, 'chat header note');
-    expect(t.query('[data-field="title"] a')!.textContent).toBe('Carol');
+    await t.go(`/node/${carol}/messages`, '[data-field="composer"]');
+    await t.until(() => noteIn(t, '[data-field="header"]') === NOTE, 3000, 'chat header note');
+    expect(t.query('[data-field="header"] [data-field="name"]')!.textContent).toBe('Carol');
 
     // a channel message from her
     const pub = await channelKeyForPsk(publicChannelSecret());
@@ -78,7 +78,7 @@ describe('contact notes', () => {
 
     await t.reload();
     await t.connectEmulator();
-    await t.go(`/contact/${alice}`, '[data-section="note"] [data-field="note-input"]');
+    await t.go(`/node/${alice}`, '[data-section="note"] [data-field="note-input"]');
     await t.until(() => noteIn(t, '[data-field="header"]') === NOTE, 5000, 'note after reload');
     expect(t.query<HTMLInputElement>('[data-field="note-input"]')!.value).toBe(NOTE);
 

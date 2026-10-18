@@ -43,8 +43,8 @@ export function resolveContactRef(ref: string, views: readonly ContactView[]): C
 const CONTACT_TABS: Record<ContactKind, readonly NodeTab[]> = {
   chat: ['info', 'messages', 'stats'],
   room: ['info', 'messages', 'overview', 'telemetry', 'cli', 'tools', 'stats'],
-  repeater: ['info', 'overview', 'telemetry', 'cli', 'tools', 'stats'],
-  sensor: ['info', 'overview', 'telemetry', 'cli', 'tools', 'stats'],
+  repeater: ['info', 'messages', 'overview', 'telemetry', 'cli', 'tools', 'stats'],
+  sensor: ['info', 'messages', 'overview', 'telemetry', 'cli', 'tools', 'stats'],
 };
 
 /** The tabs shown for an identity (null = still resolving: Info only). */
@@ -66,7 +66,10 @@ export function nodeTabFor(id: NodeIdentity | null, requested?: string): NodeTab
   return tabs.find((t) => t === requested) ?? 'info';
 }
 
-/** The tab a list click opens: the conversation for chat and room nodes, else Info. */
+/**
+ * The tab a contacts-list click opens: the conversation for chat and room nodes, else Info.
+ * (A Messages-list click always opens Messages: the user picked a conversation.)
+ */
 export function entryTab(kind: ContactKind): NodeTab {
   return kind === 'chat' || kind === 'room' ? 'messages' : 'info';
 }
@@ -87,11 +90,12 @@ export class NodeModel {
   #lookup: Promise<void> = Promise.resolve();
   #gen = 0;
   readonly #off: () => void;
+  readonly #disposed = signal(false);
 
   /** Stored contacts matching `ref`. */
   readonly #matches: ReadonlySignal<readonly ContactView[]>;
 
-  /** What `ref` names; null while resolving (contacts loading, or heard lookup pending). */
+  /** What `ref` names; null while resolving (store closed, contacts loading, or the first heard lookup pending). */
   readonly identity: ReadonlySignal<NodeIdentity | null>;
   /** {@link nodeTabs} of the identity. */
   readonly tabs: ReadonlySignal<readonly NodeTab[]>;
@@ -107,20 +111,10 @@ export class NodeModel {
 
     this.#matches = computed(() => (this.#valid ? contacts.views.value.filter((v) => v.key.startsWith(this.ref)) : []));
 
-    this.identity = computed((): NodeIdentity | null => {
-      if (!this.#valid) return { kind: 'unknown', ref: this.ref, valid: false };
-      if (!connection.store.value || contacts.loading.value) return null;
-      const matches = this.#matches.value;
-      const first = matches[0];
-      if (matches.length === 1 && first) return { kind: 'contact', key: first.key, contact: first };
-      const heard = this.#heard.value;
-      if (matches.length > 1) return { kind: 'ambiguous', ref: this.ref, contacts: matches, heard: heard ?? [] };
-      if (heard === null) return null;
-      const one = heard[0];
-      if (heard.length === 1 && one) return { kind: 'heard', key: one.key, heard: one };
-      if (heard.length > 1) return { kind: 'ambiguous', ref: this.ref, contacts: [], heard };
-      return { kind: 'unknown', ref: this.ref, valid: true };
-    });
+    // The last identity, so a heard lookup that starts once the contact is gone (after Remove)
+    // keeps showing it instead of flashing "loading": contact → heard / unknown directly.
+    let last: NodeIdentity | null = null;
+    this.identity = computed((): NodeIdentity | null => (last = this.#resolve(last)));
     this.tabs = computed(() => nodeTabs(this.identity.value), { equals: (a, b) => a.length === b.length && a.every((t, i) => t === b[i]) });
     this.canAddContact = computed(() => this.identity.value?.kind === 'heard' && connection.phase.value === 'connected');
 
@@ -143,6 +137,22 @@ export class NodeModel {
         })
         .catch((err: unknown) => console.error('NodeModel:', err));
     });
+  }
+
+  #resolve(last: NodeIdentity | null): NodeIdentity | null {
+    const { connection, contacts } = this.#deps;
+    if (!this.#valid) return { kind: 'unknown', ref: this.ref, valid: false };
+    if (!connection.store.value || contacts.loading.value) return null;
+    const matches = this.#matches.value;
+    const first = matches[0];
+    if (matches.length === 1 && first) return { kind: 'contact', key: first.key, contact: first };
+    const heard = this.#heard.value;
+    if (matches.length > 1) return { kind: 'ambiguous', ref: this.ref, contacts: matches, heard: heard ?? [] };
+    if (heard === null) return last; // lookup pending: null on first load, else what was shown
+    const one = heard[0];
+    if (heard.length === 1 && one) return { kind: 'heard', key: one.key, heard: one };
+    if (heard.length > 1) return { kind: 'ambiguous', ref: this.ref, contacts: [], heard };
+    return { kind: 'unknown', ref: this.ref, valid: true };
   }
 
   /** Resolves once the contacts list, the packet log and any heard lookup have settled. */
@@ -173,8 +183,19 @@ export class NodeModel {
     await this.settled();
   }
 
+  /**
+   * True once disposed (evicted from `AppModel.node`'s cache): the heard lookup no longer follows
+   * the packet log. A view reads it while rendering so eviction re-renders it, and the re-render
+   * re-requests a fresh model with `app.node(ref)`.
+   */
+  get disposed(): ReadonlySignal<boolean> {
+    return this.#disposed;
+  }
+
   dispose(): void {
+    if (this.#disposed.peek()) return;
     this.#off();
     this.#gen++;
+    this.#disposed.value = true;
   }
 }

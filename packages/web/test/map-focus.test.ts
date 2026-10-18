@@ -1,4 +1,4 @@
-/** Issue #13: "Show on map" from a contact's chat / node page focuses it on /map/node/:key. */
+/** Issue #13: "Show on map" from the node page header (any tab) focuses it on /map/node/:key. */
 import { afterEach, describe, expect, it } from 'vitest';
 import { toHex } from '@meshcore-web/core/util/bytes';
 import '../src/mc-app.js';
@@ -24,10 +24,10 @@ async function connected(path?: string): Promise<{ t: Harness; alice: string; re
 }
 
 describe('Show on map (issue #13)', () => {
-  it('chat header links a located contact to the map, which selects and centres it', async () => {
+  it('the node page header on the Messages tab links a located contact to the map, which selects and centres it', async () => {
     const { t, alice } = await connected();
-    location.hash = `#/chat/${alice}`;
-    await t.click('[data-action="show-on-map"]');
+    location.hash = `#/node/${alice}/messages`;
+    await t.click('[data-field="header"] [data-action="show-on-map"]');
     await t.until(() => location.hash === `#/map/node/${alice}`, 3000, 'map route');
     await t.until(() => t.query('[data-card]'), 5000, 'card');
     expect(t.query('#card-title')!.textContent).toBe('Alice');
@@ -38,14 +38,14 @@ describe('Show on map (issue #13)', () => {
     expect(map.lon).toBeCloseTo(-122.33, 6);
     expect(map.zoom).toBeGreaterThanOrEqual(14);
     // the card links back to the contact
-    expect(t.query('[data-card] [data-action="chat"]')!.getAttribute('href')).toBe(`#/chat/${alice}`);
+    expect(t.query('[data-card] [data-action="chat"]')!.getAttribute('href')).toBe(`#/node/${alice}/messages`);
   });
 
   it('is absent for a contact without a location', async () => {
     const { t } = await connected();
     const bob = toHex(t.emulatorScenario().keys.bob);
-    location.hash = `#/chat/${bob}`;
-    await t.until(() => t.query('[data-action="reset-path"]'), 3000, 'chat page');
+    location.hash = `#/node/${bob}/messages`;
+    await t.until(() => t.query('[data-field="header"] [data-field="subtitle"]') && t.query('[data-field="composer"]'), 3000, 'node page');
     expect(t.query('[data-action="show-on-map"]')).toBeNull();
   });
 

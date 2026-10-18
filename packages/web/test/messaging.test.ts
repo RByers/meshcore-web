@@ -6,6 +6,7 @@ import { publicChannelSecret, scenarioKey } from '@meshcore-web/core/emulator';
 import '../src/mc-app.js';
 import '../src/pages/messaging/index.js';
 import { createHarness, type Harness, type HarnessOptions } from '../src/testing/harness.js';
+import { conversationHref } from '../src/pages/messaging/messages-page.js';
 
 let h: Harness | undefined;
 
@@ -45,6 +46,9 @@ describe('messages overview', () => {
     const alice = t.query(`[data-conv="contact:${k.alice}"]`)!;
     expect(alice.textContent).toContain('Hi! Are you on the mesh today?');
     expect(alice.querySelector('.badge')?.getAttribute('data-unread')).toBe('1');
+    // every contact conversation opens on the node page's Messages tab, whatever the kind
+    expect(alice.querySelector('a')?.getAttribute('href')).toBe(`#/node/${k.alice}/messages`);
+    expect(conversationHref({ convType: 'contact', key: 'ab12', icon: 'repeater' })).toBe('#/node/ab12/messages');
     expect(t.text()).toContain('Dave: Good morning everyone');
     await t.until(() => t.query('nav a[data-path="/messages"] .count')?.textContent === '3', 3000, 'nav badge');
     expect(t.query('nav a[data-path="/device"]')).not.toBeNull();
@@ -72,7 +76,7 @@ describe('contacts page', () => {
     expect(alice.querySelector('.badge')!.getAttribute('data-unread')).toBe('1');
     expect(t.query(`[data-contact="${k.repeater}"] [data-field="meta"]`)!.textContent).toContain('direct');
     expect(t.query(`[data-contact="${k.bob}"] [data-field="meta"]`)!.textContent).toContain('flood');
-    expect(t.query<HTMLAnchorElement>(`[data-contact="${k.alice}"] a`)!.getAttribute('href')).toBe(`#/chat/${k.alice}`);
+    expect(t.query<HTMLAnchorElement>(`[data-contact="${k.alice}"] a`)!.getAttribute('href')).toBe(`#/node/${k.alice}/messages`);
     expect(t.query<HTMLAnchorElement>(`[data-contact="${k.repeater}"] a`)!.getAttribute('href')).toBe(`#/node/${k.repeater}`);
 
     await t.fill('[data-field="filter"]', 'repeater');
@@ -130,9 +134,23 @@ describe('contacts page', () => {
     const t = await connected();
     const k = keys(t);
     await t.go(`/node/${k.repeater}`, '[data-field="header"]');
-    const page = t.query('mc-node-admin-page')!.shadowRoot!;
+    await t.until(() => t.query('mc-node-info')?.shadowRoot?.querySelector('[data-field="path"]'), 3000, 'info path');
+    const page = t.query('mc-node-page')!.shadowRoot!;
     expect(page.querySelector('[data-field="name"]')!.textContent).toBe('Hilltop Repeater');
-    expect(page.querySelector('[data-field="path"]')!.textContent!.toLowerCase()).toContain('direct');
+    expect(t.query('mc-node-page')!.dataset['activeTab']).toBe('info');
+    const info = t.query('mc-node-info')!.shadowRoot!;
+    expect(info.querySelector('[data-field="path"]')!.textContent!.toLowerCase()).toContain('direct');
+  });
+
+  it('resets a contact\'s path from the Info tab\'s Contact section', async () => {
+    const t = await connected();
+    const k = keys(t);
+    await t.go(`/node/${k.alice}`, '[data-section="contact"] [data-action="reset-path"]');
+    const path = () => t.query('mc-node-info')?.shadowRoot?.querySelector('[data-field="path"]')?.textContent ?? '';
+    await t.until(() => path().includes('1 hop'), 3000, '1 hop path');
+    await t.click('[data-section="contact"] [data-action="reset-path"]');
+    await t.until(() => path().toLowerCase().includes('flood'), 3000, 'flood path');
+    await t.until(() => t.text().includes('Path reset; the next message floods'), 3000, 'toast');
   });
 });
 
@@ -142,9 +160,9 @@ describe('direct chat', () => {
     const k = keys(t);
     await t.go('/contacts', `[data-contact="${k.alice}"] a`);
     await t.click(`[data-contact="${k.alice}"] a`);
-    await t.until(() => location.hash === `#/chat/${k.alice}` && t.query('mc-chat-page')?.shadowRoot?.querySelector('[data-field="composer"]'), 3000, 'chat page');
+    await t.until(() => location.hash === `#/node/${k.alice}/messages` && t.query('mc-chat-page')?.shadowRoot?.querySelector('[data-field="composer"]'), 3000, 'chat page');
     // the chat loads its contact + history from IndexedDB after the page renders
-    await expect.poll(() => t.query('[data-field="title"]')?.textContent, { timeout: 3000 }).toBe('Alice');
+    await expect.poll(() => t.query('[data-field="name"]')?.textContent, { timeout: 3000 }).toBe('Alice');
     await expect.poll(() => t.queryAll('.msg [data-field="text"]').map((e) => e.textContent), { timeout: 3000 }).toContain('Hi! Are you on the mesh today?');
 
     const statuses: MessageStatus[] = [];
@@ -164,20 +182,25 @@ describe('direct chat', () => {
     await t.until(() => t.queryAll('.msg[data-dir="in"] [data-field="text"]').some((e) => e.textContent === 'pong'), 8000, 'pong');
   });
 
-  it('on a phone-width screen the DM header wraps its actions below the name instead of squeezing it', async () => {
+  it('on a phone-width screen the node header wraps its map link below the name instead of squeezing it', async () => {
     await page.viewport(390, 760);
     try {
       const t = await connected();
       const k = keys(t);
-      await t.go(`/chat/${k.alice}`, '[data-field="header-actions"] [data-action="reset-path"]');
-      const who = t.query('.who')!.getBoundingClientRect();
-      const actions = t.query('[data-field="header-actions"]')!.getBoundingClientRect();
-      const header = t.query('header.chat-head')!.getBoundingClientRect();
+      await t.go(`/node/${k.alice}/messages`, '[data-field="header"] [data-action="show-on-map"]');
+      await t.until(() => t.query('[data-field="subtitle"]') && t.query('[data-field="composer"]'), 3000, 'subtitle and composer');
+      const who = t.query('.head-main')!.getBoundingClientRect();
+      const map = t.query('[data-action="show-on-map"]')!.getBoundingClientRect();
+      const header = t.query('[data-field="header"]')!.getBoundingClientRect();
       expect(who.width).toBeGreaterThan(180);
-      expect(actions.top).toBeGreaterThanOrEqual(who.bottom - 1);
-      expect(actions.right).toBeLessThanOrEqual(header.right + 1);
+      expect(map.top).toBeGreaterThanOrEqual(who.bottom - 1);
+      expect(map.right).toBeLessThanOrEqual(header.right + 1);
       // The subtitle stays a couple of lines rather than one word per line.
       expect(t.query('[data-field="subtitle"]')!.getBoundingClientRect().height).toBeLessThan(60);
+      // the composer stays on screen below the header and tabs
+      const composer = t.query('[data-field="composer"]')!.getBoundingClientRect();
+      expect(composer.bottom).toBeLessThanOrEqual(760);
+      expect(composer.top).toBeGreaterThan(header.bottom);
     } finally {
       await page.viewport(1280, 800);
     }
@@ -186,7 +209,7 @@ describe('direct chat', () => {
   it('Enter sends, Shift+Enter does not, and the counter flags overflow', async () => {
     const t = await connected();
     const k = keys(t);
-    await t.go(`/chat/${k.alice}`, '[data-field="composer"]');
+    await t.go(`/node/${k.alice}/messages`, '[data-field="composer"]');
     await t.fill('[data-field="composer"]', 'x'.repeat(161));
     expect(t.query('[data-field="bytes"]')!.hasAttribute('data-over')).toBe(true);
     expect(t.query<HTMLButtonElement>('[data-action="send"]')!.disabled).toBe(true);
@@ -201,7 +224,7 @@ describe('direct chat', () => {
   it('replies with "@[name] text" and shows the quote', async () => {
     const t = await connected();
     const k = keys(t);
-    await t.go(`/chat/${k.alice}`, '.msg[data-dir="in"] [data-action="reply"]');
+    await t.go(`/node/${k.alice}/messages`, '.msg[data-dir="in"] [data-action="reply"]');
     await t.click('.msg[data-dir="in"] [data-action="reply"]');
     await t.until(() => t.query('[data-field="reply-banner"]'), 2000, 'reply banner');
     expect(t.query('[data-field="bytes"]')!.textContent).toContain(`/ ${160 - '@[Alice] '.length}`);
@@ -218,7 +241,7 @@ describe('direct chat', () => {
       x.emulatorScenario().nodes.bob.config.ackPolicy = 'never';
     });
     const k = keys(t);
-    await t.go(`/chat/${k.bob}`, '[data-field="composer"]');
+    await t.go(`/node/${k.bob}/messages`, '[data-field="composer"]');
     const statuses: MessageStatus[] = [];
     t.app.connection.store.value!.events.on('message', (e) => {
       if (e.type !== 'delete' && e.record.direction === 'out') statuses.push(e.record.status);
@@ -339,7 +362,7 @@ describe('unread and persistence', () => {
   it('keeps messages and their status across a reload', async () => {
     const t = await connected();
     const k = keys(t);
-    await t.go(`/chat/${k.alice}`, '[data-field="composer"]');
+    await t.go(`/node/${k.alice}/messages`, '[data-field="composer"]');
     await t.fill('[data-field="composer"]', 'ping');
     await t.click('[data-action="send"]');
     await t.until(() => t.query('.msg[data-dir="out"][data-status="delivered"]'), 8000, 'delivered');
@@ -349,7 +372,7 @@ describe('unread and persistence', () => {
     await t.reload();
     await t.click('[data-connect="emulator"]');
     await t.until(() => t.app.connection.phase.value === 'connected', 5000, 'reconnected');
-    await t.go(`/chat/${k.alice}`, '.msg[data-dir="out"]');
+    await t.go(`/node/${k.alice}/messages`, '.msg[data-dir="out"]');
     const texts = t.queryAll('.msg [data-field="text"]').map((e) => e.textContent);
     expect(texts).toEqual(['Hi! Are you on the mesh today?', 'ping', 'pong']);
     expect(t.query('.msg[data-dir="out"]')!.dataset['status']).toBe('delivered');
@@ -368,7 +391,7 @@ describe('"New messages" divider', () => {
     const t = await connected();
     const k = keys(t);
     const s = t.emulatorScenario();
-    await t.go(`/chat/${k.alice}`, '[data-field="unread-divider"]');
+    await t.go(`/node/${k.alice}/messages`, '[data-field="unread-divider"]');
     expect(afterDivider(t)).toEqual({ count: 1, text: 'Hi! Are you on the mesh today?' });
     await t.until(() => t.app.unread.totals.value.contacts === 1, 3000, 'Alice read');
     expect(afterDivider(t).count).toBe(1); // marking read does not remove it
@@ -404,11 +427,11 @@ describe('"New messages" divider', () => {
       await t.until(() => t.app.chat('contact', k.bob).unread.value === n, 5000, `${n} unread`);
     };
     await inject(0, 20);
-    await t.go(`/chat/${k.bob}`, '[data-field="unread-divider"]');
+    await t.go(`/node/${k.bob}/messages`, '[data-field="unread-divider"]');
     await t.until(() => t.app.chat('contact', k.bob).unread.value === 0, 3000, 'read');
     await t.go('/contacts', `[data-contact="${k.bob}"]`);
     await inject(20, 20);
-    await t.go(`/chat/${k.bob}`, '[data-field="unread-divider"]');
+    await t.go(`/node/${k.bob}/messages`, '[data-field="unread-divider"]');
     expect(afterDivider(t)).toEqual({ count: 1, text: 'msg 20' });
     const log = t.query('.log')!;
     await t.until(() => {

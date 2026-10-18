@@ -1,5 +1,6 @@
 /**
- * One conversation: `/chat/:key` (DM, mode="contact") or `/channel/:key` (mode="channel").
+ * One conversation: `/channel/:key` (mode="channel"), or a DM (mode="contact") embedded in the
+ * node page's Messages tab (`/node/:key/messages`, `embedded`: no header — the node page shows it).
  * Bubbles with status for outgoing messages, auto-scroll with a "new messages" affordance,
  * composer with byte counter (Enter sends, Shift+Enter newline) and replies. A "New messages"
  * divider marks where the unread messages began when the conversation was opened
@@ -10,25 +11,27 @@ import { parseReply, receivedSignal, type ChatModel } from '@meshcore-web/core/a
 import type { ConversationType, MessageRecord } from '@meshcore-web/core/store';
 import { smazSizes } from '@meshcore-web/core/util/smaz';
 import { AppElement } from '../../app-context.js';
-import { formatDuration, formatRelative, formatSnr, formatTime } from '../../format.js';
+import { formatDuration, formatSnr, formatTime } from '../../format.js';
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
 import { avatar, listStyles } from './common.js';
-import { contactNote, pathLabelView } from '../../components/node-link.js';
+import { contactNote, nodeHref, pathLabelView } from '../../components/node-link.js';
 import { LongPress, reactionChipsTemplate, reactionStyles, type McReactionPicker } from './reactions.js';
-
-/** Joins strings / templates with " · ". */
-function dotJoin(parts: readonly (string | TemplateResult)[]): TemplateResult {
-  return html`${parts.map((p, i) => html`${i ? ' · ' : ''}${p}`)}`;
-}
 
 /** Distance from the bottom (px) still counted as "at the bottom". */
 const STICKY_PX = 48;
 
 export class McChatPage extends AppElement {
-  static override properties = { params: { attribute: false }, mode: { type: String } };
+  static override properties = { params: { attribute: false }, mode: { type: String }, embedded: { type: Boolean, reflect: true } };
   declare params: Readonly<Record<string, string>> | undefined;
   declare mode: string | null;
+  /** Inside another page (the node page's Messages tab): no header, fills the parent's flex box. */
+  declare embedded: boolean;
+
+  constructor() {
+    super();
+    this.embedded = false;
+  }
 
   static override styles = [
     shared,
@@ -40,6 +43,11 @@ export class McChatPage extends AppElement {
         flex-direction: column;
         height: calc(100dvh - 6.5rem);
         min-height: 20rem;
+      }
+      :host([embedded]) {
+        height: auto;
+        flex: 1;
+        min-height: 0;
       }
       /* On narrow screens the actions wrap onto their own row instead of squeezing the name/subtitle. */
       header.chat-head {
@@ -54,16 +62,6 @@ export class McChatPage extends AppElement {
         text-decoration: none;
         font-size: 1.2rem;
         padding: 4px 8px;
-      }
-      header .map-link {
-        display: inline-flex;
-        align-items: center;
-        min-height: 2.5rem;
-        padding: 0.5em 0.8em;
-        border: 1px solid var(--mc-border);
-        border-radius: 8px;
-        text-decoration: none;
-        white-space: nowrap;
       }
       header .who {
         flex: 1 1 12rem;
@@ -142,13 +140,6 @@ export class McChatPage extends AppElement {
         font: inherit;
         font-size: 0.8rem;
         cursor: pointer;
-      }
-      header h2 a {
-        color: inherit;
-        text-decoration: none;
-      }
-      header h2 a:hover {
-        text-decoration: underline;
       }
       .bubble {
         padding: 6px 10px;
@@ -477,15 +468,10 @@ export class McChatPage extends AppElement {
     this.renderRoot.querySelector<HTMLTextAreaElement>('[data-field="composer"]')?.focus();
   }
 
-  async #headerAction(action: 'reset-path' | 'mute'): Promise<void> {
+  async #toggleMute(): Promise<void> {
     try {
-      if (action === 'reset-path') {
-        await this.app.contacts.resetPath(this.key);
-        this.app.notifications.info('Path reset; the next message floods');
-      } else {
-        const ch = this.#chat?.channel.peek();
-        if (ch) await this.app.channels.setMuted(ch.key, !ch.muted);
-      }
+      const ch = this.#chat?.channel.peek();
+      if (ch) await this.app.channels.setMuted(ch.key, !ch.muted);
     } catch (err) {
       this.app.notifications.error('Action failed', err);
     }
@@ -552,13 +538,6 @@ export class McChatPage extends AppElement {
     </li>`;
   }
 
-  /** "Show on map" for a contact with a location or an approximate one (issues #13, #7). */
-  #mapLink(chat: ChatModel) {
-    const c = chat.contact.value;
-    if (!c || !this.app.map.hasMarker(c.key)) return nothing; // a location, or an approximate one (issue #7)
-    return html`<a class="map-link" data-action="show-on-map" href=${hrefFor(`/map/node/${c.key}`)} title="Show on map" aria-label="Show on map"><span aria-hidden="true">🗺 Map</span></a>`;
-  }
-
   /**
    * How an incoming message arrived (issue #11): hop count or the node-name chain (issue #3),
    * a link to the path view (issue #2),
@@ -586,7 +565,7 @@ export class McChatPage extends AppElement {
     const name = m.senderName ?? 'unknown';
     const target = this.app.contacts.senderTarget(m.senderName);
     if (target.kind === 'contact') {
-      return html`<a class="sender" data-field="sender" data-sender="contact" href=${hrefFor(`/contact/${target.key}`)} title="Contact info">${name}${contactNote(this.app.contacts.noteFor(target.key))}</a>`;
+      return html`<a class="sender" data-field="sender" data-sender="contact" href=${nodeHref(target.key)} title="Node details">${name}${contactNote(this.app.contacts.noteFor(target.key))}</a>`;
     }
     if (target.kind === 'search') {
       return html`<button
@@ -604,20 +583,33 @@ export class McChatPage extends AppElement {
     return html`<span class="sender" data-field="sender" data-sender="unknown">${name}</span>`;
   }
 
-  #subtitle(chat: ChatModel) {
-    if (this.convType === 'channel') {
-      const ch = chat.channel.value;
-      if (!ch) return 'Channel';
-      return `${ch.deviceIndex !== null ? `slot ${ch.deviceIndex}` : 'not on radio'}${ch.muted ? ' · muted' : ''}`;
-    }
-    const v = this.app.contacts.view(this.key);
-    const c = chat.contact.value;
-    if (!c) return '';
-    const path = v ? this.app.contacts.outPathLabel(v, this.app.appSettings.pathNames.value) : undefined;
-    const parts: (string | TemplateResult)[] = [path ? pathLabelView(path, v?.path.kind === 'hops' ? { kind: 'contact', key: this.key } : null, this.#notes) : ''];
-    if (v?.directSnr !== undefined) parts.push(`direct SNR ${formatSnr(v.directSnr)}`);
-    if (c.lastSeen) parts.push(`seen ${formatRelative(c.lastSeen, this.app.clock.now())}`);
-    return dotJoin(parts);
+  /** Channel subtitle (DMs are embedded in the node page, which shows the contact's own). */
+  #subtitle(chat: ChatModel): string {
+    if (this.convType !== 'channel') return '';
+    const ch = chat.channel.value;
+    if (!ch) return 'Channel';
+    return `${ch.deviceIndex !== null ? `slot ${ch.deviceIndex}` : 'not on radio'}${ch.muted ? ' · muted' : ''}`;
+  }
+
+  #header(chat: ChatModel, kind: Parameters<typeof avatar>[0]): TemplateResult | typeof nothing {
+    if (this.embedded) return nothing;
+    const channel = this.convType === 'channel';
+    const ch = channel ? chat.channel.value : null;
+    return html`<header class="chat-head">
+      <a class="back" href=${hrefFor(channel ? '/channels' : '/contacts')} aria-label="Back">←</a>
+      ${avatar(kind)}
+      <div class="who">
+        <h2 data-field="title">${chat.title.value}</h2>
+        <div class="muted" data-field="subtitle">${this.#subtitle(chat)}</div>
+      </div>
+      ${channel
+        ? html`<div class="actions" data-field="header-actions">
+            <button data-action="mute" aria-pressed=${ch?.muted ? 'true' : 'false'} @click=${() => void this.#toggleMute()}>
+              ${ch?.muted ? '🔕 Muted' : '🔔 Mute'}
+            </button>
+          </div>`
+        : nothing}
+    </header>`;
   }
 
   override render() {
@@ -636,24 +628,7 @@ export class McChatPage extends AppElement {
     const budget = chat.budget(this.#draft.trim());
     const canSend = this.app.connection.connected.value && (!channel || ch?.deviceIndex !== null);
     return html`
-      <header class="chat-head">
-        <a class="back" href=${hrefFor(channel ? '/channels' : '/contacts')} aria-label="Back">←</a>
-        ${avatar(kind)}
-        <div class="who">
-          <h2 data-field="title">${channel
-              ? chat.title.value
-              : html`<a href=${hrefFor(`/contact/${this.key}`)} data-action="contact-info" title="Contact info">${chat.title.value}</a>${contactNote(this.app.contacts.noteFor(this.key))}`}</h2>
-          <div class="muted" data-field="subtitle">${this.#subtitle(chat)}</div>
-        </div>
-        <div class="actions" data-field="header-actions">
-          ${channel
-            ? html`<button data-action="mute" aria-pressed=${ch?.muted ? 'true' : 'false'} @click=${() => void this.#headerAction('mute')}>
-                ${ch?.muted ? '🔕 Muted' : '🔔 Mute'}
-              </button>`
-            : html`${this.#mapLink(chat)}<button data-action="path" @click=${() => (location.hash = hrefFor(`/path/${this.key}`))}>Path…</button>
-                <button data-action="reset-path" @click=${() => void this.#headerAction('reset-path')}>Reset path</button>`}
-        </div>
-      </header>
+      ${this.#header(chat, kind)}
       <div class="log-wrap">
         <div class="log" @scroll=${() => this.#onScroll()}>
           ${chat.hasMore.value

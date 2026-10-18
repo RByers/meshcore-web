@@ -98,7 +98,7 @@ made on `main`. Phases are sequential unless marked parallelisable.
 | 7 | Contacts & direct messages | Contact list (type icons, last seen, path, SNR), add/remove/share/reset path, DM chat with status (pending/sent/delivered/failed), retries, unread counts, message persistence | done |
 | 8 | Channels | Channel list from device (GET_CHANNEL), add/edit (name + PSK / hashtag channels), group chat with "sender: text" convention, reply/reaction conventions from `feature-inventory.md` | done |
 | 9 | Packet log & inspector | Packet log view with filters (direction, type, node, time), live tail, per-packet inspector showing hex dump with the annotation tree, decrypted view when key known, frame-level log of host↔device traffic, export/import JSON | done; DM text in rows (with the opt-in radio key) added for issue #10; sent (tx) entries for issue #9, with their send outcome (pending / sent / failed / confirmed) and a one-time backfill from the frame log |
-| 9b | Packet stats | *Stats* tab on `/packets` and on contact pages (docs/packet-stats.md): per-source counts, packets over time (SNR / RSSI / distance / hops), packet rate per channel, LoRa airtime utilisation, hop distribution, per-contact paths / signal | done: core `PacketStatsModel` (`app.packetStats`, `forContact`) + `airtime.ts`; d3-backed chart elements (`packages/web/src/charts`); `/packets` *Stats* tab (`<mc-packet-stats>`); contact *Info* / *Stats* tabs (`<mc-contact-stats>`); the Packets and Stats tabs share one filter (owned by the packet log: drill-downs, log filters and the date range carry across tabs, §6) |
+| 9b | Packet stats | *Stats* tab on `/packets` and on node pages (docs/packet-stats.md): per-source counts, packets over time (SNR / RSSI / distance / hops), packet rate per channel, LoRa airtime utilisation, hop distribution, per-contact paths / signal | done: core `PacketStatsModel` (`app.packetStats`, `forContact`) + `airtime.ts`; d3-backed chart elements (`packages/web/src/charts`); `/packets` *Stats* tab (`<mc-packet-stats>`); node page *Stats* tab (`<mc-contact-stats>`); the Packets and Stats tabs share one filter (owned by the packet log: drill-downs, log filters and the date range carry across tabs, §6) |
 | 10 | Repeater / room / sensor admin | Login, status, telemetry, CLI (send command text, show replies), trace path, path discovery, neighbours; room-server posts | done |
 | 11 | Device settings | Name, lat/lon, radio params (freq/bw/sf/cr/tx power), advert interval/flood settings, other params, tuning, time sync, battery, stats, export/import private key, reboot/factory reset, manual-add / auto-add flags, advert send (flood / zero-hop) | done |
 | 12 | Map & polish | Node map (contacts with location, own location), PWA manifest + offline shell, keyboard/accessibility pass, settings export, README user guide, release build | done (see Phase 12 notes; settings export not done) |
@@ -155,18 +155,33 @@ rewritten `README.md`, `LICENSE`.
 message meta shows the hop count and the SNR only for zero-hop messages (last-hop SNR in the
 tooltip; 0xFF path_len reads "direct route"). The capture pipeline records a per-contact direct
 signal (`ContactRecord.directSnr` / `directSnrAt`, local fields kept across syncs) from zero-hop
-adverts and messages, shown as "direct SNR" in the contacts list, chat header and node page.
+adverts and messages, shown as "direct SNR" in the contacts list, the node page's Messages header and its Info tab.
 
-**Contact info (issue #12).** `/contact/:key` shows a contact's type, key, path, direct signal,
-last seen, location and notes, with links to chat / node / map. Channel sender names link to it
+**Node page (issue #12; merged contact info, chat and node admin).** `/node/:key` and
+`/node/:key/:tab` (`mc-node-page`, core `app.node(ref)` / `NodeModel`) is the one page for any
+node: a stored contact, a node only heard advertising (newest ADVERT in the packet log), a key
+prefix or path hash matching several nodes (candidate list), or nothing known. `:key` may be a
+full key, a prefix or a 1-byte hash. Tabs, Info first and the default: *Info*, *Messages* (every
+contact: the DM / room chat embedded; a repeater's or sensor's DMs hold its CLI replies), *Overview* / *Telemetry* / *CLI* / *Tools*
+(repeater, room and sensor admin) and *Stats*; an unknown or hidden tab falls back to Info. The
+header (every tab) shows name + note, type, short key, login state and a "Map" link; on Messages
+it adds the path · direct SNR · last seen line. *Info* shows key (or hash), path, direct signal,
+last seen / heard advert, location, packet activity and a link to the packet log; for contacts a
+*Contact* section holds the note, SMAZ compression, favourite / not-on-radio flags, *Path…* and
+*Reset path*, and a two-click *Remove contact* (the page stays, as a heard / unknown node). A
+heard node with an advert gets *Add contact* (`ContactsModel.addFromAdvert`, CMD_ADD_UPDATE_CONTACT
+so it works in manual-add mode). Contact list / map clicks open chat and room contacts on Messages,
+others on Info; a Messages-list conversation always opens on Messages. There are no `/contact/` or `/chat/` routes (they 404); `/channel/:key`
+is unchanged. Path hops that resolve to one contact link to its node page; unknown or ambiguous
+hop hashes link to `/node/<hash>` (`data-hash-link`). Channel sender names link to the node page
 when exactly one contact has the name (several → the contacts list searched by name; core
-`resolveSenderName`, `ContactsModel.senderTarget` / `showByName`); the DM header name links too.
+`resolveSenderName`, `ContactsModel.senderTarget` / `showByName`).
 
 **Show on map (issue #13).** `/map/node/:key` (same page, nav highlights Map via the route's
 `navParent`) calls `MapModel.focus(key)`, which selects the contact's marker and re-enables a
-kind / age filter that would hide it; the page centres on it at zoom ≥ 14. The chat header
-(contacts) and the node page header show a "Map" link when the contact has a location; the map's
-details card links back to the chat / node page.
+kind / age filter that would hide it; the page centres on it at zoom ≥ 14. The node page header
+shows a "Map" link when the node has a location; the map's details card links back to the node
+page (its Messages tab for chat contacts).
 
 **Path views (issue #2).** Every "N hops" label (message meta in DM / channel chats, the chat
 subtitle and node header path, the map card, packet log rows and the packet inspector's Path
@@ -187,8 +202,8 @@ packet-log search.
 **Path as node names (issue #3).** App setting `AppSettingsModel.pathNames` ("Show path as node
 names", Settings page): paths render as "Alice > Bob > a3" (hop hash → contact via
 `path-resolver.ts`, repeaters / rooms preferred, unknown → hex, shared hash → "a3?" with the
-candidates in the tooltip) in message meta, the chat header, contacts list, contact info, node
-page and packet log; still wrapped in the hops link. The capture pipeline matches each incoming
+candidates in the tooltip) in message meta, the contacts list, the node page (Messages header,
+Info, admin path / trace) and packet log; still wrapped in the hops link. The capture pipeline matches each incoming
 flood message to its LOG_RX_DATA packet (`rx-path-correlator.ts`) and stores the path bytes in
 `MessageRecord.path` (optional, best effort).
 
@@ -216,7 +231,7 @@ is a placeholder until the repository is published.
 
 ## Contact paths (issue #6)
 
-`/path/:key` (from the chat header "Path…" and the contacts menu "Set path…") shows the
+`/path/:key` (from "Path…" in the node page's Info *Contact* section and the contacts menu "Set path…") shows the
 contact's current path with hops resolved to repeater / room names (hop hash = public key
 prefix; ambiguous hops show "A | B", unknown ones the hex), a hop-list editor (searchable
 repeater list with add / reorder / remove, or tap repeaters on a `<mc-tile-map>`), "Use

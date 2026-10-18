@@ -37,6 +37,7 @@ import {
 import { packetTypeNameDescription } from '@meshcore-web/core/packet';
 import { AppElement } from '../../app-context.js';
 import { hrefFor } from '../../router.js';
+import { nodeHref } from '../../components/node-link.js';
 import { shared } from '../../styles.js';
 import { formatDuration } from '../../format.js';
 import {
@@ -183,7 +184,7 @@ export function sourceItems(s: SourceStats, active?: string): BarItem[] {
       value: count,
       key,
       selected: key === active,
-      ...(node.resolved && node.key && !node.self ? { href: hrefFor(`/contact/${node.key}`) } : {}),
+      ...(node.resolved && node.key && !node.self ? { href: nodeHref(node.key) } : {}),
       title: `${formatNumber(bytes, 0)} B${node.resolved ? '' : ' (not uniquely resolved)'}`,
     };
   });

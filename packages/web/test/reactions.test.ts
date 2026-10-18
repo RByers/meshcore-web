@@ -31,7 +31,7 @@ describe('emoji reactions', () => {
     const t = await connected();
     const s = t.emulatorScenario();
     const alice = toHex(s.keys.alice);
-    await t.go(`/chat/${alice}`, '.msg[data-dir="in"]');
+    await t.go(`/node/${alice}/messages`, '.msg[data-dir="in"]');
 
     // only incoming messages offer the react button
     const incoming = t.query('.msg[data-dir="in"]')!;

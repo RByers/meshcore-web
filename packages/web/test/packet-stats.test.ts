@@ -80,7 +80,7 @@ describe('/packets Stats tab', () => {
 
     const alice = t.app.contacts.contacts.value.find((c) => c.name === 'Alice')!;
     const links = inChart(el, 'sources', 'mc-bar-chart', 'a');
-    expect(links.some((a) => a.getAttribute('href') === `#/contact/${alice.key}`)).toBe(true);
+    expect(links.some((a) => a.getAttribute('href') === `#/node/${alice.key}`)).toBe(true);
   });
 
   it('switches the dot plot y axis and colouring', async () => {

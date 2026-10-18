@@ -83,6 +83,9 @@ export function createEmulatorTransportFactory(
   return Object.assign(f, { scenario: get });
 }
 
+/** How many {@link NodeModel}s `AppModel.node` keeps (most recently requested first). */
+export const NODE_CACHE_SIZE = 16;
+
 export class AppModel {
   /** Host time + timers shared by every model (UI code reads `app.clock.now()`). */
   readonly clock: Clock;
@@ -281,13 +284,27 @@ export class AppModel {
     return m;
   }
 
-  /** The node page model for a node reference (key, key prefix or hash; cached per normalised ref). */
+  /**
+   * The node page model for a node reference (key, key prefix or hash; cached per normalised ref).
+   * The cache keeps the {@link NODE_CACHE_SIZE} most recently requested models and disposes the
+   * rest: a non-contact model re-scans the packet log on every logged packet, so an unbounded cache
+   * would grow that work forever. Callers must not hold a model across renders — re-request it
+   * (the node page calls this on every render) and read the model's `disposed` signal while
+   * rendering, so a view still showing an evicted model re-renders and picks up a fresh one.
+   */
   node(ref: string): NodeModel {
     const id = normalizeNodeRef(ref) ?? ref.trim().toLowerCase();
     let m = this.#nodes.get(id);
-    if (!m) {
+    if (m) {
+      this.#nodes.delete(id); // re-insert: Map order is the LRU order, most recent last
+    } else {
       m = new NodeModel(id, { connection: this.connection, contacts: this.contacts, packetLog: this.packetLog });
-      this.#nodes.set(id, m);
+    }
+    this.#nodes.set(id, m);
+    for (const [k, old] of this.#nodes) {
+      if (this.#nodes.size <= NODE_CACHE_SIZE) break;
+      this.#nodes.delete(k);
+      old.dispose();
     }
     return m;
   }

@@ -9,7 +9,8 @@ import { concatBytes, fromHex, toHex } from '../util/bytes.js';
 import { scenarioKey } from '../emulator/scenarios.js';
 import { connectedApp, type ConnectedApp } from './testing.js';
 import { entryTab, nodeTabFor, nodeTabs, normalizeNodeRef, resolveContactRef, NODE_TAB_ORDER, type NodeIdentity } from './node-model.js';
-import { when } from './signal.js';
+import { effect, when } from './signal.js';
+import { NODE_CACHE_SIZE } from './app-model.js';
 
 interface AdvertInit {
   name: string;
@@ -34,6 +35,11 @@ async function hearAdvert(t: ConnectedApp, key: string, a: AdvertInit, snr = 6) 
   return t.store.packets.append({ direction: 'rx', source: 'logRxData', bytes, ts: t.clock.now(), snr });
 }
 
+/** The identity kinds seen, consecutive repeats collapsed (null kept as null). */
+function kindRuns(seen: ReadonlyArray<NodeIdentity | null>): Array<string | null> {
+  return seen.map((v) => v?.kind ?? null).filter((k, i, a) => i === 0 || k !== a[i - 1]);
+}
+
 async function resolved(t: ConnectedApp, ref: string): Promise<NodeIdentity> {
   const node = t.app.node(ref);
   await node.settled();
@@ -52,8 +58,8 @@ describe('node reference helpers', () => {
     const view = (typeName: 'chat' | 'room' | 'repeater' | 'sensor') => ({ kind: 'contact', key: 'aa', contact: { typeName } }) as unknown as NodeIdentity;
     expect(nodeTabs(view('chat'))).toEqual(['info', 'messages', 'stats']);
     expect(nodeTabs(view('room'))).toEqual(['info', 'messages', 'overview', 'telemetry', 'cli', 'tools', 'stats']);
-    expect(nodeTabs(view('repeater'))).toEqual(['info', 'overview', 'telemetry', 'cli', 'tools', 'stats']);
-    expect(nodeTabs(view('sensor'))).toEqual(['info', 'overview', 'telemetry', 'cli', 'tools', 'stats']);
+    expect(nodeTabs(view('repeater'))).toEqual(['info', 'messages', 'overview', 'telemetry', 'cli', 'tools', 'stats']);
+    expect(nodeTabs(view('sensor'))).toEqual(['info', 'messages', 'overview', 'telemetry', 'cli', 'tools', 'stats']);
     const heard = { kind: 'heard', key: 'aa', heard: {} } as unknown as NodeIdentity;
     expect(nodeTabs(heard)).toEqual(['info', 'stats']);
     expect(nodeTabs({ kind: 'unknown', ref: 'aa', valid: true })).toEqual(['info']);
@@ -64,7 +70,8 @@ describe('node reference helpers', () => {
     }
 
     expect(nodeTabFor(view('repeater'), 'cli')).toBe('cli');
-    expect(nodeTabFor(view('repeater'), 'messages')).toBe('info'); // hidden for repeaters
+    expect(nodeTabFor(view('repeater'), 'messages')).toBe('messages'); // its DM conversation (CLI replies)
+    expect(nodeTabFor(view('chat'), 'cli')).toBe('info'); // hidden for chat nodes
     expect(nodeTabFor(view('chat'), 'bogus')).toBe('info');
     expect(nodeTabFor(view('chat'))).toBe('info');
     expect(nodeTabFor(heard, 'stats')).toBe('stats');
@@ -94,9 +101,34 @@ describe('NodeModel', () => {
     expect(t.app.node(t.keys.alice.slice(0, 8))).toBe(t.app.node(` ${t.keys.alice.slice(0, 8).toUpperCase()} `)); // cached per normalised ref
 
     expect(await resolved(t, t.keys.repeater)).toMatchObject({ kind: 'contact', key: t.keys.repeater });
-    expect(t.app.node(t.keys.repeater).tabs.value).toEqual(['info', 'overview', 'telemetry', 'cli', 'tools', 'stats']);
+    expect(t.app.node(t.keys.repeater).tabs.value).toEqual(['info', 'messages', 'overview', 'telemetry', 'cli', 'tools', 'stats']);
     expect(await resolved(t, t.keys.room)).toMatchObject({ kind: 'contact' });
     expect(t.app.node(t.keys.room).tabs.value).toEqual(['info', 'messages', 'overview', 'telemetry', 'cli', 'tools', 'stats']);
+  });
+
+  it('keeps the most recently requested models and disposes evicted ones', async () => {
+    const t = await connectedApp();
+    const refs = Array.from({ length: NODE_CACHE_SIZE + 1 }, (_, i) => (i + 0x10).toString(16).padStart(2, '0'));
+    const first = t.app.node(refs[0]!);
+    const second = t.app.node(refs[1]!);
+    let runs = 0;
+    const off = effect(() => {
+      void second.disposed.value;
+      runs++;
+    });
+    for (const r of refs.slice(2, NODE_CACHE_SIZE)) t.app.node(r);
+    expect(t.app.node(refs[0]!)).toBe(first); // re-requested: now the most recent
+    const before = runs;
+    t.app.node(refs[NODE_CACHE_SIZE]!); // one over: evicts the least recently requested (refs[1])
+    expect(second.disposed.value).toBe(true);
+    expect(runs).toBeGreaterThan(before); // a view of the evicted model re-renders…
+    const fresh = t.app.node(refs[1]!); // …and re-requests a new one
+    expect(fresh).not.toBe(second);
+    expect(fresh.disposed.value).toBe(false);
+    expect(first.disposed.value).toBe(false);
+    off();
+    await fresh.settled();
+    expect(fresh.identity.value?.kind).toBeDefined();
   });
 
   it('is unknown for an unheard hash and invalid for non-hex', async () => {
@@ -131,7 +163,7 @@ describe('NodeModel', () => {
     expect(rec).toMatchObject({ key: dave, name: 'Dave', type: ContactType.REPEATER, lastAdvert: 1_700_000_500 });
     const now = node.identity.value;
     expect(now).toMatchObject({ kind: 'contact', key: dave });
-    expect(node.tabs.value).toEqual(['info', 'overview', 'telemetry', 'cli', 'tools', 'stats']);
+    expect(node.tabs.value).toEqual(['info', 'messages', 'overview', 'telemetry', 'cli', 'tools', 'stats']);
     expect(node.canAddContact.value).toBe(false);
   });
 
@@ -141,14 +173,25 @@ describe('NodeModel', () => {
     expect(await resolved(t, t.keys.alice)).toMatchObject({ kind: 'contact' });
     await hearAdvert(t, t.keys.alice, { name: 'Alice' });
 
+    // contact → heard directly: never null ("Loading…") while the heard lookup runs
+    const seen: Array<NodeIdentity | null> = [];
+    const off = node.identity.subscribe((v) => seen.push(v));
     await node.removeContact();
+    off();
+    expect(seen).not.toContain(null);
+    expect(kindRuns(seen)).toEqual(['contact', 'heard']);
     expect(t.app.contacts.view(t.keys.alice)).toBeUndefined();
     expect(node.identity.value).toMatchObject({ kind: 'heard', key: t.keys.alice, heard: { name: 'Alice' } });
     expect(node.canAddContact.value).toBe(true);
 
     const bob = t.app.node(t.keys.bob);
     expect(await resolved(t, t.keys.bob)).toMatchObject({ kind: 'contact' });
+    const bobSeen: Array<NodeIdentity | null> = [];
+    const offBob = bob.identity.subscribe((v) => bobSeen.push(v));
     await bob.removeContact();
+    offBob();
+    expect(bobSeen).not.toContain(null);
+    expect(kindRuns(bobSeen)).toEqual(['contact', 'unknown']);
     expect(bob.identity.value).toEqual({ kind: 'unknown', ref: t.keys.bob, valid: true });
     await expect(bob.removeContact()).rejects.toThrow('Not a contact');
     await expect(bob.addContact()).rejects.toThrow('Not a heard node');

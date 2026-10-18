@@ -53,7 +53,7 @@ async function openedPath(t: Harness, linkSelector: string): Promise<void> {
 describe('path view (issue #2)', () => {
   it('a contact path: list of hops plus the route on a map', async () => {
     const { t, alice, repeater } = await connected();
-    location.hash = `#/chat/${alice}`;
+    location.hash = `#/node/${alice}/messages`;
     await openedPath(t, '[data-field="subtitle"] mc-hops-link');
     expect(dialog(t).spec?.hashes).toEqual([repeater.slice(0, 2)]);
     expect(stops(t)).toEqual([

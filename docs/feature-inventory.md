@@ -338,8 +338,8 @@ paths, `models/channel_message.dart`, `storage/{contact,channel}_settings_store.
   - `MessageRecord.text` is always the plain text; `MessageRecord.compressed` marks messages sent
     or received as an envelope. `ChatModel.byteLimit` no longer subtracts the reply prefix while
     compression is on (the prefix is compressed with the text and counted in `budget().used`).
-  - *UI.* Contacts: a "Compress outgoing messages (SMAZ)" checkbox on the contact info page
-    (`/contact/:key`, chat and room contacts), checked iff `smaz === true`; unchecking stores
+  - *UI.* Contacts: a "Compress outgoing messages (SMAZ)" checkbox in the *Contact* section of
+    the node page's Info tab (`/node/:key`, chat and room contacts), checked iff `smaz === true`; unchecking stores
     `false`. Channels: the add/edit channel dialog. There is no composer toggle; the composer's
     byte counter says "(compressed)" when the envelope is used. The global auto-enable toggle is
     on the Settings page (App section). A compressed message (sent or received, DM or channel)

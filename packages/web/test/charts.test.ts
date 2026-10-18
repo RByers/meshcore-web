@@ -76,7 +76,7 @@ describe('mc-bar-chart', () => {
   it('renders one bar per item, links where href is set, and sizes height from the count', async () => {
     const el = await mount('mc-bar-chart', {
       items: [
-        { label: 'Alice', value: 12, href: '#/contact/aa' },
+        { label: 'Alice', value: 12, href: '#/node/aa' },
         { label: 'self', value: 5 },
         { label: 'a3?', value: 1, title: 'ambiguous' },
       ],
@@ -84,7 +84,7 @@ describe('mc-bar-chart', () => {
     expect(qa(el, '[data-mark="bar"]')).toHaveLength(3);
     const links = qa(el, '[data-label] a') as HTMLAnchorElement[];
     expect(links.map((a) => a.textContent)).toEqual(['Alice']);
-    expect(links[0]!.getAttribute('href')).toBe('#/contact/aa');
+    expect(links[0]!.getAttribute('href')).toBe('#/node/aa');
     expect(el.shadowRoot!.textContent).toContain('12');
     const svgH = Number(q(el, 'svg')!.getAttribute('height'));
     el.items = [...el.items, { label: 'Bob', value: 2 }];
@@ -116,7 +116,7 @@ describe('mc-bar-chart', () => {
   it('keyed rows dispatch bar-select on click and Enter / Space; the label link still navigates', async () => {
     const el = await mount('mc-bar-chart', {
       items: [
-        { label: 'Alice', value: 12, href: '#/contact/aa', key: 'aa' },
+        { label: 'Alice', value: 12, href: '#/node/aa', key: 'aa' },
         { label: 'Bob', value: 5, key: 'bb', selected: true },
       ],
     } satisfies Partial<McBarChart>);
@@ -138,7 +138,7 @@ describe('mc-bar-chart', () => {
     // the non-link label selects too; the link label is untouched
     (qa(el, '[data-label] span')[0] as HTMLElement).click();
     expect(seen.at(-1)).toEqual({ key: 'bb', index: 1 });
-    expect((qa(el, '[data-label] a')[0] as HTMLAnchorElement).getAttribute('href')).toBe('#/contact/aa');
+    expect((qa(el, '[data-label] a')[0] as HTMLAnchorElement).getAttribute('href')).toBe('#/node/aa');
   });
 
   it('rows without keys are not selectable', async () => {

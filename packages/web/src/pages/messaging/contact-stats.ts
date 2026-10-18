@@ -1,5 +1,5 @@
 /**
- * `<mc-contact-stats>`: the *Stats* tab of `/contact/:key` (docs/packet-stats.md §5). Maps
+ * `<mc-contact-stats>`: the *Stats* tab of the node page (`/node/:key/stats`) (docs/packet-stats.md §5). Maps
  * `app.packetStats.forContact(key)` onto the chart elements: tiles, packets heard over time, the
  * paths they arrived over (bar chart, or a map with each hop's line as thick as its packet count), signal over time (coloured by path), and the hop count distribution.
  * Uses the same global date range as the packet log Stats tab (`<mc-stats-range>`).

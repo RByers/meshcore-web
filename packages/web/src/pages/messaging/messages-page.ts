@@ -6,11 +6,12 @@ import { formatRelative } from '../../format.js';
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
 import { avatar, listStyles, unreadBadge } from './common.js';
-import { contactNote } from '../../components/node-link.js';
+import { contactNote, nodeHref } from '../../components/node-link.js';
 
 export function conversationHref(c: Pick<ConversationView, 'convType' | 'key' | 'icon'>): string {
   if (c.convType === 'channel') return hrefFor(`/channel/${c.key}`);
-  return hrefFor(c.icon === 'chat' ? `/chat/${c.key}` : `/node/${c.key}`);
+  // a contact conversation opens on its Messages tab, whatever the kind (repeater CLI replies live there)
+  return nodeHref(c.key, 'messages');
 }
 
 export class McMessagesPage extends AppElement {

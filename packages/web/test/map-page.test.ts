@@ -83,7 +83,7 @@ describe('/map page', () => {
     expect(card.querySelector('h3')?.textContent).toBe('Alice');
     expect(card.querySelector('[data-field="type"]')?.textContent).toBe('Chat');
     expect(card.querySelector('[data-field="distance"]')?.textContent).toMatch(/^\d+ m N \(\d+°\)$/);
-    expect(card.querySelector<HTMLAnchorElement>('[data-action="chat"]')?.getAttribute('href')).toBe(`#/chat/${alice}`);
+    expect(card.querySelector<HTMLAnchorElement>('[data-action="chat"]')?.getAttribute('href')).toBe(`#/node/${alice}/messages`);
     expect(t.query(`mc-map-marker[data-key="${alice}"]`)!.hasAttribute('selected')).toBe(true);
 
     t.query<McMapMarker>(`mc-map-marker[data-key="${repeater}"]`)!.shadowRoot!.querySelector('button')!.click();
@@ -95,7 +95,7 @@ describe('/map page', () => {
     t.query<McMapMarker>(`mc-map-marker[data-key="${repeater}"]`)!.shadowRoot!.querySelector('button')!.click();
     await t.until(() => t.query('[data-card]'), 2000, 'card again');
     t.query<HTMLAnchorElement>('[data-card] [data-action="node"]')!.click();
-    await t.until(() => location.hash === `#/node/${repeater}` && t.query('mc-node-admin-page'), 3000, 'node page');
+    await t.until(() => location.hash === `#/node/${repeater}` && t.query('mc-node-page'), 3000, 'node page');
   });
 
   it('zoom buttons and Centre on me work', async () => {

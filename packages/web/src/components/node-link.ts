@@ -1,17 +1,19 @@
 /**
  * Clickable nodes in displayed paths: every hop that resolves to exactly one known contact links
- * to its contact page (`/contact/:key`). Ambiguous / unknown hops and this radio stay plain text.
+ * to its node page (`/node/:key`); ambiguous / unknown hops link to the node page of the bare hash
+ * (`/node/<hash>`: candidates, or what the packet log heard). This radio stays plain text.
  *
- * Test hooks: `a[data-node-link="<key>"]`, `[data-hop="<hash>"]` on every hop.
+ * Test hooks: `a[data-node-link="<key>"]`, `a[data-hash-link="<hash>"]`, `[data-hop="<hash>"]` on every hop.
  */
 import { html, nothing, type TemplateResult } from 'lit';
-import { PATH_SEPARATOR, type PathLabel, type PathRequest, type ResolvedHop } from '@meshcore-web/core/app';
+import { PATH_SEPARATOR, type NodeTab, type PathLabel, type PathRequest, type ResolvedHop } from '@meshcore-web/core/app';
 import { toHex } from '@meshcore-web/core/util/bytes';
 import { hrefFor } from '../router.js';
 import { hopsLink, pathViewButton } from './path-dialog.js';
 
-export function contactHref(key: string): string {
-  return hrefFor(`/contact/${key}`);
+/** The node page of `key` (a full key, a prefix or a hop hash); Info unless `tab` says otherwise. */
+export function nodeHref(key: string, tab?: NodeTab): string {
+  return hrefFor(tab && tab !== 'info' ? `/node/${key}/${tab}` : `/node/${key}`);
 }
 
 /**
@@ -25,10 +27,15 @@ export function contactNote(note: string | undefined): TemplateResult | typeof n
 /** Link clicks must not reach row handlers (packet rows open the inspector on click). */
 const stop = (e: Event): void => e.stopPropagation();
 
-/** `label` linking to the contact page of `key` (plain text without a key). */
+/** `label` linking to the node page of `key` (plain text without a key). */
 export function nodeLink(label: string | TemplateResult, key: string | undefined, title?: string): TemplateResult {
   if (!key) return html`<span title=${title ?? nothing}>${label}</span>`;
-  return html`<a class="node-link" href=${contactHref(key)} data-node-link=${key} title=${title ?? 'Contact details'} @click=${stop} @keydown=${stop}>${label}</a>`;
+  return html`<a class="node-link" href=${nodeHref(key)} data-node-link=${key} title=${title ?? 'Node details'} @click=${stop} @keydown=${stop}>${label}</a>`;
+}
+
+/** `label` linking to the node page of an unresolved / ambiguous hop hash. */
+export function hashLink(label: string | TemplateResult, hash: string, title?: string): TemplateResult {
+  return html`<a class="node-link" href=${nodeHref(hash)} data-hash-link=${hash} title=${title ?? 'Nodes with this hash'} @click=${stop} @keydown=${stop}>${label}</a>`;
 }
 
 /** The contact key of a hop that resolves to exactly one known contact. */
@@ -55,7 +62,11 @@ export function pathHops(hops: readonly ResolvedHop[], opts: { names?: boolean; 
   const sep = opts.sep ?? PATH_SEPARATOR;
   return html`${hops.map((h, i) => {
     const key = hopKey(h);
-    return html`${i ? sep : ''}<span data-hop=${h.hash}>${nodeLink(names ? h.label : h.hash, key, hopTitle(h, key, opts.notes))}</span>`;
+    const label = names ? h.label : h.hash;
+    const title = hopTitle(h, key, opts.notes);
+    // this radio resolves with no candidates but a name: plain text
+    const self = !key && h.candidates.length === 0 && h.name !== undefined;
+    return html`${i ? sep : ''}<span data-hop=${h.hash}>${key || self ? nodeLink(label, key, title) : hashLink(label, h.hash, title)}</span>`;
   })}`;
 }
 

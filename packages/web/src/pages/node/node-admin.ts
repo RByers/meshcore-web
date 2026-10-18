@@ -1,13 +1,13 @@
 /**
- * `/node/:key` and `/node/:key/:tab` (Phase 10): repeater / room server / sensor administration.
- * A thin view over `app.remoteAdmin.node(key)` (RemoteNodeModel): header, then tabs Overview
- * (login + status), Telemetry, CLI, Tools (trace, path discovery, reset path, neighbours, ACL)
- * and Messages (link to the chat).
+ * `<mc-node-admin>` (Phase 10): the repeater / room server / sensor administration tabs of the
+ * node page (`/node/:key/overview|telemetry|cli|tools`, node-page.ts). A thin view over
+ * `app.remoteAdmin.node(key)` (RemoteNodeModel): Overview (login + status), Telemetry, CLI and
+ * Tools (trace, path discovery, reset path, neighbours, ACL). `key` must be a stored contact's
+ * full public key.
  */
 import { css, html, nothing, type TemplateResult } from 'lit';
 import {
   QUICK_CLI_COMMANDS,
-  hasLocation,
   cliKindOf,
   completeCliCommand,
   formatSeconds,
@@ -21,20 +21,19 @@ import {
 } from '@meshcore-web/core/app';
 import { toHex } from '@meshcore-web/core/util/bytes';
 import { AppElement } from '../../app-context.js';
-import { formatRelative, formatSnr, formatTime, shortKey } from '../../format.js';
+import { formatSnr, formatTime } from '../../format.js';
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
-import { avatar, listStyles, TYPE_LABEL } from '../messaging/common.js';
-import { contactNote, nodeLink, pathLabelView, type NoteLookup } from '../../components/node-link.js';
+import { listStyles } from '../messaging/common.js';
+import { contactNote, hashLink, nodeLink, pathLabelView, type NoteLookup } from '../../components/node-link.js';
 import { assignSlots, type TimeSeries } from '../../charts/index.js';
 
-export const NODE_TABS = ['overview', 'telemetry', 'cli', 'tools', 'messages'] as const;
-export type NodeTab = (typeof NODE_TABS)[number];
-const TAB_LABEL: Record<NodeTab, string> = { overview: 'Overview', telemetry: 'Telemetry', cli: 'CLI', tools: 'Tools', messages: 'Messages' };
+/** The node page tabs this element renders. */
+export type AdminTab = 'overview' | 'telemetry' | 'cli' | 'tools';
 
 const GROUP_LABEL: Record<StatusField['group'], string> = { system: 'System', radio: 'Radio', packets: 'Packets', room: 'Room' };
 
-function loginLabel(s: LoginState): string {
+export function loginLabel(s: LoginState): string {
   switch (s.state) {
     case 'loggedOut':
       return 'Not logged in';
@@ -49,8 +48,12 @@ function loginLabel(s: LoginState): string {
   }
 }
 
+/** A hop hash plus its name: the contact's node page, or (unresolved / ambiguous) the bare hash's. */
 function hopLabel(h: HopRef, notes: NoteLookup): TemplateResult {
-  return html`<span class="mono">${h.hash}</span>${h.name ? html` ${nodeLink(`${h.name}${h.ambiguous ? '?' : ''}`, h.key)}${contactNote(h.key ? notes(h.key) : '')}` : nothing}`;
+  if (h.key) return html`<span class="mono">${h.hash}</span> ${nodeLink(h.name ?? h.hash, h.key)}${contactNote(notes(h.key))}`;
+  // this radio has a name but no key: plain text
+  if (h.name && !h.ambiguous) return html`<span class="mono">${h.hash}</span> ${h.name}`;
+  return html`${hashLink(html`<span class="mono">${h.hash}</span>`, h.hash)}${h.name ? html` ${h.name}?` : nothing}`;
 }
 
 const fmtVolts = (v: number): string => v.toFixed(2);
@@ -63,16 +66,19 @@ function quiet(p: Promise<unknown>): void {
   p.catch(() => undefined);
 }
 
-export class McNodeAdminPage extends AppElement {
+export class McNodeAdmin extends AppElement {
   static override properties = {
-    params: { attribute: false },
+    key: { type: String },
+    tab: { type: String },
     password: { state: true },
     remember: { state: true },
     cliInput: { state: true },
     tracePath: { state: true },
     traceError: { state: true },
   };
-  declare params: Readonly<Record<string, string>> | undefined;
+  /** The contact's full public key (lowercase hex). */
+  declare key: string;
+  declare tab: AdminTab;
   declare password: string | null;
   declare remember: boolean | null;
   declare cliInput: string;
@@ -85,6 +91,8 @@ export class McNodeAdminPage extends AppElement {
 
   constructor() {
     super();
+    this.key = '';
+    this.tab = 'overview';
     this.password = null;
     this.remember = null;
     this.cliInput = '';
@@ -96,47 +104,6 @@ export class McNodeAdminPage extends AppElement {
     shared,
     listStyles,
     css`
-      header.card {
-        display: flex;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 12px;
-        margin-block-end: var(--mc-gap);
-      }
-      header h2 {
-        margin: 0;
-      }
-      header .head-main {
-        flex: 1;
-        min-width: 0;
-      }
-      .type-badge {
-        display: inline-block;
-        font-size: 0.8em;
-        padding: 1px 8px;
-        border-radius: 999px;
-        background: var(--mc-accent-soft);
-        color: var(--mc-accent);
-        margin-inline-end: 6px;
-      }
-      .tabs {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 4px;
-        margin-block-end: 12px;
-        border-block-end: 1px solid var(--mc-border);
-      }
-      .tabs a {
-        padding: 0.5em 1em;
-        text-decoration: none;
-        color: var(--mc-text);
-        border-block-end: 3px solid transparent;
-      }
-      .tabs a[aria-selected='true'] {
-        border-block-end-color: var(--mc-accent);
-        color: var(--mc-accent);
-        font-weight: 600;
-      }
       .stack {
         display: grid;
         gap: var(--mc-gap);
@@ -243,16 +210,6 @@ export class McNodeAdminPage extends AppElement {
         margin-inline-start: 8px;
         font-size: 0.85em;
       }
-      .map-link {
-        display: inline-flex;
-        align-items: center;
-        min-height: 2.5rem;
-        padding: 0.5em 0.8em;
-        border: 1px solid var(--mc-border);
-        border-radius: 8px;
-        text-decoration: none;
-        white-space: nowrap;
-      }
       ol.hops {
         margin: 0;
         padding-inline-start: 1.5em;
@@ -264,12 +221,7 @@ export class McNodeAdminPage extends AppElement {
   #notes = (key: string): string => this.app.contacts.noteFor(key);
 
   get #key(): string {
-    return (this.params?.['key'] ?? '').toLowerCase();
-  }
-
-  get #tab(): NodeTab {
-    const t = this.params?.['tab'];
-    return (NODE_TABS as readonly string[]).includes(t ?? '') ? (t as NodeTab) : 'overview';
+    return this.key.toLowerCase();
   }
 
   override willUpdate(): void {
@@ -283,7 +235,7 @@ export class McNodeAdminPage extends AppElement {
       this.#historyPos = -1;
     }
     // idempotent: starts tracking the archived battery / temperature history once
-    if (this.#key && this.#tab === 'telemetry') quiet(this.#node().loadTelemetryHistory());
+    if (this.#key && this.tab === 'telemetry') quiet(this.#node().loadTelemetryHistory());
   }
 
   #node(): RemoteNodeModel {
@@ -291,60 +243,19 @@ export class McNodeAdminPage extends AppElement {
   }
 
   override render() {
-    const key = this.#key;
+    if (!this.#key) return nothing;
     const node = this.#node();
-    const v = node.contact.value;
-    if (!v) {
-      return html`<section class="card">
-        <h2>Unknown node</h2>
-        <p class="muted">${this.app.contacts.loading.value ? 'Loading…' : html`No contact with key ${shortKey(key)}.`}</p>
-        <p><a href=${hrefFor('/contacts')}>Back to contacts</a></p>
-      </section>`;
+    if (!node.contact.value) return nothing;
+    switch (this.tab) {
+      case 'telemetry':
+        return this.#telemetry(node);
+      case 'cli':
+        return this.#cli(node);
+      case 'tools':
+        return this.#tools(node);
+      default:
+        return this.#overview(node);
     }
-    const tab = this.#tab;
-    const outPath = this.app.contacts.outPathLabel(v, this.app.appSettings.pathNames.value);
-    return html`
-      <header class="card" data-field="header">
-        <a href=${hrefFor('/contacts')} aria-label="Back to contacts">←</a>
-        ${avatar(v.typeName)}
-        <div class="head-main">
-          <h2><span data-field="name">${v.name}</span>${contactNote(v.note)}</h2>
-          <div class="muted">
-            <span class="type-badge" data-field="type">${TYPE_LABEL[v.typeName]}</span>
-            <span data-field="path" title=${outPath.title || nothing}>${pathLabelView(outPath, v.path.kind === 'hops' ? { kind: 'contact', key } : null, this.#notes)}</span>
-            ${v.directSnr !== undefined ? html` · <span data-field="direct-signal">direct SNR ${formatSnr(v.directSnr)}</span>` : nothing}
-            · <a href=${hrefFor(`/contact/${v.key}`)} data-action="contact-info">info</a>
-            · last seen ${v.lastSeen ? formatRelative(v.lastSeen, this.app.clock.now()) : 'never'}
-          </div>
-          <div class="muted mono" title=${v.key}>${shortKey(v.key, 16)}</div>
-        </div>
-        <span data-field="session" class=${node.loggedIn.value ? 'ok' : 'muted'}>${loginLabel(node.loginState.value)}</span>
-        ${hasLocation(v.record) || this.app.map.hasMarker(key)
-          ? html`<a class="map-link" data-action="show-on-map" href=${hrefFor(`/map/node/${key}`)} title="Show on map" aria-label="Show on map"
-              ><span aria-hidden="true">🗺 Map</span></a
-            >`
-          : nothing}
-      </header>
-      <nav class="tabs" role="tablist" aria-label="Node">
-        ${NODE_TABS.map(
-          (t) =>
-            html`<a role="tab" data-tab=${t} aria-selected=${t === tab ? 'true' : 'false'} href=${hrefFor(t === 'overview' ? `/node/${key}` : `/node/${key}/${t}`)}
-              >${TAB_LABEL[t]}</a
-            >`,
-        )}
-      </nav>
-      <section role="tabpanel" aria-label=${TAB_LABEL[tab]} data-panel=${tab}>
-        ${tab === 'overview'
-          ? this.#overview(node)
-          : tab === 'telemetry'
-            ? this.#telemetry(node)
-            : tab === 'cli'
-              ? this.#cli(node)
-              : tab === 'tools'
-                ? this.#tools(node)
-                : this.#messages(node)}
-      </section>
-    `;
   }
 
   #err(node: RemoteNodeModel, action: RemoteAction): TemplateResult | typeof nothing {
@@ -600,7 +511,7 @@ export class McNodeAdminPage extends AppElement {
     return html`<section class="card stack" data-card="cli">
       ${node.isAdmin.value
         ? nothing
-        : html`<p class="muted" data-field="cli-hint">Remote CLI commands are only answered for admin logins. <a href=${hrefFor(`/node/${this.#key}`)}>Log in</a> first.</p>`}
+        : html`<p class="muted" data-field="cli-hint">Remote CLI commands are only answered for admin logins. <a href=${hrefFor(`/node/${this.#key}/overview`)}>Log in</a> first.</p>`}
       <div class="terminal" data-field="transcript" role="log" aria-live="polite" aria-label="CLI transcript">
         ${entries.length
           ? entries.map(
@@ -794,25 +705,12 @@ export class McNodeAdminPage extends AppElement {
       </section>
     </div>`;
   }
-
-  // ---- messages ----
-
-  #messages(node: RemoteNodeModel): TemplateResult {
-    const kind = node.kind.value;
-    return html`<section class="card" data-card="messages">
-      ${kind === 'room'
-        ? html`<p>Room posts are read and written in the room chat. Log in first so the room server sends you its posts.</p>
-            <p><a href=${hrefFor(`/chat/${this.#key}`)} data-action="open-chat">Open room chat</a></p>`
-        : html`<p class="muted">Direct messages with this node (CLI replies also appear there).</p>
-            <p><a href=${hrefFor(`/chat/${this.#key}`)} data-action="open-chat">Open messages</a></p>`}
-    </section>`;
-  }
 }
 
-customElements.define('mc-node-admin-page', McNodeAdminPage);
+customElements.define('mc-node-admin', McNodeAdmin);
 
 declare global {
   interface HTMLElementTagNameMap {
-    'mc-node-admin-page': McNodeAdminPage;
+    'mc-node-admin': McNodeAdmin;
   }
 }

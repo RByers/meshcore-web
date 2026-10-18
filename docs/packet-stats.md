@@ -267,7 +267,7 @@ filters of the list tabs are not shown; the inspector split is hidden). Layout, 
    The map fits its bounds when opened, when the checkbox changes and when the routes change
    (range / filters), and follows the §6 filters like every other chart.
 3. **Packets per source node** (`mc-bar-chart`, top 50, count desc): the label links to
-   `/contact/:key` (via `hrefFor`) when the node resolved to a contact, plain text for self /
+   `/node/:key` (via `hrefFor`) when the node resolved to a contact, plain text for self /
    unresolved; footer line "n packets could not be attributed, m more nodes".
    **Group messages per channel** (`mc-bar-chart`, `channelMessages`): one bar per channel, by
    name or `channel xx` (hash) when the PSK is unknown; tooltip "n received, m sent · bytes".
@@ -315,7 +315,7 @@ clears everything, the range included.
 Everything renders from the model's signals (read in `render()` → auto re-render). Empty log →
 one empty-state line. Browser tests (`packages/web/test/packet-stats.test.ts`, harness +
 emulator scenario that produces packets): the tab appears and renders tiles and the four chart
-elements; the source chart has links to `/contact/…`; the y/colour selectors change the dot plot's
+elements; the source chart has links to `/node/…`; the y/colour selectors change the dot plot's
 axis label / legend; a date preset shrinks the packet count tile; source-bar / segment / keyboard
 filtering, chip removal, *Clear filters* and the no-match state; the shared filter across tabs (a
 source drill-down filters the Packets tab and its chip there removes it; a Packets-tab text filter
@@ -329,9 +329,10 @@ colouring; the paths card's summary, map lines and widths, sized markers with co
 Add a row to `docs/roadmap.md` (Phase 9 area) and a line to `packages/core/src/app/README.md`
 for `packet-stats-model.ts` / `airtime.ts`.
 
-## 5. Contact page "Stats" tab
+## 5. Node page "Stats" tab
 
-`/contact/:key` gets a tab row (*Info* | *Stats*) above its cards; *Info* is the existing content.
+The node page (`/node/:key`, see roadmap "Node page") has a *Stats* tab (`/node/:key/stats`) next
+to *Info* and the other tabs.
 *Stats* is `<mc-contact-stats key=…>` (`packages/web/src/pages/messaging/contact-stats.ts`) fed by
 `app.packetStats.forContact(key)` and the same global date range (reuse the same filter row
 element as the packets Stats tab — extract it to `packages/web/src/charts/` or
@@ -402,7 +403,7 @@ matchesFilter(p, f) / filterKey(p, field) / filterPoints(points, filters)   // p
 - `summary`, `bySource`, `timeline`, `utilization`, `hops` and `compression` count the filtered `points`.
   `window` (and so the bins and `summary.spanMs`) comes from the range and `allPoints`, so axes
   don't move while drilling down.
-- `forContact()` reads `allPoints`: the packets page's filters don't leak into the contact page.
+- `forContact()` reads `allPoints`: the packets page's filters don't leak into the node page's Stats tab.
 
 Mapping onto `PacketFilter` (`statsFiltersOf` / `withStatsFilter` / `withoutStatsFilter`):
 
