@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import 'fake-indexeddb/auto';
-import { promisifyRequest } from './idb.js';
-import { DEFAULT_CONTACT_LOCAL, INDEX, RADIO_DB_VERSION, STORE, pubKeyHex, radioDbName, type ContactRecord, type MessageRecord } from './schema.js';
+import { openDatabase, promisifyRequest } from './idb.js';
+import { DEFAULT_CONTACT_LOCAL, INDEX, RADIO_DB_MIGRATIONS, RADIO_DB_VERSION, STORE, pubKeyHex, radioDbName, type ContactRecord, type MessageRecord } from './schema.js';
 import { RadioStore } from './radio-store.js';
-import { freshFactory, hexKey, key32, makeContact } from './test-helpers.js';
+import { freshFactory, grpTxtPacket, hexKey, key32, makeContact } from './test-helpers.js';
 
 function indexNames(db: IDBDatabase, store: string): string[] {
   return Array.from(db.transaction(store).objectStore(store).indexNames).sort();
@@ -66,7 +66,7 @@ describe('schema', () => {
   it('a fresh open creates every store and index at the current version', async () => {
     const store = await RadioStore.open(key32(1), { factory: freshFactory() });
     expect(store.db.version).toBe(RADIO_DB_VERSION);
-    expect(RADIO_DB_VERSION).toBe(3);
+    expect(RADIO_DB_VERSION).toBe(4);
     expect(store.db.storeNames.sort()).toEqual(Object.values(STORE).sort());
     const raw = store.db.raw;
     expect(indexNames(raw, STORE.frames)).toEqual(Object.values(INDEX.frames).sort());
@@ -80,7 +80,7 @@ describe('schema', () => {
     const factory = freshFactory();
     await writeV1(factory, radioDbName(key32(1)));
     const store = await RadioStore.open(key32(1), { factory });
-    expect(store.db.version).toBe(3);
+    expect(store.db.version).toBe(4);
     expect(indexNames(store.db.raw, STORE.messages)).toContain('conv_received');
     expect(indexNames(store.db.raw, STORE.packets)).toContain('payloadType_ts');
 
@@ -96,6 +96,26 @@ describe('schema', () => {
     expect(page.items.map((m) => m.text)).toEqual(['old']);
     // The new compound frame index covers the old frame.
     expect((await store.frames.query({ direction: 'in' })).items).toHaveLength(1);
+    store.close();
+  });
+
+  it('migrates a v3 database to v4 preserving data and adding the noiseFloor store', async () => {
+    const factory = freshFactory();
+    const name = radioDbName(key32(3));
+    const v3 = await openDatabase({ name, version: 3, migrations: RADIO_DB_MIGRATIONS.slice(0, 3), factory });
+    await v3.put(STORE.contacts, { ...DEFAULT_CONTACT_LOCAL, ...makeContact(9), key: hexKey(9), onDevice: true, updatedAt: 0 });
+    await v3.add(STORE.packets, { ts: 10, direction: 'rx', bytes: grpTxtPacket(), format: 'packet', source: 'logRxData', routeType: 1, payloadType: 5, pathLen: 0, hash: 'aa' });
+    expect(v3.storeNames).not.toContain(STORE.noiseFloor);
+    v3.close();
+
+    const store = await RadioStore.open(key32(3), { factory });
+    expect(store.db.version).toBe(4);
+    expect(store.db.storeNames).toContain(STORE.noiseFloor);
+    expect((await store.contacts.get(hexKey(9)))?.name).toBe('node-9');
+    expect((await store.packets.all()).map((p) => p.ts)).toEqual([10]);
+    expect(await store.noiseFloor.count()).toBe(0);
+    await store.noiseFloor.add({ t: 20, noiseFloorDbm: -110 });
+    expect(await store.noiseFloor.range()).toEqual([{ t: 20, noiseFloorDbm: -110 }]);
     store.close();
   });
 });

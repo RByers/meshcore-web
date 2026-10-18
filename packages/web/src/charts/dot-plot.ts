@@ -8,12 +8,13 @@
  * them, and no per-dot listeners — the SVG finds the nearest dot within a ≥ 12 px hit radius.
  * Clicking a dot dispatches `dot-select` (`detail: { id }`, bubbles, composed).
  *
- * `refLines` draws horizontal dashed reference lines (e.g. the SNR decode limit) under the dots,
- * labelled at the right end and always inside the y domain.
+ * `refLines` draws reference lines under the dots, labelled at the right end and always inside the
+ * y domain: horizontal dashed lines at a constant value (e.g. the SNR decode limit), or a
+ * time-varying step line through samples (e.g. the radio's noise floor under RSSI).
  */
 import { css, html, nothing, svg, type SVGTemplateResult, type TemplateResult } from 'lit';
 import { guard } from 'lit/directives/guard.js';
-import { scaleLinear, scaleSqrt, scaleTime, type ScaleLinear } from 'd3-scale';
+import { scaleLinear, scaleSqrt, scaleTime, type ScaleLinear, type ScaleTime } from 'd3-scale';
 import { extent, max } from 'd3-array';
 import { ChartBase, chartStyles, formatDateTime, formatNumber, legend, type Describe, MIN_HIT, tickCount, xTimeAxis, yAxis } from './chart-base.js';
 import { assignSlots, colorOf, keysByCount, legendFor, type SeriesPalette } from './palette.js';
@@ -34,15 +35,31 @@ export interface DotPoint {
   title?: string;
 }
 
-/**
- * A horizontal reference line at a constant y. A time-varying line (e.g. noise-floor samples) would
- * be a second member of this union, `{ kind: 'series'; points: readonly { t: number; v: number }[]; … }`,
- * drawn as a step path by {@link refLineMarks} and widening the y domain by its extent.
- */
-export interface RefLine {
+/** A reference line under the dots ({@link refLineMarks}). */
+export type RefLine = RefLevel | RefSeries;
+
+/** A horizontal dashed line at a constant y. */
+export interface RefLevel {
+  kind?: 'level';
   /** y value, in the plot's units. */
   value: number;
   /** Text at the right end of the line (e.g. "SF10 decode limit −15 dB"); also in the aria-label. */
+  label: string;
+  /** Stable id for `data-ref-line`; default the label. */
+  key?: string;
+}
+
+/**
+ * A time-varying line: a step path (each sample's value held until the next one) through
+ * `points`, widening the y domain by its extent. A sample holds for at most `holdMs`, so a longer
+ * silence (e.g. the radio was not connected) leaves a gap; default: until the next sample.
+ */
+export interface RefSeries {
+  kind: 'series';
+  /** Samples (epoch ms `t`, value `v` in the plot's units), ascending `t`. */
+  points: readonly { t: number; v: number }[];
+  holdMs?: number;
+  /** Text by the line's right end (e.g. "Noise floor"); also in the aria-label. */
   label: string;
   /** Stable id for `data-ref-line`; default the label. */
   key?: string;
@@ -103,6 +120,13 @@ export class McDotPlot extends ChartBase {
         stroke: var(--mc-warn, GrayText);
         stroke-width: 1.5;
         stroke-dasharray: 5 4;
+      }
+      .ref path {
+        fill: none;
+        stroke: var(--chart-muted);
+        stroke-width: 1.5;
+        stroke-linejoin: round;
+        opacity: 0.85;
       }
       .ref text {
         fill: var(--chart-muted);
@@ -175,8 +199,11 @@ export class McDotPlot extends ChartBase {
     if (dx0 === dx1) [dx0, dx1] = [dx0 - HOUR / 2, dx1 + HOUR / 2];
     const x = scaleTime().domain([dx0, dx1]).range([x0, x1]);
 
-    const refs = this.refLines.filter((l) => Number.isFinite(l.value));
-    let [dy0, dy1] = extent([...pts.map((p) => p.y), ...refs.map((l) => l.value)]);
+    const refs = this.refLines
+      .map((l): RefLine => (l.kind === 'series' ? { ...l, points: l.points.filter((p) => Number.isFinite(p.v) && p.t <= dx1 && p.t >= dx0 - (l.holdMs ?? 0)) } : l))
+      .filter((l) => (l.kind === 'series' ? l.points.length > 0 : Number.isFinite(l.value)));
+    const refValues = refs.flatMap((l) => (l.kind === 'series' ? l.points.map((p) => p.v) : [l.value]));
+    let [dy0, dy1] = extent([...pts.map((p) => p.y), ...refValues]);
     if (dy0 === undefined || dy1 === undefined) [dy0, dy1] = [0, 1];
     if (dy0 === dy1) [dy0, dy1] = [dy0 - 1, dy1 + 1];
     const y = scaleLinear().domain([dy0, dy1]).nice().range([y0, y1]);
@@ -202,7 +229,7 @@ export class McDotPlot extends ChartBase {
       ${yAxis(y, x0, x1, tickCount(y0 - y1, 40), (v) => this.#fmtY(v))}
       ${xTimeAxis(x, y0, tickCount(x1 - x0, 110))}
       <text class="axis-label" x=${x0 - 6} y=${MARGIN.top - 8} text-anchor="start" data-field="y-label">${this.yLabel}</text>`;
-    const refMarks = refLineMarks(refs, y, x0, x1);
+    const refMarks = refLineMarks(refs, x, y, x0, x1);
     const layout: Layout = {
       key,
       pts,
@@ -315,15 +342,71 @@ export class McDotPlot extends ChartBase {
   }
 }
 
-/** Dashed horizontal lines from x0 to x1, each labelled above its right end. */
-function refLineMarks(lines: readonly RefLine[], y: ScaleLinear<number, number>, x0: number, x1: number): SVGTemplateResult {
+/**
+ * Reference lines between x0 and x1: dashed horizontal lines, and step paths for series (clipped
+ * to the plot), each labelled above its right end.
+ */
+function refLineMarks(
+  lines: readonly RefLine[],
+  x: ScaleTime<number, number>,
+  y: ScaleLinear<number, number>,
+  x0: number,
+  x1: number,
+): SVGTemplateResult {
   return svg`${lines.map((l) => {
+    if (l.kind === 'series') {
+      const step = stepPath(l, x, y, x0, x1);
+      if (!step) return nothing;
+      return svg`<g class="ref" data-ref-line=${l.key ?? l.label} data-ref-kind="series" aria-hidden="true">
+        <path d=${step.d}></path>
+        <text x=${x1 - 2} y=${step.endY - 4} text-anchor="end" data-field="ref-label">${l.label}</text>
+      </g>`;
+    }
     const py = Math.round(y(l.value)) + 0.5;
     return svg`<g class="ref" data-ref-line=${l.key ?? l.label} aria-hidden="true">
       <line x1=${x0} x2=${x1} y1=${py} y2=${py}></line>
       <text x=${x1 - 2} y=${py - 4} text-anchor="end" data-field="ref-label">${l.label}</text>
     </g>`;
   })}`;
+}
+
+/**
+ * Step-after path through a series: each sample is held until the next one, or for `holdMs` when
+ * the next is further away (a gap: a new subpath starts). Clipped to [x0, x1]; null when nothing
+ * is visible. `endY` is the y of the last visible step (for the label).
+ */
+export function stepPath(
+  l: RefSeries,
+  x: (t: number) => number,
+  y: (v: number) => number,
+  x0: number,
+  x1: number,
+): { d: string; endY: number } | null {
+  const hold = l.holdMs ?? Infinity;
+  const clip = (px: number): number => Math.min(x1, Math.max(x0, px));
+  let d = '';
+  let endY = 0;
+  let open = false;
+  const pts = l.points;
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i]!;
+    const next = pts[i + 1];
+    const joined = next !== undefined && next.t - p.t <= hold;
+    const tEnd = joined ? next.t : next === undefined && !Number.isFinite(hold) ? p.t : p.t + hold;
+    const a = x(p.t);
+    const b = x(tEnd);
+    if (b < x0 || a > x1) {
+      open = false;
+      continue;
+    }
+    const py = (Math.round(y(p.v)) + 0.5).toFixed(1);
+    const ax = clip(a).toFixed(1);
+    d += open ? `V${py}` : `M${ax},${py}`;
+    d += `H${clip(b).toFixed(1)}`;
+    endY = Number(py);
+    open = joined;
+  }
+  return d ? { d, endY } : null;
 }
 
 customElements.define('mc-dot-plot', McDotPlot);

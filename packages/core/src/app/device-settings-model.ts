@@ -670,19 +670,22 @@ export class DeviceSettingsModel {
     const client = this.connection.client.peek();
     if (!client?.connected) return null;
     return this.#run('stats', async (c) => {
-      const get = async <K extends 'core' | 'radio' | 'packets'>(type: K): Promise<Extract<Stats, { type: K }> | null> => {
-        try {
-          const s = await c.getStats(type);
-          return s.type === type ? (s as Extract<Stats, { type: K }>) : null;
-        } catch (err) {
-          if (err instanceof DeviceError) return null;
-          throw err;
-        }
-      };
+      const get = <K extends StatsKind>(type: K): Promise<Extract<Stats, { type: K }> | null> => getStatsSoft(c, type);
       const view: StatsView = { core: await get('core'), radio: await get('radio'), packets: await get('packets'), at: this.#now() };
       this.#stats.value = view;
       return view;
     });
+  }
+
+  /**
+   * GET_STATS radio on its own (the noise-floor sampler, app/noise-floor.ts): null when not
+   * connected or the firmware refuses it (ERR, fw < v8). Leaves `stats` and the busy flags alone;
+   * other errors (timeout, disconnect) reject.
+   */
+  async readRadioStats(): Promise<Extract<Stats, { type: 'radio' }> | null> {
+    const client = this.connection.client.peek();
+    if (!client?.connected) return null;
+    return getStatsSoft(client, 'radio');
   }
 
   /**
@@ -819,5 +822,18 @@ export class DeviceSettingsModel {
     this.#pollTimer = undefined;
     this.#cooldownTimer = undefined;
     this.#pollers = 0;
+  }
+}
+
+type StatsKind = 'core' | 'radio' | 'packets';
+
+/** GET_STATS `type`; null when the firmware answers ERR (unsupported) or with another type. */
+async function getStatsSoft<K extends StatsKind>(client: CompanionClient, type: K): Promise<Extract<Stats, { type: K }> | null> {
+  try {
+    const s = await client.getStats(type);
+    return s.type === type ? (s as Extract<Stats, { type: K }>) : null;
+  } catch (err) {
+    if (err instanceof DeviceError) return null;
+    throw err;
   }
 }

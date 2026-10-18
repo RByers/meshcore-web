@@ -21,7 +21,7 @@ import { PayloadType, hasTransportCodes, isDirectRoute, isFloodRoute, payloadTyp
 import { decryptPayload, parseGrpTxtPlaintext } from '../packet/payloads.js';
 import { decodeReceivedText } from '../store/messages.js';
 import type { RadioStore } from '../store/radio-store.js';
-import type { ContactRecord, PacketRecord } from '../store/schema.js';
+import type { ContactRecord, NoiseFloorSample, PacketRecord } from '../store/schema.js';
 import { fromHex, toHex, utf8Encode } from '../util/bytes.js';
 import type { Unsubscribe } from '../util/events.js';
 import { loraAirtimeMs, loraDecodeLimit, loraParamsFromSelfInfo, type DecodeLimit, type LoraParams } from './airtime.js';
@@ -1283,6 +1283,34 @@ function hopCounts(pts: readonly StatPacket[]): HopCount[] {
   return [...m.entries()].sort((a, b) => a[0] - b[0]).map(([hops, count]) => ({ hops, count }));
 }
 
+/** Noise floor over a set of samples (docs/packet-stats.md §1.8). */
+export interface NoiseFloorSummary {
+  samples: number;
+  medianDbm: number;
+  minDbm: number;
+  maxDbm: number;
+  /** The newest sample's value. */
+  latestDbm: number;
+}
+
+/** Median / min / max / latest of `samples` (ascending `t`); null when there are none. */
+export function noiseFloorSummary(samples: readonly NoiseFloorSample[]): NoiseFloorSummary | null {
+  const last = samples[samples.length - 1];
+  if (!last) return null;
+  const v = samples.map((s) => s.noiseFloorDbm).sort((a, b) => a - b);
+  const mid = v.length >> 1;
+  const median = v.length % 2 ? v[mid]! : (v[mid - 1]! + v[mid]!) / 2;
+  return { samples: v.length, medianDbm: median, minDbm: v[0]!, maxDbm: v[v.length - 1]!, latestDbm: last.noiseFloorDbm };
+}
+
+/** Merges two ascending-`t` sample lists; on equal `t` the one from `b` wins. */
+function mergeSamples(a: readonly NoiseFloorSample[], b: readonly NoiseFloorSample[]): NoiseFloorSample[] {
+  if (!b.length) return [...a];
+  const m = new Map(a.map((x) => [x.t, x]));
+  for (const x of b) m.set(x.t, x);
+  return [...m.values()].sort((x, y) => x.t - y.t);
+}
+
 // ---------------------------------------------------------------------------
 // Model
 // ---------------------------------------------------------------------------
@@ -1309,6 +1337,9 @@ export class PacketStatsModel extends StoreBoundModel implements DrillSource {
   readonly #bin = signal<BinSetting>('auto');
   readonly #raw = signal<readonly RawPoint[]>([]);
   readonly #bounds = signal<{ first: number; last: number } | null>(null);
+  readonly #noise = signal<readonly NoiseFloorSample[]>([]);
+  /** Collects live noise-floor samples while a load runs (null otherwise). */
+  #noiseSink: NoiseFloorSample[] | null = null;
   #rawIds = new Set<number>();
   /** Raw points by id from the last load, reused while the channel list is unchanged. */
   #rawCache = new Map<number, RawPoint>();
@@ -1341,6 +1372,13 @@ export class PacketStatsModel extends StoreBoundModel implements DrillSource {
    * plot's reference line. Null when the radio parameters are unknown.
    */
   readonly decodeLimit: ReadonlySignal<DecodeLimit | null>;
+  /**
+   * The radio's noise-floor samples in the date range (the `noiseFloor` store, written every minute
+   * while connected by app/noise-floor.ts), ascending `t`, live-tailed. Not narrowed by the filters.
+   */
+  readonly noiseFloor: ReadonlySignal<readonly NoiseFloorSample[]> = this.#noise.readonly;
+  /** {@link noiseFloorSummary} of `noiseFloor`. */
+  readonly noiseFloorSummary: ReadonlySignal<NoiseFloorSummary | null>;
   /**
    * Drill-down view of the shared filter ({@link statsFiltersOf}: AND, at most one per field); in
    * memory only, kept across range changes.
@@ -1402,6 +1440,7 @@ export class PacketStatsModel extends StoreBoundModel implements DrillSource {
     this.decodeLimit = computed(() => loraDecodeLimit(this.radio.value), {
       equals: (a, b) => a === b || (a !== null && b !== null && a.sf === b.sf && a.snrDb === b.snrDb),
     });
+    this.noiseFloorSummary = computed(() => noiseFloorSummary(this.#noise.value));
 
     const resolver = computed(() => new Resolver(deps.contacts.value, selfNode(connection.selfInfo.value, connection.store.value)));
     const channels = computed(() => deps.context.value.channels);
@@ -1661,6 +1700,8 @@ export class PacketStatsModel extends StoreBoundModel implements DrillSource {
       store.events.on('logChanged', (e) => {
         if (e.store === 'packets') void this.reload();
       }),
+      store.events.on('noiseFloor', (sample) => this.#appendNoise(store, sample)),
+      store.events.on('noiseFloorChanged', () => void this.reload()),
       // the shared filter's from / to (setRange, or the List tab's date inputs)
       effect(() => {
         const r = this.range.value;
@@ -1689,10 +1730,11 @@ export class PacketStatsModel extends StoreBoundModel implements DrillSource {
     this.#usedSig = sig;
     const r = this.range.peek();
     this.#usedRange = r;
-    const [recs, bounds] = await Promise.all([
-      store.packets.all({ ...(r.from !== null ? { from: r.from } : {}), ...(r.to !== null ? { to: r.to } : {}) }),
-      store.packets.tsBounds(),
-    ]);
+    const liveNoise: NoiseFloorSample[] = [];
+    this.#noiseSink = liveNoise;
+    const span = { ...(r.from !== null ? { from: r.from } : {}), ...(r.to !== null ? { to: r.to } : {}) };
+    const [recs, bounds, noise] = await Promise.all([store.packets.all(span), store.packets.tsBounds(), store.noiseFloor.range(span)]);
+    if (this.#noiseSink === liveNoise) this.#noiseSink = null;
     const was = this.#rawCacheSig;
     const cached = this.#rawCache;
     const raws = await Promise.all(
@@ -1712,6 +1754,7 @@ export class PacketStatsModel extends StoreBoundModel implements DrillSource {
     batch(() => {
       this.#raw.value = all;
       this.#bounds.value = mergeBounds(bounds, extra.map((x) => x.rec.ts));
+      this.#noise.value = mergeSamples(noise, liveNoise.filter((x) => this.#inRange(x.t)));
     });
     for (const w of [...this.#watchers]) w.reloaded();
   }
@@ -1723,10 +1766,21 @@ export class PacketStatsModel extends StoreBoundModel implements DrillSource {
     this.#rawIds = new Set();
     this.#rawCache = new Map();
     this.#rawCacheSig = { ch: '', dm: '' };
+    this.#noiseSink = null;
     batch(() => {
       this.#raw.value = [];
       this.#bounds.value = null;
+      this.#noise.value = [];
     });
+  }
+
+  #appendNoise(store: RadioStore, sample: NoiseFloorSample): void {
+    if (this.store !== store) return;
+    this.#noiseSink?.push(sample);
+    if (!this.#inRange(sample.t)) return;
+    const cur = this.#noise.peek();
+    const last = cur[cur.length - 1];
+    this.#noise.value = !last || last.t < sample.t ? [...cur, sample] : mergeSamples(cur, [sample]);
   }
 
   #inRange(ts: number): boolean {

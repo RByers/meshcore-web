@@ -29,7 +29,7 @@ describe('radioDbStats', () => {
     const s = await RadioStore.open(key32(0x01), { factory });
     const empty = await radioDbStats(key32(0x01), { factory });
     expect(empty).toMatchObject({ pubKey: hexKey(0x01), exists: true, approxBytes: 0 });
-    expect(empty.counts).toEqual({ frames: 0, packets: 0, contacts: 0, messages: 0, channels: 0, settings: 0 });
+    expect(empty.counts).toEqual({ frames: 0, packets: 0, contacts: 0, messages: 0, channels: 0, settings: 0, noiseFloor: 0 });
 
     await s.packets.append({ direction: 'rx', bytes: grpTxtPacket(), ts: 1 });
     await s.packets.append({ direction: 'rx', bytes: grpTxtPacket(2), ts: 2 });
@@ -37,9 +37,11 @@ describe('radioDbStats', () => {
     await s.contacts.upsertFromDevice(makeContact(5));
     const setting = { key: 'x', value: 'hello' };
     await s.settings.set(setting.key, setting.value);
+    await s.noiseFloor.add({ t: 5, noiseFloorDbm: -112 });
 
     const st = await radioDbStats(hexKey(0x01).toUpperCase(), { factory });
-    expect(st.counts).toEqual({ frames: 1, packets: 2, contacts: 1, messages: 0, channels: 0, settings: 1 });
+    expect(st.counts).toEqual({ frames: 1, packets: 2, contacts: 1, messages: 0, channels: 0, settings: 1, noiseFloor: 1 });
+    expect(st.bytesByStore.noiseFloor).toBe(approxValueBytes({ t: 5, noiseFloorDbm: -112 }));
     // the stored setting record is exactly { key, value }
     expect(st.bytesByStore.settings).toBe(approxValueBytes(setting));
     expect(st.bytesByStore.packets).toBeGreaterThan(2 * grpTxtPacket().length);

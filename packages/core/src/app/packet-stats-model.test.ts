@@ -53,6 +53,7 @@ import {
   type NodeRef,
   MAP_PACKET_LIMIT,
   packetRoutes,
+  noiseFloorSummary,
   recentPacketRoutes,
   statPacketRoute,
   type StatPacket,
@@ -343,6 +344,40 @@ describe('PacketStatsModel — range, live tail, aggregations', () => {
     await model.setRange({ from: null, to: null });
     expect(model.window.value).toBeNull();
     expect(model.timeline.value.bins).toEqual([]);
+  });
+
+  it('noise floor: samples in the date range, live-tailed, with median / min / max (§1.8)', async () => {
+    const { store, model } = await harness([rx(ack(), T)]);
+    expect(model.noiseFloor.value).toEqual([]);
+    expect(model.noiseFloorSummary.value).toBeNull();
+    await store.noiseFloor.add({ t: T, noiseFloorDbm: -110 });
+    await store.noiseFloor.add({ t: T + 2 * MIN, noiseFloorDbm: -104 });
+    await store.noiseFloor.add({ t: T + MIN, noiseFloorDbm: -112 }); // out of order: sorted in
+    expect(model.noiseFloor.value.map((x) => x.t)).toEqual([T, T + MIN, T + 2 * MIN]);
+    expect(model.noiseFloorSummary.value).toEqual({ samples: 3, medianDbm: -110, minDbm: -112, maxDbm: -104, latestDbm: -104 });
+
+    await model.setRange({ from: T + MIN, to: T + 3 * MIN });
+    expect(model.noiseFloor.value.map((x) => x.noiseFloorDbm)).toEqual([-112, -104]);
+    expect(model.noiseFloorSummary.value).toMatchObject({ samples: 2, medianDbm: -108 });
+    // live: inside the range appended, outside ignored, same t replaced
+    await store.noiseFloor.add({ t: T + 3 * MIN, noiseFloorDbm: -100 });
+    await store.noiseFloor.add({ t: T + 4 * MIN, noiseFloorDbm: -90 });
+    await store.noiseFloor.add({ t: T + 2 * MIN, noiseFloorDbm: -106 });
+    expect(model.noiseFloor.value.map((x) => x.noiseFloorDbm)).toEqual([-112, -106, -100]);
+
+    // removals (retention prune) reload
+    await store.noiseFloor.prune(T + 2 * MIN);
+    await model.settled();
+    expect(model.noiseFloor.value.map((x) => x.t)).toEqual([T + 2 * MIN, T + 3 * MIN]);
+    await model.setRange({ from: null, to: null });
+    expect(model.noiseFloor.value.map((x) => x.t)).toEqual([T + 2 * MIN, T + 3 * MIN, T + 4 * MIN]);
+  });
+
+  it('noiseFloorSummary', () => {
+    expect(noiseFloorSummary([])).toBeNull();
+    expect(noiseFloorSummary([{ t: 1, noiseFloorDbm: -100 }])).toEqual({ samples: 1, medianDbm: -100, minDbm: -100, maxDbm: -100, latestDbm: -100 });
+    const xs = [-101, -120, -99, -110].map((v, i) => ({ t: i, noiseFloorDbm: v }));
+    expect(noiseFloorSummary(xs)).toEqual({ samples: 4, medianDbm: -105.5, minDbm: -120, maxDbm: -99, latestDbm: -110 });
   });
 
   it('counts group messages per channel, by name or hash', async () => {

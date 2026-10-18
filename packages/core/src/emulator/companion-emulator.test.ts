@@ -757,7 +757,7 @@ describe('device settings (§4)', () => {
   });
 
   it('GET_BATT_AND_STORAGE and GET_STATS (core / radio / packets; other types ERR 6)', async () => {
-    const h = await setup({ contacts: contactSeeds, battery: { mv: 3999, storageUsedKb: 10, storageTotalKb: 500 } });
+    const h = await setup({ contacts: contactSeeds, battery: { mv: 3999, storageUsedKb: 10, storageTotalKb: 500 }, radioStats: { noiseFloorDbm: -112 } });
     expect((await h.one({ kind: 'getBattAndStorage' }, 'battAndStorage')).batt).toEqual({ batteryMv: 3999, storageUsedKb: 10, storageTotalKb: 500 });
     h.clock.advance(61_000);
     expect((await h.one({ kind: 'getStats', statsType: 0 }, 'stats')).stats).toEqual({ type: 'core', batteryMv: 3999, uptimeSecs: 61, errFlags: 0, outboundQueueLen: 0 });
@@ -769,6 +769,22 @@ describe('device settings (§4)', () => {
     expect((await h.one({ kind: 'getStats', statsType: 2 }, 'stats')).stats).toMatchObject({ type: 'packets', recv: 1, sent: 2, sentFlood: 1, sentDirect: 1, recvDirect: 1, recvFlood: 0 });
     expect((await h.one({ kind: 'getStats', statsType: 1 }, 'stats')).stats).toMatchObject({ type: 'radio', noiseFloorDbm: -112, lastSnr: -3.5 });
     expect(await h.err({ kind: 'getStats', statsType: 3 })).toBe(ERR.ILLEGAL_ARG);
+  });
+
+  it('GET_STATS radio: the default noise floor wanders about −112 dBm; fw < v8 answers ERR unsupported', async () => {
+    const h = await setup();
+    const seen = new Set<number>();
+    for (let i = 0; i < 30; i++) {
+      const s = (await h.one({ kind: 'getStats', statsType: 1 }, 'stats')).stats;
+      if (s.type !== 'radio') throw new Error('expected radio stats');
+      expect(s.noiseFloorDbm).toBeGreaterThanOrEqual(-116);
+      expect(s.noiseFloorDbm).toBeLessThanOrEqual(-108);
+      seen.add(s.noiseFloorDbm);
+      h.clock.advance(60_000);
+    }
+    expect(seen.size).toBeGreaterThan(2);
+    const old = await setup({ firmware: { verCode: 7 } });
+    expect(await old.err({ kind: 'getStats', statsType: 1 })).toBe(ERR.UNSUPPORTED_CMD);
   });
 
   it('SEND_SELF_ADVERT: OK; [1]=1 floods, otherwise zero-hop; location only with advert_loc_policy', async () => {

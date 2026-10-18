@@ -386,9 +386,13 @@ describe('AppSettingsModel', () => {
     const old = now - 40 * 86_400_000;
     await store.packets.append({ ts: old, direction: 'rx', bytes: Uint8Array.of(0x11, 0x00, 1, 2, 3, 4) });
     await store.packets.append({ ts: now, direction: 'rx', bytes: Uint8Array.of(0x11, 0x00, 1, 2, 3, 4) });
+    await store.noiseFloor.add({ t: old, noiseFloorDbm: -110 });
+    await store.noiseFloor.add({ t: now, noiseFloorDbm: -111 });
     const before = (await store.packets.query({ limit: 1000 })).items.length;
     expect(await s.setPacketRetentionDays(30)).toBeGreaterThanOrEqual(1);
     expect((await store.packets.query({ limit: 1000 })).items.length).toBe(before - 1);
+    // noise-floor samples follow the packet retention
+    expect((await store.noiseFloor.range()).map((x) => x.t)).toEqual([now]);
     expect(prefs.getItem(PREF_PACKET_RETENTION_DAYS)).toBe('30');
     await expect(s.setPacketRetentionDays(0)).rejects.toThrow(RangeError);
     expect(await s.setPacketRetentionDays(null)).toBe(0);

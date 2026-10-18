@@ -1,7 +1,9 @@
 /**
  * `<mc-line-chart>`: one 2 px line per series over time (epoch-ms `t`), or stacked bands when
  * `stacked`. A crosshair snaps to the nearest bin and the tooltip lists every series there.
- * A single series gets a faint area wash; ≥ 2 series get a legend. y starts at 0.
+ * A single series gets a faint area wash; ≥ 2 series get a legend. y starts at 0, unless `fit-y`
+ * (not stacked): then the y range is fitted to the data (e.g. a noise floor at −115…−105 dBm).
+ * `gap-ms` breaks the line where consecutive points are further apart (e.g. not connected).
  */
 import { css, html, nothing, svg, type SVGTemplateResult, type TemplateResult } from 'lit';
 import { scaleLinear, scaleTime } from 'd3-scale';
@@ -46,6 +48,8 @@ export class McLineChart extends ChartBase {
     yLabel: { type: String, attribute: 'y-label' },
     yFormat: { attribute: false },
     palette: { attribute: false },
+    fitY: { type: Boolean, attribute: 'fit-y' },
+    gapMs: { type: Number, attribute: 'gap-ms' },
     height: { type: Number },
     hover: { state: true },
   };
@@ -85,6 +89,10 @@ export class McLineChart extends ChartBase {
   declare yFormat: ((v: number) => string) | undefined;
   /** Series key → colour + legend; default: slots in series order. */
   declare palette: SeriesPalette | undefined;
+  /** Fit the y range to the data instead of starting at 0 (ignored when stacked). */
+  declare fitY: boolean;
+  /** Break the line between points further apart than this (ms); default never. */
+  declare gapMs: number | undefined;
   declare height: number;
   /** Index into the shared t list under the crosshair. */
   declare hover: number | null;
@@ -97,6 +105,8 @@ export class McLineChart extends ChartBase {
     this.yLabel = '';
     this.yFormat = undefined;
     this.palette = undefined;
+    this.fitY = false;
+    this.gapMs = undefined;
     this.height = 220;
     this.hover = null;
   }
@@ -165,26 +175,36 @@ export class McLineChart extends ChartBase {
     const x = scaleTime().domain([dx0, dx1]).range([x0, x1]);
     const xt = (t: number): number => x(t);
     this.#x = xt;
-    const yMax = max(rows, (r) => max(r.hi)) ?? 1;
-    const yMin = Math.min(0, min(rows, (r) => min(r.lo)) ?? 0);
+    const fit = this.fitY && !this.stacked;
+    let yMax = max(rows, (r) => max(r.hi)) ?? 1;
+    let yMin = fit ? (min(rows, (r) => min(r.hi)) ?? 0) : Math.min(0, min(rows, (r) => min(r.lo)) ?? 0);
+    if (fit && yMax === yMin) [yMin, yMax] = [yMin - 1, yMax + 1];
     const y = scaleLinear()
       .domain([yMin, yMax > yMin ? yMax : yMin + 1])
       .nice()
       .range([y0, y1]);
 
-    const idx = ts.map((_, i) => i);
+    const segments = splitAtGaps(ts, this.gapMs);
     const marks: SVGTemplateResult[] = rows.map((r) => {
-      const top = line<number>()
-        .x((i) => xt(ts[i]!))
-        .y((i) => y(r.hi[i]!))
-        .curve(curveMonotoneX)(idx);
+      const top = segments
+        .map((seg) =>
+          line<number>()
+            .x((i) => xt(ts[i]!))
+            .y((i) => y(r.hi[i]!))
+            .curve(curveMonotoneX)(seg),
+        )
+        .join('');
       const band =
         this.stacked || rows.length === 1
-          ? area<number>()
-              .x((i) => xt(ts[i]!))
-              .y0((i) => y(r.lo[i]!))
-              .y1((i) => y(r.hi[i]!))
-              .curve(curveMonotoneX)(idx)
+          ? segments
+              .map((seg) =>
+                area<number>()
+                  .x((i) => xt(ts[i]!))
+                  .y0((i) => (fit ? y0 : y(r.lo[i]!)))
+                  .y1((i) => y(r.hi[i]!))
+                  .curve(curveMonotoneX)(seg),
+              )
+              .join('')
           : null;
       return svg`
         ${band ? svg`<path class=${this.stacked ? 'band' : 'wash'} d=${band} fill=${r.color}></path>` : nothing}
@@ -235,6 +255,21 @@ export class McLineChart extends ChartBase {
       ${rows.length >= 2 ? legend(shown, this.stacked ? 'rect' : 'line', this.describe) : nothing}
     </div>`;
   }
+}
+
+/** Index runs of `ts` (ascending) with no step longer than `gapMs`; one run when `gapMs` is unset. */
+export function splitAtGaps(ts: readonly number[], gapMs: number | undefined): number[][] {
+  const out: number[][] = [];
+  let cur: number[] = [];
+  for (let i = 0; i < ts.length; i++) {
+    if (cur.length && gapMs !== undefined && ts[i]! - ts[i - 1]! > gapMs) {
+      out.push(cur);
+      cur = [];
+    }
+    cur.push(i);
+  }
+  if (cur.length) out.push(cur);
+  return out;
 }
 
 customElements.define('mc-line-chart', McLineChart);

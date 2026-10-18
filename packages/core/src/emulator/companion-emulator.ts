@@ -302,7 +302,8 @@ export class CompanionEmulator {
   #counters = { recv: 0, sent: 0, sentFlood: 0, sentDirect: 0, recvFlood: 0, recvDirect: 0, recvErrors: 0, txAirMs: 0, rxAirMs: 0 };
   #lastRssi: number;
   #lastSnr: number;
-  readonly #noiseFloor: number;
+  /** Fixed noise floor from `options.radioStats`; undefined = a slow deterministic wander (see #noiseFloorNow). */
+  readonly #noiseFloor: number | undefined;
   readonly #options: CompanionEmulatorOptions;
 
   // ---- radio / mesh ----
@@ -334,7 +335,7 @@ export class CompanionEmulator {
     this.#bootMs = this.clock.now();
     const nowSecs = Math.floor(this.clock.now() / 1000);
     this.#rtcOffsetSecs = (options.rtcEpochSecs ?? nowSecs) - nowSecs;
-    this.#noiseFloor = options.radioStats?.noiseFloorDbm ?? -112;
+    this.#noiseFloor = options.radioStats?.noiseFloorDbm;
     this.#lastRssi = options.radioStats?.lastRssiDbm ?? -80;
     this.#lastSnr = options.radioStats?.lastSnr ?? 0;
 
@@ -1201,6 +1202,8 @@ export class CompanionEmulator {
         this.#transmit({ type: 'controlData', payload: cmd.payload }, envelope(PayloadType.CONTROL, cmd.payload, ZERO_HOP));
         return this.#ok();
       case 'getStats':
+        // fw < v8 has no CMD_GET_STATS: the default branch answers ERR_CODE_UNSUPPORTED_CMD
+        if (this.firmware.verCode < 8) return this.#err(ERR.UNSUPPORTED_CMD);
         return this.#getStats(cmd.statsType);
       case 'setAutoAddConfig':
         this.#prefs.autoAddConfig = cmd.config;
@@ -1886,6 +1889,17 @@ export class CompanionEmulator {
     return p & ~inverseMask & 0xff;
   }
 
+  /**
+   * The reported noise floor: `options.radioStats.noiseFloorDbm` when set, else a deterministic
+   * function of the clock wandering about −112 dBm (two slow sines, ±4 dB), so a noise-floor chart
+   * of an emulated session is not a flat line.
+   */
+  #noiseFloorNow(): number {
+    if (this.#noiseFloor !== undefined) return this.#noiseFloor;
+    const min = this.clock.now() / 60_000;
+    return Math.round(-112 + 2.5 * Math.sin((2 * Math.PI * min) / 47) + 1.5 * Math.sin((2 * Math.PI * min) / 11));
+  }
+
   #getStats(type: number): void {
     const c = this.#counters;
     switch (type) {
@@ -1902,7 +1916,7 @@ export class CompanionEmulator {
           code: 0x18,
           stats: {
             type: 'radio',
-            noiseFloorDbm: this.#noiseFloor,
+            noiseFloorDbm: this.#noiseFloorNow(),
             lastRssiDbm: this.#lastRssi,
             lastSnr: this.#lastSnr,
             txAirSecs: Math.floor(c.txAirMs / 1000),

@@ -8,6 +8,7 @@ import type {
   DeviceRecord,
   FrameRecord,
   MessageRecord,
+  NoiseFloorSample,
   PacketRecord,
 } from './schema.js';
 
@@ -34,6 +35,10 @@ export interface RadioStoreEvents {
   /** A conversation's unread count changed. */
   unread: { convType: ConversationType; convKey: string; count: number };
   setting: { key: string; value: unknown };
+  /** A noise-floor sample was stored. */
+  noiseFloor: NoiseFloorSample;
+  /** Noise-floor samples were removed (prune / clear); re-query. */
+  noiseFloorChanged: { removed: number };
 }
 
 export interface DevicesEvents {

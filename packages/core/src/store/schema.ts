@@ -38,6 +38,7 @@ export const STORE = {
   messages: 'messages',
   channels: 'channels',
   settings: 'settings',
+  noiseFloor: 'noiseFloor',
 } as const;
 export type RadioStoreName = (typeof STORE)[keyof typeof STORE];
 
@@ -336,6 +337,21 @@ export interface SettingRecord {
   value: unknown;
 }
 
+/**
+ * One noise-floor sample (GET_STATS radio, polled every minute while connected; app/noise-floor.ts).
+ * Primary key `t`, so samples are ordered by time and a range query is a key range.
+ */
+export interface NoiseFloorSample {
+  /** Host time of the sample, epoch ms (primary key). */
+  t: number;
+  /** The radio's noise floor, dBm. */
+  noiseFloorDbm: number;
+  /** RSSI of the last received packet, dBm (same response). */
+  lastRssiDbm?: number;
+  /** SNR of the last received packet, dB (same response). */
+  lastSnr?: number;
+}
+
 export type StoredTransportKind = 'serial' | 'ble' | 'emulator' | 'loopback' | (string & {});
 
 export interface DeviceRecord {
@@ -430,7 +446,12 @@ const radioV3: Migration = ({ tx }) => {
   };
 };
 
-export const RADIO_DB_MIGRATIONS: readonly Migration[] = [radioV1, radioV2, radioV3];
+/** v4: the `noiseFloor` store of {@link NoiseFloorSample}s, keyed by time; existing stores are untouched. */
+const radioV4: Migration = ({ db }) => {
+  db.createObjectStore(STORE.noiseFloor, { keyPath: 't' });
+};
+
+export const RADIO_DB_MIGRATIONS: readonly Migration[] = [radioV1, radioV2, radioV3, radioV4];
 export const RADIO_DB_VERSION = RADIO_DB_MIGRATIONS.length;
 
 const devicesV1: Migration = ({ db }) => {

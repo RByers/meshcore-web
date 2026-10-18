@@ -6,10 +6,10 @@ import { concatBytes, toHex } from '@meshcore-web/core/util/bytes';
 import '../src/mc-app.js';
 import '../src/pages/packets/index.js';
 import { smazEncodeIfSmaller } from '@meshcore-web/core/util/smaz';
-import { createHarness, type Harness } from '../src/testing/harness.js';
+import { createHarness, type Harness, type HarnessOptions } from '../src/testing/harness.js';
 import type { McTileMap } from '../src/components/tile-map.js';
 import { timelineDescribe, timelinePalette, timelineSeries, type McPacketStats } from '../src/pages/packets/packet-stats.js';
-import { timelineSeriesDescription } from '@meshcore-web/core/app';
+import { NOISE_FLOOR_FIRST_DELAY_MS, NOISE_FLOOR_INTERVAL_MS, timelineSeriesDescription } from '@meshcore-web/core/app';
 import { toDatetimeLocal } from '../src/pages/packets/inspection.js';
 
 let h: Harness | undefined;
@@ -25,8 +25,8 @@ afterEach(async () => {
 });
 
 /** Connects the emulator, makes some air traffic, opens the Stats tab and waits for it to settle. */
-async function openStats(): Promise<{ t: Harness; el: McPacketStats }> {
-  const t = (h = createHarness());
+async function openStats(opts: HarnessOptions = {}): Promise<{ t: Harness; el: McPacketStats }> {
+  const t = (h = createHarness(opts));
   await t.mount();
   await t.connectEmulator('/packets');
   await t.until(() => t.query('[data-tab="stats"]'), 3000, 'stats tab');
@@ -148,10 +148,59 @@ describe('/packets Stats tab', () => {
 
     select(t.query('[data-select="y"]')!, 'rssi');
     await settle(t, el);
-    expect(inChart(el, 'dots', 'mc-dot-plot', '[data-ref-line]')).toHaveLength(0);
+    expect(inChart(el, 'dots', 'mc-dot-plot', '[data-ref-line="decode-limit"]')).toHaveLength(0);
     select(t.query('[data-select="y"]')!, 'snr');
     await settle(t, el);
     expect(refLabel()).toBe(`SF${sf} decode limit −${floor} dB`);
+  });
+
+  it('noise floor: an empty state before any sample', async () => {
+    const { el } = await openStats({ app: { noiseFloorSampling: false } });
+    const section = el.shadowRoot!.querySelector('[data-section="noise-floor"]')!;
+    expect(section.querySelector('[data-empty="noise-floor"]')!.textContent).toContain('No noise floor samples');
+    expect(section.querySelector('mc-line-chart')).toBeNull();
+    expect(section.querySelector('[data-field="noise-note"]')!.textContent).toContain('every minute while connected');
+  });
+
+  it('noise floor: charts the samples taken while connected, and overlays them on the RSSI plot only', async () => {
+    const { t, el } = await openStats();
+    const stats = t.app.packetStats;
+    // the sampler's first poll, then one a minute later
+    await t.elapse(NOISE_FLOOR_FIRST_DELAY_MS);
+    await t.until(() => stats.noiseFloor.value.length === 1, 3000, 'first sample');
+    await t.elapse(NOISE_FLOOR_INTERVAL_MS);
+    await t.until(() => stats.noiseFloor.value.length === 2, 3000, 'second sample');
+    // traffic after the samples, so they fall inside the packets' time window
+    const last = stats.noiseFloor.value[1]!.t;
+    t.emulatorScenario().nodes.alice.advertise();
+    await t.app.connection.capture!.idle();
+    await t.until(() => stats.points.value.some((p) => p.ts > last && p.rssi !== null), 5000, 'later packet');
+    await settle(t, el);
+
+    const section = el.shadowRoot!.querySelector('[data-section="noise-floor"]')!;
+    expect(section.querySelector('[data-empty="noise-floor"]')).toBeNull();
+    expect(section.querySelector('[data-field="noise-summary"]')!.textContent).toMatch(/^Median −[\d.]+ dBm( · −\d+ to −\d+ dBm)? · latest −\d+ dBm · 2 samples$/);
+    await t.until(() => inChart(el, 'noise-floor', 'mc-line-chart', '[data-mark="line"]').length === 1, 3000, 'noise line');
+    expect(inChart(el, 'noise-floor', 'mc-line-chart', '[data-field="y-label"]')[0]?.textContent).toBe('dBm');
+
+    const noiseRef = () => inChart(el, 'dots', 'mc-dot-plot', '[data-ref-line="noise-floor"]');
+    await t.until(() => inChart(el, 'dots', 'mc-dot-plot', '[data-field="y-label"]').length > 0, 3000, 'dot plot axes');
+    expect(noiseRef()).toHaveLength(0); // SNR: the decode limit only
+    select(t.query('[data-select="y"]')!, 'rssi');
+    await settle(t, el);
+    await t.until(() => noiseRef().length === 1, 3000, 'noise floor overlay');
+    const ref = noiseRef()[0]!;
+    expect(ref.dataset['refKind']).toBe('series');
+    expect(ref.querySelector('[data-field="ref-label"]')!.textContent).toBe('Noise floor');
+    // a step path: the two samples' levels joined by a vertical step, held horizontally
+    expect(ref.querySelector('path')!.getAttribute('d')).toMatch(/^M[\d.]+,[\d.]+H[\d.]+V[\d.]+H[\d.]+$/);
+    expect(ref.closest('svg')!.getAttribute('aria-label')).toContain('Noise floor');
+    expect(inChart(el, 'dots', 'mc-dot-plot', '[data-ref-line="decode-limit"]')).toHaveLength(0);
+
+    select(t.query('[data-select="y"]')!, 'snr');
+    await settle(t, el);
+    expect(noiseRef()).toHaveLength(0);
+    expect(inChart(el, 'dots', 'mc-dot-plot', '[data-ref-line="decode-limit"]')).toHaveLength(1);
   });
 
   it('packet and route type breakdown legends explain each type on hover', async () => {

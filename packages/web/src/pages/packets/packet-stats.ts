@@ -14,6 +14,7 @@
 import { css, html, nothing, type TemplateResult } from 'lit';
 import {
   formatDistance,
+  NOISE_FLOOR_GAP_MS,
   nodeId,
   placeNodeCounts,
   untracked,
@@ -28,6 +29,7 @@ import {
   type LastHopStats,
   type LoraParams,
   type NodeRef,
+  type NoiseFloorSummary,
   type Bounds,
   type PathUsageMap,
   type PathUsageRoute,
@@ -40,6 +42,7 @@ import {
   type Timeline,
 } from '@meshcore-web/core/app';
 import { packetTypeNameDescription } from '@meshcore-web/core/packet';
+import type { NoiseFloorSample } from '@meshcore-web/core/store';
 import { AppElement } from '../../app-context.js';
 import { hrefFor } from '../../router.js';
 import { nodeHref } from '../../components/node-link.js';
@@ -104,11 +107,27 @@ function formatDb(v: number): string {
 
 /**
  * Reference lines for the dot plot's y field: on SNR, the radio's decode limit
- * (`PacketStatsModel.decodeLimit`) when known; none otherwise.
+ * (`PacketStatsModel.decodeLimit`) when known; on RSSI, the noise floor samples
+ * (`PacketStatsModel.noiseFloor`) as a step line with gaps where the radio was not connected;
+ * none otherwise.
  */
-export function dotRefLines(y: YField, limit: DecodeLimit | null): RefLine[] {
-  if (y !== 'snr' || !limit) return [];
-  return [{ key: 'decode-limit', value: limit.snrDb, label: `SF${limit.sf} decode limit ${formatDb(limit.snrDb)}` }];
+export function dotRefLines(y: YField, limit: DecodeLimit | null, noise: readonly NoiseFloorSample[] = []): RefLine[] {
+  if (y === 'snr' && limit) return [{ key: 'decode-limit', value: limit.snrDb, label: `SF${limit.sf} decode limit ${formatDb(limit.snrDb)}` }];
+  if (y === 'rssi' && noise.length) {
+    return [{ kind: 'series', key: 'noise-floor', label: 'Noise floor', holdMs: NOISE_FLOOR_GAP_MS, points: noise.map((s) => ({ t: s.t, v: s.noiseFloorDbm })) }];
+  }
+  return [];
+}
+
+/** dBm with a typographic minus, e.g. "−110 dBm". */
+function formatDbm(v: number): string {
+  return `${v < 0 ? '−' : ''}${formatNumber(Math.abs(v))} dBm`;
+}
+
+/** "Median −110 dBm · −114 to −104 dBm · latest −108 dBm · 42 samples". */
+export function noiseFloorText(s: NoiseFloorSummary): string {
+  const range = s.minDbm === s.maxDbm ? '' : ` · ${formatDbm(s.minDbm).replace(' dBm', '')} to ${formatDbm(s.maxDbm)}`;
+  return `Median ${formatDbm(s.medianDbm)}${range} · latest ${formatDbm(s.latestDbm)} · ${s.samples} sample${s.samples === 1 ? '' : 's'}`;
 }
 
 export const COLOR_OPTIONS: readonly { id: ColorField; label: string }[] = [
@@ -618,12 +637,47 @@ export class McPacketStats extends AppElement {
   #refs: { key: readonly unknown[]; lines: RefLine[] } | undefined;
 
   /** Dot plot reference lines, memoised like `#dotProps` so the plot's layout cache survives re-renders. */
-  #refLines(limit: DecodeLimit | null): RefLine[] {
-    const key = [this.yField, limit];
+  #refLines(limit: DecodeLimit | null, noise: readonly NoiseFloorSample[]): RefLine[] {
+    // the noise samples only matter on RSSI: keep the SNR line's identity when they change
+    const key = [this.yField, limit, this.yField === 'rssi' ? noise : null];
     const prev = this.#refs;
     if (prev && key.every((k, i) => k === prev.key[i])) return prev.lines;
-    this.#refs = { key, lines: dotRefLines(this.yField, limit) };
+    this.#refs = { key, lines: dotRefLines(this.yField, limit, noise) };
     return this.#refs.lines;
+  }
+
+  #noiseSeries: { samples: readonly NoiseFloorSample[]; series: LineSeries[] } | undefined;
+
+  #noiseFloorSection(xDomain: readonly [number, number] | undefined): TemplateResult {
+    const stats = this.app.packetStats;
+    const samples = stats.noiseFloor.value;
+    const summary = stats.noiseFloorSummary.value;
+    if (this.#noiseSeries?.samples !== samples) {
+      this.#noiseSeries = { samples, series: [{ key: 'noise', label: 'Noise floor', points: samples.map((s) => ({ t: s.t, v: s.noiseFloorDbm })) }] };
+    }
+    const unsupported = this.app.noiseFloor.supported.value === false;
+    return html`<section class="card" data-section="noise-floor">
+      <h3>Noise floor</h3>
+      ${summary
+        ? html`<div class="controls"><span data-field="noise-summary">${noiseFloorText(summary)}</span></div>
+            <mc-line-chart
+              data-chart-id="noise-floor"
+              .series=${this.#noiseSeries.series}
+              .xDomain=${xDomain}
+              fit-y
+              gap-ms=${NOISE_FLOOR_GAP_MS}
+              y-label="dBm"
+              .yFormat=${formatDbm}
+            ></mc-line-chart>`
+        : html`<p class="note muted" data-empty="noise-floor">
+            ${unsupported ? "This radio's firmware does not report its noise floor." : 'No noise floor samples in this range yet.'}
+          </p>`}
+      <p class="note muted" data-field="noise-note">
+        The radio's background noise level on its frequency: higher (less negative) is noisier, and a packet needs to arrive well
+        above it to be heard. Sampled every minute while connected; gaps are times the radio was not connected. With Y = RSSI the
+        packets-over-time plot draws it as a line under the dots.
+      </p>
+    </section>`;
   }
 
   /** Dot plot props for the last (points, y, colour): a new array would re-lay-out every dot. */
@@ -902,10 +956,12 @@ export class McPacketStats extends AppElement {
           .describe=${this.colorField === 'type' || this.colorField === 'route' ? packetTypeNameDescription : undefined}
           series-label=${COLOR_OPTIONS.find((o) => o.id === this.colorField)?.label ?? ''}
           missing-label=${yOpt.missing}
-          .refLines=${this.#refLines(stats.decodeLimit.value)}
+          .refLines=${this.#refLines(stats.decodeLimit.value, stats.noiseFloor.value)}
           @dot-select=${this.#onDot}
         ></mc-dot-plot>
       </section>
+
+      ${this.#noiseFloorSection(xDomain)}
 
       <section class="card" data-section="utilization">
         <h3>Network utilisation</h3>

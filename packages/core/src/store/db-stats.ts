@@ -28,7 +28,7 @@ export interface RadioDbStats {
 export const RADIO_STORE_NAMES: readonly RadioStoreName[] = Object.values(STORE);
 
 function zeroes(): Record<RadioStoreName, number> {
-  return { frames: 0, packets: 0, contacts: 0, messages: 0, channels: 0, settings: 0 };
+  return { frames: 0, packets: 0, contacts: 0, messages: 0, channels: 0, settings: 0, noiseFloor: 0 };
 }
 
 /**

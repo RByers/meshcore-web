@@ -148,7 +148,10 @@ export class AppSettingsModel {
     const days = this.#retentionDays.peek();
     if (days === null) return 0;
     try {
-      return await store.packets.prune({ maxAgeMs: days * DAY_MS });
+      const removed = await store.packets.prune({ maxAgeMs: days * DAY_MS });
+      // noise-floor samples follow the packet retention, so they cover the same date range
+      await store.noiseFloor.prune(store.clock.now() - days * DAY_MS);
+      return removed;
     } catch {
       return 0; // store closed meanwhile
     }

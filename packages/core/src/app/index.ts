@@ -18,6 +18,7 @@ export * from './airtime.js';
 export * from './box-stats.js';
 export * from './packet-stats-model.js';
 export * from './device-settings-model.js';
+export * from './noise-floor.js';
 export * from './radio-presets.js';
 export * from './app-settings-model.js';
 export * from './remote-admin-model.js';

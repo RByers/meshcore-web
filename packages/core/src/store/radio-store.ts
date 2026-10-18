@@ -15,6 +15,7 @@ import { ContactsRepo } from './contacts.js';
 import { MessagesRepo } from './messages.js';
 import { ChannelsRepo } from './channels.js';
 import { SettingsRepo } from './settings.js';
+import { NoiseFloorLog } from './noise-floor.js';
 import { SEND_CONFIRM_LOOKBACK, SendCorrelator, awaitsAck, confirmedSend, type SendUpdate } from './send-correlator.js';
 import type { StoreOpenOptions } from './devices.js';
 
@@ -42,6 +43,8 @@ export class RadioStore {
   readonly messages: MessagesRepo;
   readonly channels: ChannelsRepo;
   readonly settings: SettingsRepo;
+  /** Noise-floor samples (GET_STATS radio polls), keyed by time. */
+  readonly noiseFloor: NoiseFloorLog;
   /** Live send-outcome correlation for tx rows logged by {@link captureFrame} (handle = packet id). */
   readonly #sends = new SendCorrelator<number>();
 
@@ -59,6 +62,7 @@ export class RadioStore {
     this.messages = new MessagesRepo(db, this.events, now);
     this.channels = new ChannelsRepo(db, this.events, now);
     this.settings = new SettingsRepo(db, this.events);
+    this.noiseFloor = new NoiseFloorLog(db, this.events);
   }
 
   /** Opens (creating / migrating as needed) the database of the radio with this public key. */

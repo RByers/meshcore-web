@@ -23,6 +23,7 @@ import {
 import { ContactsModel } from './contacts-model.js';
 import { ConversationsModel } from './conversations-model.js';
 import { DeviceSettingsModel, type GeolocationProvider } from './device-settings-model.js';
+import { NoiseFloorSampler } from './noise-floor.js';
 import { AppSettingsModel } from './app-settings-model.js';
 import { NotificationsModel } from './notifications.js';
 import { MapModel } from './map-model.js';
@@ -67,6 +68,8 @@ export interface AppModelOptions {
   messaging?: ChatModelOptions;
   /** Remote admin tuning (tests use short remote timeouts). */
   remoteAdmin?: RemoteAdminOptions;
+  /** Noise-floor sampling while connected (GET_STATS radio every minute). Default true. */
+  noiseFloorSampling?: boolean;
 }
 
 /**
@@ -91,6 +94,8 @@ export class AppModel {
   readonly clock: Clock;
   readonly notifications: NotificationsModel;
   readonly connection: ConnectionModel;
+  /** Samples the connected radio's noise floor into its store every minute (app/noise-floor.ts). */
+  readonly noiseFloor: NoiseFloorSampler;
 
   readonly #devices = signal<readonly DeviceRecord[]>([]);
   /** Known radios, most recently connected first. */
@@ -138,6 +143,8 @@ export class AppModel {
       smazAutoEnable: () => this.appSettings.smazAutoEnable.peek(),
       ...(opts.clientOptions ? { clientOptions: opts.clientOptions } : {}),
     });
+    this.noiseFloor = new NoiseFloorSampler(this.connection, { read: () => this.deviceSettings.readRadioStats(), clock: this.clock });
+    if (opts.noiseFloorSampling !== false) this.noiseFloor.start();
     this.#offs.push(
       this.connection.events.on('connected', () => {
         // the pipeline records the connection first; refresh after its setup step
@@ -315,6 +322,7 @@ export class AppModel {
   async dispose(): Promise<void> {
     await this.connection.disconnect({ keepResume: true });
     for (const off of this.#offs.splice(0)) off();
+    this.noiseFloor.dispose();
     for (const m of [this.#contacts, this.#channels, this.#unread, this.#conversations, this.#packetLog, this.#packetStats, this.#contactPaths, this.#positions, ...this.#chats.values()]) m?.dispose();
     this.#remoteAdmin?.dispose();
     this.#deviceSettings?.dispose();

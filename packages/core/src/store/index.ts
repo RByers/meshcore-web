@@ -11,6 +11,7 @@ export * from './contacts.js';
 export * from './messages.js';
 export * from './channels.js';
 export * from './settings.js';
+export * from './noise-floor.js';
 export * from './devices.js';
 export * from './radio-store.js';
 export * from './db-stats.js';

@@ -117,7 +117,7 @@ describe('PacketLog by source', () => {
     db2.close();
 
     const store = await RadioStore.open(key32(1), { factory });
-    expect(store.db.version).toBe(3);
+    expect(store.db.version).toBe(4);
     const all = (await store.packets.query({ order: 'asc' })).items as PacketRecord[];
     expect(all.map((r) => r.srcHash)).toEqual(['a7', undefined]);
     expect((await store.packets.query({ src: 'a7' })).items.map((r) => r.ts)).toEqual([1]);

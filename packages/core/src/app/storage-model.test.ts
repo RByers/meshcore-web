@@ -11,7 +11,7 @@ function device(pubKey: string): DeviceRecord {
 }
 
 function fakeStats(pubKey: string, approxBytes: number): RadioDbStats {
-  const counts = { frames: 0, packets: approxBytes, contacts: 0, messages: 0, channels: 0, settings: 0 };
+  const counts = { frames: 0, packets: approxBytes, contacts: 0, messages: 0, channels: 0, settings: 0, noiseFloor: 0 };
   return { pubKey, exists: true, counts, bytesByStore: { ...counts }, approxBytes };
 }
 

@@ -218,7 +218,27 @@ and segments weighted by packet count, as the contact "paths heard via" map does
 node key, else hash + position; estimated positions only with the "approximate positions"
 setting). An `unknown` endpoint is never drawn and doesn't count the route as incomplete.
 
-### 1.8 Tests (`packet-stats-model.test.ts`, node vitest)
+### 1.8 Noise floor
+
+**Collection** (`app/noise-floor.ts`, `NoiseFloorSampler`, `app.noiseFloor`): while a radio is
+connected (phase `connected`, store open), the app reads GET_STATS radio (companion-protocol.md
+§4 cmd 56 / §5.6, via `DeviceSettingsModel.readRadioStats`) 5 s after the connection is up and
+then every 60 s on `app.clock`, and stores `{ t, noiseFloorDbm, lastRssiDbm, lastSnr }` (`t` = when
+the request was sent) in the radio's `noiseFloor` IndexedDB store (schema v4, keyPath `t`,
+`store/noise-floor.ts` `NoiseFloorLog`: `add`, `range({ from, to })`, `prune(before)`, `clear`;
+events `noiseFloor` / `noiseFloorChanged`). A tick that finds the previous request outstanding is
+skipped; a failed request is skipped; firmware that answers ERR (no GET_STATS before v8) stops
+sampling for that connection (`supported` → false). Nothing raises a notification. Samples follow
+the packet retention setting (`AppSettingsModel` prunes both) and go with the database when a radio
+is removed; `radioDbStats` counts them. `AppModelOptions.noiseFloorSampling: false` turns it off.
+
+**Model**: `PacketStatsModel.noiseFloor` holds the samples in the date range (ascending `t`,
+loaded with the packets, live-tailed from `noiseFloor` events, reloaded on `noiseFloorChanged`; the
+drill-down filters don't apply), `noiseFloorSummary` their `noiseFloorSummary()` (samples, median,
+min, max, latest dBm; null when none). Charts treat samples more than `NOISE_FLOOR_GAP_MS` (3 min)
+apart as a gap (not connected).
+
+### 1.9 Tests (`packet-stats-model.test.ts`, node vitest)
 
 Build records with `store.packets.append(...)` (real packets via `buildPacket` and the payload
 encoders, like the other model tests) for a radio with a position and a few contacts with
@@ -258,8 +278,8 @@ without the app):
 
 - `<mc-bar-chart>` horizontal bars: `items: { label, value, href?, title?, key?, selected? }[]`; label column is a link when `href` is set; value label at the bar end; sorted as given; keyed rows dispatch `bar-select` (§3 drill-down).
 - `<mc-box-plot>` horizontal box-and-whisker rows on one value axis (tick labels below, zero line when 0 is in range): `rows: { label, box: BoxStats | null, href?, title?: string | string[], key?, selected? }[]`, `format`, `empty-row-text`; per row whiskers with end caps, box q1–q3, median line, mean diamond, outlier dots, the median printed at the right; a null box shows `empty-row-text`. Label links, tooltip and keyed-row `bar-select` / pressed state as `<mc-bar-chart>`.
-- `<mc-dot-plot>` `points: { x: number, y: number | null, size: number, color: string /* series key */, id }[]`, `xDomain`, `yLabel`, `yFormat`; dot radius ∝ `sqrt(size)` (area ∝ bytes, 2–9 px); nulls in `y` dropped with a count shown ("n packets without SNR"); click → `dot-select` event with the id; legend with series → colour (≤ 8 + Other). `refLines: { value, label, key? }[]` draws horizontal dashed reference lines (`--mc-warn` stroke, muted label above the right end, `data-ref-line=key`, labels appended to the SVG's aria-label) and widens the y domain so each line is always visible. A time-varying line (e.g. noise-floor samples) is meant to join `RefLine` as a second union member `{ kind: 'series', points: { t, v }[], label }`, drawn as a step path in `refLineMarks` (dot-plot.ts).
-- `<mc-line-chart>` `series: { key, points: { t, v }[] }[]`, `xDomain`, `stacked?: boolean`; crosshair tooltip listing all series at the hovered bin; legend.
+- `<mc-dot-plot>` `points: { x: number, y: number | null, size: number, color: string /* series key */, id }[]`, `xDomain`, `yLabel`, `yFormat`; dot radius ∝ `sqrt(size)` (area ∝ bytes, 2–9 px); nulls in `y` dropped with a count shown ("n packets without SNR"); click → `dot-select` event with the id; legend with series → colour (≤ 8 + Other). `refLines: RefLine[]` draws reference lines under the dots (muted label above the right end, `data-ref-line=key`, labels appended to the SVG's aria-label) and widens the y domain so each line is always visible: `{ value, label, key? }` is a horizontal dashed line (`--mc-warn` stroke); `{ kind: 'series', points: { t, v }[], holdMs?, label, key? }` a step path (each sample held until the next, or for `holdMs` → a gap; clipped to the plot; `data-ref-kind="series"`, `stepPath`).
+- `<mc-line-chart>` `series: { key, points: { t, v }[] }[]`, `xDomain`, `stacked?: boolean`; crosshair tooltip listing all series at the hovered bin; legend. `fit-y` fits the y range to the data instead of starting at 0 (not stacked); `gap-ms` breaks the line between points further apart (`splitAtGaps`).
 - `<mc-breakdown>` a single horizontal 100 % stacked bar per dimension: `segments: { label, value, title?, key?, selected? }[]` with a legend / inline labels; 2 px gaps between segments; keyed segments dispatch `segment-select`.
 - `<mc-stat-tile>` label + big value + optional sub-text.
 
@@ -306,7 +326,15 @@ is not shown; the inspector split is hidden). The Stats panel, top to bottom:
    the top 8 by count in the current points take slots in count order, rest "Other". *Compression*
    uses fixed slots (Compressed 1, Plain 2, Not decrypted / non-text packets "Other").
    On *SNR*, a dashed line marks the radio's decode limit (`decodeLimit`, §1.5), labelled e.g.
-   "SF10 decode limit −15 dB"; no line when the SF is unknown (`dotRefLines`).
+   "SF10 decode limit −15 dB"; no line when the SF is unknown (`dotRefLines`). On *RSSI*, the
+   noise floor (`noiseFloor`, §1.8) is a step line labelled "Noise floor" (gaps where not
+   connected), so each packet's RSSI can be compared with the noise at that moment.
+   **Noise floor** (`data-section="noise-floor"`): a summary line (`noiseFloorText`: median,
+   min to max, latest, sample count), an `mc-line-chart` (`fit-y`, `gap-ms` =
+   `NOISE_FLOOR_GAP_MS`, same `xDomain` as the other time charts) of the samples in the range, and
+   a muted note (background noise level; higher = noisier; sampled every minute while connected;
+   gaps = not connected). Empty state `data-empty="noise-floor"` (or, when the firmware refused
+   GET_STATS, says so).
 5. **Network utilisation**: `mc-line-chart` of airtime fraction over time (single series, %), then
    `mc-breakdown` rows for payload type, route type, direction, channel / category — each showing
    airtime share (with packet count in the tooltip). When airtime is unknown, fall back to bytes
