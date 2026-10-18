@@ -158,6 +158,27 @@ describe('/packets page', () => {
     expect(anchor.getBoundingClientRect().top).toBeCloseTo(top, 0);
   });
 
+  it('loads older rows as the end of the list scrolls into view (no pager buttons)', async () => {
+    await page.viewport(1400, 600);
+    const t = await openLog();
+    const bob = t.emulatorScenario().nodes.bob;
+    const log = t.app.packetLog.packets;
+    for (let i = 0; i < 110; i++) bob.sendChannelMessage('Public', `filler ${i}`);
+    await t.until(() => log.total.value >= 110, 10000, '110 packets logged');
+    await log.settled();
+    // live tail keeps the newest page (100 rows) and leaves the rest to load on scroll
+    await t.until(() => t.queryAll('tr[data-packet-id]').length === log.pageSize && t.query('[data-load-more]'), 3000, 'first page + sentinel');
+    expect(t.query('[data-action="next"]')).toBeNull();
+    expect(t.query('[data-action="prev"]')).toBeNull();
+    expect(t.query('[data-field="page"]')).toBeNull();
+
+    t.query('[data-load-more]')!.scrollIntoView({ block: 'end', behavior: 'instant' });
+    await t.until(() => t.queryAll('tr[data-packet-id]').length === log.total.value, 5000, 'all rows loaded');
+    expect(t.query('[data-load-more]')).toBeNull();
+    const ids = t.queryAll('tr[data-packet-id]').map((r) => Number(r.dataset['packetId']));
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
   it('at the top of the list new packets push the rows down', async () => {
     await page.viewport(1400, 500);
     const t = await openLog();

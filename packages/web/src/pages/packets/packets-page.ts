@@ -1,6 +1,6 @@
 /**
  * `/packets`: the packet log (over-the-air packets the radio reported) and the frame log (every
- * host ↔ device frame), with filters, live tail, paging, export / import / clear, and the
+ * host ↔ device frame), with filters, live tail, infinite scroll, export / import / clear, and the
  * inspector in a side panel (wide) or on its own page `/packets/:id` (narrow).
  * `/packets/node/:key` opens the packet log filtered to the packets that node originated (linked
  * from the contact page; the filter uses the packet log's source index).
@@ -56,6 +56,10 @@ export class McPacketsPage extends AppElement {
   declare confirm: '' | 'clear' | 'key';
   declare busy: boolean;
   #ro: ResizeObserver | undefined;
+  /** Watches the end-of-list sentinel: older rows load as it nears the viewport (infinite scroll). */
+  #io: IntersectionObserver | undefined;
+  #sentinel: Element | null = null;
+  #sentinelRows: unknown = null;
   #textTimer: ReturnType<typeof setTimeout> | undefined;
   #loadSeq = 0;
   /** `send` of the packet the inspector shows (JSON), to refresh it when the outcome changes. */
@@ -200,6 +204,11 @@ export class McPacketsPage extends AppElement {
         align-items: center;
         gap: 6px;
       }
+      .more {
+        margin: 0;
+        padding: 8px;
+        text-align: center;
+      }
       .tablewrap {
         overflow-x: auto;
         border: 1px solid var(--mc-border);
@@ -326,11 +335,19 @@ export class McPacketsPage extends AppElement {
       if (wide !== this.wide) this.wide = wide;
     });
     this.#ro.observe(this);
+    this.#io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) this.#loadMore();
+      },
+      { rootMargin: '0px 0px 600px 0px' },
+    );
   }
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     this.#ro?.disconnect();
+    this.#io?.disconnect();
+    this.#sentinel = null;
     clearTimeout(this.#textTimer);
   }
 
@@ -352,6 +369,28 @@ export class McPacketsPage extends AppElement {
     super.updated(changed);
     this.#keepAnchor();
     this.#refreshInspector();
+    this.#watchSentinel();
+  }
+
+  /**
+   * (Re)observes the sentinel whenever it or the rows change, so the observer reports it again
+   * when a load didn't push it out of range (short list, tall screen) and the next page follows.
+   */
+  #watchSentinel(): void {
+    const el = this.renderRoot.querySelector('[data-load-more]');
+    const rows = this.tab === 'stats' ? null : this.#view().rows.peek();
+    if (el === this.#sentinel && rows === this.#sentinelRows) return;
+    if (this.#sentinel) this.#io?.unobserve(this.#sentinel);
+    this.#sentinel = el;
+    this.#sentinelRows = rows;
+    if (el) this.#io?.observe(el);
+  }
+
+  #loadMore(): void {
+    if (this.tab === 'stats') return;
+    this.#view()
+      .loadMore()
+      .catch((err: unknown) => this.app.notifications.error('Could not load more', err));
   }
 
   /** The inspected tx row's send outcome changed (e.g. its ACK arrived): inspect it again. */
@@ -651,8 +690,6 @@ export class McPacketsPage extends AppElement {
   #toolbar(): TemplateResult {
     const v = this.#view();
     const noun = this.tab;
-    const page = v.page.value;
-    const pages = v.pageCount.value;
     const missed = v.missed.value;
     const log = this.#log;
     return html`<div class="toolbar">
@@ -663,9 +700,6 @@ export class McPacketsPage extends AppElement {
       >
       ${missed > 0 ? html`<button data-action="show-new" @click=${() => void v.setLive(true)}>${missed} new</button>` : nothing}
       <span class="spacer"></span>
-      <button data-action="prev" ?disabled=${page === 0} @click=${() => void v.prev()} aria-label="Newer page">‹ Newer</button>
-      <span data-field="page">${page + 1} / ${pages}</span>
-      <button data-action="next" ?disabled=${!v.hasMore.value} @click=${() => void v.next()} aria-label="Older page">Older ›</button>
       <button data-action="export" @click=${() => void this.#export()}>Export</button>
       <input type="file" accept="application/json,.json" data-action="import" aria-label="Import JSON" hidden @change=${(e: Event) => void this.#import(e)} />
       <button data-action="import-button" @click=${() => this.renderRoot.querySelector<HTMLInputElement>('input[data-action="import"]')?.click()}>Import…</button>
@@ -753,6 +787,7 @@ export class McPacketsPage extends AppElement {
           })}
         </tbody>
       </table>
+      ${this.#moreSentinel(this.#log.packets.hasMore.value)}
       ${rows.length === 0 ? html`<p class="empty muted">${this.#log.packets.total.value ? 'No packets match the filters.' : 'No packets logged yet. Packets the radio hears, and those this app asks it to send, appear here live.'}</p>` : nothing}
     </div>`;
   }
@@ -790,8 +825,14 @@ export class McPacketsPage extends AppElement {
           })}
         </tbody>
       </table>
+      ${this.#moreSentinel(this.#log.frames.hasMore.value)}
       ${rows.length === 0 ? html`<p class="empty muted">No frames match.</p>` : nothing}
     </div>`;
+  }
+
+  /** End of the list: older rows load as it scrolls into view (see #watchSentinel). */
+  #moreSentinel(hasMore: boolean): TemplateResult | typeof nothing {
+    return hasMore ? html`<p class="more muted" data-load-more>Loading older…</p>` : nothing;
   }
 
   #rowKey(e: KeyboardEvent, tab: LogTab, id: number): void {

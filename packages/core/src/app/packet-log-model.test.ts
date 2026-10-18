@@ -163,7 +163,7 @@ describe('PacketLogModel — packets', () => {
     expect(log.packets.rows.value.length).toBe(all);
   });
 
-  it('pages and counts; live tail off counts missed packets', async () => {
+  it('loads more rows on demand and counts; live tail off counts missed packets', async () => {
     const { app, emulator } = testApp();
     // a small page size to exercise paging (the AppModel getter uses the default of 100)
     const { PacketLogModel } = await import('./packet-log-model.js');
@@ -176,11 +176,28 @@ describe('PacketLogModel — packets', () => {
     expect(total).toBeGreaterThan(2);
     expect(log.packets.rows.value.length).toBe(2);
     expect(log.packets.hasMore.value).toBe(true);
-    expect(log.packets.pageCount.value).toBe(Math.ceil(total / 2));
+    // infinite scroll: each loadMore appends the next older page until the log is exhausted
     const first = log.packets.rows.value.map((r) => r.id);
-    await log.packets.next();
-    expect(log.packets.page.value).toBe(1);
-    expect(log.packets.rows.value.map((r) => r.id)).not.toEqual(first);
+    await log.packets.loadMore();
+    const two = log.packets.rows.value.map((r) => r.id);
+    expect(two.slice(0, 2)).toEqual(first);
+    expect(two.length).toBe(Math.min(4, total));
+    expect(new Set(two).size).toBe(two.length);
+    expect([...two].sort((x, y) => y - x)).toEqual(two);
+    while (log.packets.hasMore.value) await log.packets.loadMore();
+    expect(log.packets.rows.value.length).toBe(total);
+    // a reload (e.g. after a contact change) keeps everything loaded
+    await log.packets.reload();
+    expect(log.packets.rows.value.length).toBe(total);
+    // once older rows are loaded, live tail grows the list rather than dropping its oldest row
+    emulator.scenario().nodes.alice.advertise();
+    await vi.waitFor(async () => {
+      await app.connection.capture!.idle();
+      await log.settled();
+      expect(log.packets.total.value).toBeGreaterThan(total);
+      expect(log.packets.rows.value.length).toBe(log.packets.total.value);
+    });
+    expect(log.packets.hasMore.value).toBe(false);
     await log.packets.setLive(false);
     // Bob's advert also updates his contact, and the resulting context reload re-queries the page and
     // zeroes `missed` again; whether that lands before or after the repeater's copy is a race, so
@@ -196,7 +213,8 @@ describe('PacketLogModel — packets', () => {
     });
     off();
     await log.packets.setLive(true);
-    expect(log.packets.page.value).toBe(0);
+    // back to the newest page only
+    expect(log.packets.rows.value.length).toBe(2);
     expect(log.packets.missed.value).toBe(0);
     expect(log.packets.rows.value[0]!.summary).toContain('"Bob"');
     log.dispose();

@@ -226,11 +226,16 @@ interface ViewSource<R, F, Row> {
   row(r: R): Promise<Row>;
 }
 
-/** A filtered, paged (newest first) view of one log that tails new records live. */
+/**
+ * A filtered view of one log, newest first, that tails new records live. It starts with the newest
+ * `pageSize` rows and grows by a page each time {@link loadMore} is called (infinite scroll).
+ */
 export class LogView<R extends { id: number }, F extends object, Row extends { id: number }> {
   readonly #filter: Signal<F>;
   readonly #rows = signal<readonly Row[]>([]);
-  readonly #page = signal(0);
+  /** How many rows the view holds: the newest `#limit` matching records. */
+  #limit: number;
+  #loadingMore = false;
   readonly #hasMore = signal(false);
   readonly #total = signal(0);
   readonly #matching = signal(0);
@@ -243,19 +248,17 @@ export class LogView<R extends { id: number }, F extends object, Row extends { i
   #latestReload: Promise<void> = Promise.resolve();
 
   readonly filter: ReadonlySignal<F>;
-  /** Current page, newest first. */
+  /** Loaded rows, newest first. */
   readonly rows: ReadonlySignal<readonly Row[]> = this.#rows.readonly;
-  /** 0 = newest page. */
-  readonly page: ReadonlySignal<number> = this.#page.readonly;
+  /** Older matching records exist beyond the loaded rows (see {@link loadMore}). */
   readonly hasMore: ReadonlySignal<boolean> = this.#hasMore.readonly;
   /** Records in the log. */
   readonly total: ReadonlySignal<number> = this.#total.readonly;
   /** Records matching the filter. */
   readonly matching: ReadonlySignal<number> = this.#matching.readonly;
-  readonly pageCount: ReadonlySignal<number>;
-  /** Live tail: new matching records are prepended to page 0 as they are logged. */
+  /** Live tail: new matching records are prepended as they are logged. */
   readonly live: ReadonlySignal<boolean> = this.#live.readonly;
-  /** Matching records logged while not tailing (live off or not on page 0). */
+  /** Matching records logged while live tail is off. */
   readonly missed: ReadonlySignal<number> = this.#missed.readonly;
   readonly loading: ReadonlySignal<boolean> = this.#loading.readonly;
 
@@ -267,17 +270,15 @@ export class LogView<R extends { id: number }, F extends object, Row extends { i
   ) {
     this.#filter = signal(initial);
     this.filter = this.#filter.readonly;
-    this.pageCount = computed(() => Math.max(1, Math.ceil(this.#matching.value / this.pageSize)));
+    this.#limit = pageSize;
   }
 
-  /** Replaces the filter (or merges `patch` into it) and reloads from page 0. */
+  /** Replaces the filter (or merges `patch` into it) and reloads the newest page. */
   setFilter(patch: Partial<F>, opts: { replace?: boolean } = {}): Promise<void> {
     const next = (opts.replace ? { ...patch } : { ...this.#filter.peek(), ...patch }) as F;
     for (const k of Object.keys(next) as (keyof F)[]) if (next[k] === undefined) delete next[k];
-    batch(() => {
-      this.#filter.value = next;
-      this.#page.value = 0;
-    });
+    this.#filter.value = next;
+    this.#limit = this.pageSize;
     return this.reload();
   }
 
@@ -285,30 +286,47 @@ export class LogView<R extends { id: number }, F extends object, Row extends { i
     return this.setFilter({}, { replace: true });
   }
 
-  setPage(n: number): Promise<void> {
-    const p = Math.max(0, Math.min(Math.floor(n), this.pageCount.peek() - 1));
-    this.#page.value = p;
-    return this.reload();
+  /**
+   * Appends the next page of older matching rows. A no-op when there are none or a load is already
+   * running. Queued behind live-tail updates so the offset into the log is current.
+   */
+  loadMore(): Promise<void> {
+    if (!this.#hasMore.peek() || this.#loadingMore) return Promise.resolve();
+    const store = this.getStore();
+    if (!store) return Promise.resolve();
+    this.#loadingMore = true;
+    const gen = this.#gen;
+    const p = this.#chain.then(async () => {
+      if (gen !== this.#gen) return;
+      // records logged while not tailing sit above the loaded rows
+      const offset = this.#rows.peek().length + this.#missed.peek();
+      const res = await this.src.query(store, this.#filter.peek(), offset, this.pageSize);
+      const more = await Promise.all(res.items.map((r) => this.src.row(r)));
+      if (gen !== this.#gen) return;
+      const have = new Set(this.#rows.peek().map((x) => x.id));
+      const rows = [...this.#rows.peek(), ...more.filter((x) => !have.has(x.id))];
+      this.#limit = Math.max(this.#limit, rows.length);
+      batch(() => {
+        this.#rows.value = rows;
+        this.#hasMore.value = res.hasMore;
+      });
+    });
+    this.#chain = p.catch((err: unknown) => console.error('LogView:', err));
+    return p.finally(() => {
+      this.#loadingMore = false;
+    });
   }
 
-  next(): Promise<void> {
-    return this.setPage(this.#page.peek() + 1);
-  }
-
-  prev(): Promise<void> {
-    return this.setPage(this.#page.peek() - 1);
-  }
-
-  /** Turning live tail on jumps to the newest page. */
+  /** Turning live tail on jumps back to the newest page. */
   setLive(on: boolean): Promise<void> {
     this.#live.value = on;
     if (!on) return Promise.resolve();
-    this.#page.value = 0;
+    this.#limit = this.pageSize;
     return this.reload();
   }
 
   /**
-   * Reloads the current page and counts. Resolves once the page is current: if another reload
+   * Reloads the loaded rows and counts. Resolves once the page is current: if another reload
    * (e.g. a context reload after a contact change) supersedes this one, after that one.
    */
   async reload(): Promise<void> {
@@ -328,9 +346,8 @@ export class LogView<R extends { id: number }, F extends object, Row extends { i
     this.#loading.value = true;
     try {
       const f = this.#filter.peek();
-      const page = this.#page.peek();
       const [res, total, matching] = await Promise.all([
-        this.src.query(store, f, page * this.pageSize, this.pageSize),
+        this.src.query(store, f, 0, this.#limit),
         this.src.count(store, null),
         this.src.count(store, f),
       ]);
@@ -363,7 +380,7 @@ export class LogView<R extends { id: number }, F extends object, Row extends { i
   offer(r: R): void {
     if (!this.src.matches(r, this.#filter.peek())) return;
     this.#matching.update((n) => n + 1);
-    if (!this.#live.peek() || this.#page.peek() !== 0) {
+    if (!this.#live.peek()) {
       this.#missed.update((n) => n + 1);
       return;
     }
@@ -374,9 +391,12 @@ export class LogView<R extends { id: number }, F extends object, Row extends { i
         const row = await this.src.row(r);
         if (gen !== this.#gen) return;
         const rows = [row, ...this.#rows.peek().filter((x) => x.id !== row.id)];
+        // Showing only the newest page: keep it a page (the oldest row drops off the end). Once older
+        // rows were loaded the list grows instead, so rows the reader scrolled to don't unload.
+        if (this.#limit > this.pageSize) this.#limit = Math.max(this.#limit, rows.length);
         batch(() => {
-          this.#hasMore.value = this.#hasMore.peek() || rows.length > this.pageSize;
-          this.#rows.value = rows.slice(0, this.pageSize);
+          this.#hasMore.value = this.#hasMore.peek() || rows.length > this.#limit;
+          this.#rows.value = rows.slice(0, this.#limit);
         });
       })
       .catch((err: unknown) => console.error('LogView:', err));
@@ -384,7 +404,7 @@ export class LogView<R extends { id: number }, F extends object, Row extends { i
 
   /**
    * A stored record changed in place (same id): its row is rebuilt where it is shown; when the
-   * change flips whether it matches the filter, the page and counts are reloaded.
+   * change flips whether it matches the filter, the rows and counts are reloaded.
    */
   onUpdate(r: R, previous: R): void {
     const f = this.#filter.peek();
@@ -411,9 +431,9 @@ export class LogView<R extends { id: number }, F extends object, Row extends { i
 
   reset(): void {
     this.#gen++;
+    this.#limit = this.pageSize;
     batch(() => {
       this.#rows.value = [];
-      this.#page.value = 0;
       this.#hasMore.value = false;
       this.#total.value = 0;
       this.#matching.value = 0;
