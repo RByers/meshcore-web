@@ -1,7 +1,7 @@
 /**
  * `/packets`: the packet log (over-the-air packets the radio reported) with live tail, infinite
  * scroll, export / import / clear, and the inspector in a side panel (wide) or on its own page
- * `/packets/:id` (narrow); its Stats; and, with the "Show the Frames tab" setting
+ * `/packets/:id` (narrow); a "Map" of the listed packets' paths (`<mc-packets-map>`); its Stats; and, with the "Show the Frames tab" setting
  * (`appSettings.showFrames`, off by default), the frame log (every host ↔ device frame).
  * `/packets/node/:key` opens the packet log filtered to the packets that node originated (linked
  * from the contact page; the filter uses the packet log's source index).
@@ -23,6 +23,7 @@ import { pathHops } from '../../components/node-link.js';
 import './packet-inspector.js';
 import './packet-stats.js';
 import './packet-filters.js';
+import './packets-map.js';
 
 /** The list tabs plus the Stats tab (docs/packet-stats.md §3); Frames only with `showFrames`. */
 export type LogTab = 'packets' | 'frames' | 'stats';
@@ -45,6 +46,7 @@ export class McPacketsPage extends AppElement {
     inspector: { state: true },
     confirm: { state: true },
     busy: { state: true },
+    showMap: { state: true },
   };
   declare params: Readonly<Record<string, string>>;
   declare tab: LogTab;
@@ -53,6 +55,8 @@ export class McPacketsPage extends AppElement {
   declare inspector: InspectorProps | null;
   declare confirm: '' | 'clear' | 'key';
   declare busy: boolean;
+  /** The Packets tab's "Map" panel is open (`<mc-packets-map>`, per page instance). */
+  declare showMap: boolean;
   #ro: ResizeObserver | undefined;
   /** Watches the end-of-list sentinel: older rows load as it nears the viewport (infinite scroll). */
   #io: IntersectionObserver | undefined;
@@ -80,6 +84,7 @@ export class McPacketsPage extends AppElement {
     this.inspector = null;
     this.confirm = '';
     this.busy = false;
+    this.showMap = false;
   }
 
   static override styles = [
@@ -580,6 +585,16 @@ export class McPacketsPage extends AppElement {
       >
       ${missed > 0 ? html`<button data-action="show-new" @click=${() => void v.setLive(true)}>${missed} new</button>` : nothing}
       <span class="spacer"></span>
+      ${this.tab === 'packets'
+        ? html`<button
+            data-action="map"
+            aria-pressed=${this.showMap ? 'true' : 'false'}
+            title="Map the paths of the newest packets listed"
+            @click=${() => (this.showMap = !this.showMap)}
+          >
+            ${this.showMap ? 'Hide map' : 'Map'}
+          </button>`
+        : nothing}
       <button data-action="export" @click=${() => void this.#export()}>Export</button>
       <input type="file" accept="application/json,.json" data-action="import" aria-label="Import JSON" hidden @change=${(e: Event) => void this.#import(e)} />
       <button data-action="import-button" @click=${() => this.renderRoot.querySelector<HTMLInputElement>('input[data-action="import"]')?.click()}>Import…</button>
@@ -764,6 +779,7 @@ export class McPacketsPage extends AppElement {
       <div class="layout ${split ? 'split' : ''}">
         <section role="tabpanel" aria-label=${this.tab === 'packets' ? 'Over-the-air packets' : 'Host ↔ device frames'}>
           ${this.tab === 'frames' ? this.#frameFilters() : nothing} ${this.#toolbar()}
+          ${this.tab === 'packets' && this.showMap ? html`<mc-packets-map></mc-packets-map>` : nothing}
           ${this.tab === 'packets' ? this.#packetTable(log.packets.rows.value) : this.#frameTable(log.frames.rows.value)}
         </section>
         ${split

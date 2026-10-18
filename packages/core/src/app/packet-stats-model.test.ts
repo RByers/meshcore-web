@@ -43,7 +43,9 @@ import {
   matchesFilter,
   nodeEndpoint,
   nodeId,
+  MAP_PACKET_LIMIT,
   packetRoutes,
+  recentPacketRoutes,
   statPacketRoute,
   type StatPacket,
   type StatsFilter,
@@ -913,6 +915,31 @@ describe('PacketStatsModel — paths map routes (§1.7)', () => {
       { hashes: ['22', '7e'], from: alice, to: SELF_EP, count: 1 },
       { hashes: ['7e'], from: carol, to: SELF_EP, count: 1 },
     ]);
+  });
+});
+
+describe('PacketStatsModel — Packets list map (recentRoutes)', () => {
+  it('maps only the newest MAP_PACKET_LIMIT packets of points, counting those with a route', async () => {
+    const SELF_EP = { kind: 'self' } as const;
+    const inputs: PacketInput[] = [
+      // the 3 oldest (from Carol) fall outside the newest 500
+      ...[0, 1, 2].map((i) => rx(datagram(PayloadType.TXT_MSG, 0xd4, 0x01, [0x7e]), T + i)),
+      ...Array.from({ length: MAP_PACKET_LIMIT - 1 }, (_, i) => rx(datagram(PayloadType.TXT_MSG, 0xa1, 0x01, [0x7e]), T + 3 + i)),
+      // the newest packet has no route
+      rx(buildTracePayload({ tag: 1, authCode: 2, hashes: Uint8Array.of(0x7e) }), T + 3 + MAP_PACKET_LIMIT, { format: 'payload', source: 'traceData', payloadType: PayloadType.TRACE, routeType: RouteType.DIRECT, pathLen: 1 }),
+    ];
+    const { model } = await harness(inputs);
+    expect(model.points.value).toHaveLength(MAP_PACKET_LIMIT + 3);
+    expect(model.recentRoutes.value).toEqual({
+      routes: [{ hashes: ['7e'], from: { kind: 'contact', key: ALICE.key }, to: SELF_EP, count: MAP_PACKET_LIMIT - 1 }],
+      packets: MAP_PACKET_LIMIT,
+      mapped: MAP_PACKET_LIMIT - 1,
+    });
+    expect(recentPacketRoutes(model.points.value, 2)).toEqual({
+      routes: [{ hashes: ['7e'], from: { kind: 'contact', key: ALICE.key }, to: SELF_EP, count: 1 }],
+      packets: 2,
+      mapped: 1,
+    });
   });
 });
 

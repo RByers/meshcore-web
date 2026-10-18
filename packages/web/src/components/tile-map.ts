@@ -7,7 +7,8 @@
  *
  * - Children with `lat` / `lon` attributes are positioned over the map (any element works;
  *   `<mc-map-marker>` below is a labelled, focusable pin; `approximate` draws it dashed with "?").
- * - `.lines` draws polylines (SVG, under the markers): `[{ points: [{lat, lon}, …], dashed?, color?, width? }]`.
+ * - `.lines` draws polylines (SVG, under the markers): `[{ points: [{lat, lon}, …], dashed?, color?, width?, arrow?, offset? }]`;
+ *   `arrow` adds a direction arrowhead per segment.
  * - Drag / touch pan, wheel / pinch zoom (fractional zoom; tiles from the nearest integer level,
  *   scaled), zoom buttons, arrow / +/- keys. Emits `mc-view-change` ({lat, lon, zoom}) after user
  *   interaction. `fitBounds()`, `setView()`, `project()` for callers.
@@ -57,6 +58,65 @@ export interface MapLine {
   width?: number;
   /** Exposed as `data-line` on the SVG path (tests, styling). */
   id?: string;
+  /**
+   * Draw an arrowhead on each segment pointing in point order (travel direction), past the
+   * segment's midpoint so the reverse line over the same hop puts its arrow elsewhere. Segments
+   * too short on screen get none.
+   */
+  arrow?: boolean;
+  /**
+   * Shift the line sideways by this many px, to the right of its point order (e.g. so A→B and
+   * B→A over one hop sit side by side). Default 0.
+   */
+  offset?: number;
+}
+
+/** Where along a segment (0…1) an arrowhead's centre sits: past the middle, see {@link MapLine.arrow}. */
+export const ARROW_POSITION = 0.62;
+
+/** Arrowhead size for a stroke of width `w` px: length along the line and half its base width. */
+export function arrowSize(w: number): { length: number; halfWidth: number } {
+  return { length: Math.max(10, 1.6 * w + 4), halfWidth: w / 2 + Math.max(4, 0.55 * w) };
+}
+
+/**
+ * Screen polyline `pts` shifted `offset` px to the right of its direction (y down): each vertex
+ * moves along the mean of its adjacent segments' normals.
+ */
+function offsetPolyline(pts: readonly Point[], offset: number): Point[] {
+  if (!offset || pts.length < 2) return [...pts];
+  const normals = pts.slice(1).map((b, i) => {
+    const a = pts[i]!;
+    const l = Math.hypot(b.x - a.x, b.y - a.y);
+    return l ? { x: -(b.y - a.y) / l, y: (b.x - a.x) / l } : { x: 0, y: 0 };
+  });
+  return pts.map((p, i) => {
+    const n1 = normals[i - 1];
+    const n2 = normals[i];
+    let nx = (n1?.x ?? 0) + (n2?.x ?? 0);
+    let ny = (n1?.y ?? 0) + (n2?.y ?? 0);
+    const l = Math.hypot(nx, ny);
+    if (!l) return p;
+    nx /= l;
+    ny /= l;
+    return { x: p.x + nx * offset, y: p.y + ny * offset };
+  });
+}
+
+/** Arrowhead triangle (SVG `points`) on segment a→b, or null when the segment is too short for one. */
+function arrowHead(a: Point, b: Point, width: number): string | null {
+  const len = Math.hypot(b.x - a.x, b.y - a.y);
+  const { length, halfWidth } = arrowSize(width);
+  if (len < length * 2.5) return null;
+  const ux = (b.x - a.x) / len;
+  const uy = (b.y - a.y) / len;
+  const cx = a.x + ux * len * ARROW_POSITION;
+  const cy = a.y + uy * len * ARROW_POSITION;
+  const tip = { x: cx + (ux * length) / 2, y: cy + (uy * length) / 2 };
+  const bx = cx - (ux * length) / 2;
+  const by = cy - (uy * length) / 2;
+  const f = (x: number, y: number): string => `${x.toFixed(1)},${y.toFixed(1)}`;
+  return [f(tip.x, tip.y), f(bx - uy * halfWidth, by + ux * halfWidth), f(bx + uy * halfWidth, by - ux * halfWidth)].join(' ');
 }
 
 interface Tile {
@@ -159,6 +219,10 @@ export class McTileMap extends LitElement {
       svg.lines path[data-dashed] {
         stroke-dasharray: 8 7;
         stroke-width: 3;
+      }
+      svg.lines polygon {
+        stroke: none;
+        filter: drop-shadow(0 0 1.5px rgb(255 255 255 / 0.9));
       }
       ::slotted(*) {
         position: absolute;
@@ -411,16 +475,21 @@ export class McTileMap extends LitElement {
 
   #lines() {
     if (!this.lines.length || !this.#w || !this.#h) return nothing;
-    const d = (pts: readonly LatLon[]): string =>
-      pts
-        .map((p, i) => {
-          const q = this.project(p.lat, p.lon);
-          return `${i ? 'L' : 'M'}${q.x.toFixed(1)} ${q.y.toFixed(1)}`;
-        })
-        .join(' ');
-    return svg`<svg class="lines" aria-hidden="true">${this.lines.map(
-      (l) => svg`<path d=${d(l.points)} stroke=${l.color ?? 'var(--mc-accent)'} style=${l.width ? `stroke-width:${l.width}px` : nothing} ?data-dashed=${!!l.dashed} data-line=${l.id ?? nothing}></path>`,
-    )}</svg>`;
+    const d = (pts: readonly Point[]): string => pts.map((q, i) => `${i ? 'L' : 'M'}${q.x.toFixed(1)} ${q.y.toFixed(1)}`).join(' ');
+    const drawn = this.lines.map((l) => {
+      const pts = offsetPolyline(
+        l.points.map((p) => this.project(p.lat, p.lon)),
+        l.offset ?? 0,
+      );
+      const width = l.width ?? (l.dashed ? 3 : 4);
+      const heads = l.arrow ? pts.slice(1).flatMap((b, i) => arrowHead(pts[i]!, b, width) ?? []) : [];
+      return { l, color: l.color ?? 'var(--mc-accent)', pts, heads };
+    });
+    // arrowheads after every line, so another line never covers one
+    return svg`<svg class="lines" aria-hidden="true">${drawn.map(
+      ({ l, color, pts }) =>
+        svg`<path d=${d(pts)} stroke=${color} style=${l.width ? `stroke-width:${l.width}px` : nothing} ?data-dashed=${!!l.dashed} data-line=${l.id ?? nothing}></path>`,
+    )}${drawn.flatMap(({ l, color, heads }) => heads.map((h) => svg`<polygon points=${h} fill=${color} data-arrow=${l.id ?? ''}></polygon>`))}</svg>`;
   }
 
   protected override updated(changed: PropertyValues): void {

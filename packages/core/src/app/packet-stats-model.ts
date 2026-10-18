@@ -548,6 +548,26 @@ export function packetRoutes(points: readonly RoutablePacket[]): PathUsageRoute[
   return [...m.entries()].sort(([ia, a], [ib, b]) => b.count - a.count || ia.localeCompare(ib)).map(([, r]) => r);
 }
 
+/** How many of the newest listed packets the Packets list "Map" button maps ({@link PacketStatsModel.recentRoutes}). */
+export const MAP_PACKET_LIMIT = 500;
+
+/** The routes of the newest packets, for the Packets list map ({@link recentPacketRoutes}). */
+export interface RecentRoutes {
+  /** {@link packetRoutes} of the newest packets considered. */
+  routes: readonly PathUsageRoute[];
+  /** Packets considered: the newest `limit` (fewer when fewer match). */
+  packets: number;
+  /** Packets among them that have a route ({@link statPacketRoute} non-null). */
+  mapped: number;
+}
+
+/** The routes of the newest `limit` of `points` (ascending ts), with how many were considered / mapped. */
+export function recentPacketRoutes(points: readonly RoutablePacket[], limit = MAP_PACKET_LIMIT): RecentRoutes {
+  const recent = points.slice(-limit);
+  const routes = packetRoutes(recent);
+  return { routes, packets: recent.length, mapped: routes.reduce((n, r) => n + r.count, 0) };
+}
+
 /** On-air size of a record (see {@link StatPacket.bytes}). */
 export function onAirBytes(rec: Pick<PacketRecord, 'format' | 'bytes' | 'pathLen' | 'routeType'>): number {
   if (rec.format === 'packet') return rec.bytes.length;
@@ -1087,6 +1107,12 @@ export class PacketStatsModel extends StoreBoundModel implements DrillSource {
   readonly compression: ReadonlySignal<CompressionStats>;
   /** The routes of `points` for the "packet paths" map ({@link packetRoutes}). */
   readonly routes: ReadonlySignal<readonly PathUsageRoute[]>;
+  /**
+   * The routes of the newest {@link MAP_PACKET_LIMIT} of `points` (what the Packets list shows,
+   * newest first) for its "Map" button, with how many packets were considered and how many had
+   * a route ({@link recentPacketRoutes}). Map it with `PathModel.routesUsage(…, { directed: true })`.
+   */
+  readonly recentRoutes: ReadonlySignal<RecentRoutes>;
 
   constructor(connection: ConnectionModel, deps: PacketStatsDeps) {
     super(connection);
@@ -1246,6 +1272,7 @@ export class PacketStatsModel extends StoreBoundModel implements DrillSource {
     this.channelMessages = computed(() => channelMessageCounts(this.points.value));
     this.compression = computed(() => compressionStats(this.points.value));
     this.routes = computed(() => packetRoutes(this.points.value));
+    this.recentRoutes = computed(() => recentPacketRoutes(this.points.value));
   }
 
   /** Statistics of one contact (public key hex), from `allPoints` (the filters don't apply); cached per key. */

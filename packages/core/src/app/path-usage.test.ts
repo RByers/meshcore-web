@@ -76,6 +76,34 @@ describe('buildRouteUsageMap', () => {
   const ECHO = node('ee05'.padEnd(64, '0'), 'Echo', 'chat', 47.9, -122.0);
   const ALL = [...NODES, ECHO];
 
+  describe('directed', () => {
+    // Delta → Alpha → me, and me → Alpha → Delta: the same hops in opposite directions
+    const ROUTES = [
+      { hashes: ['aa'], from: { kind: 'contact', key: CONTACT.key }, to: { kind: 'self' }, count: 3 },
+      { hashes: ['aa'], from: { kind: 'self' }, to: { kind: 'contact', key: CONTACT.key }, count: 2 },
+    ] as const;
+    const edges = (m: ReturnType<typeof buildRouteUsageMap>) => m.edges.map((e) => ({ id: e.id, a: e.a.label, b: e.b.label, count: e.count }));
+
+    it('merges both directions into one edge by default', () => {
+      const m = buildRouteUsageMap(ROUTES, ALL, SELF);
+      expect(counts(m)).toEqual({ 'Alpha-Delta': 5, 'Alpha-Me (you)': 5 });
+      expect(m.edges.every((e) => e.id === `${e.a.id}|${e.b.id}` && e.a.id < e.b.id)).toBe(true);
+    });
+
+    it('keeps A→B and B→A apart, a = from and b = to', () => {
+      const m = buildRouteUsageMap(ROUTES, ALL, SELF, { directed: true });
+      expect(edges(m)).toEqual([
+        { id: `${ALPHA.key}>${SELF.key}`, a: 'Alpha', b: 'Me (you)', count: 3 },
+        { id: `${CONTACT.key}>${ALPHA.key}`, a: 'Delta', b: 'Alpha', count: 3 },
+        { id: `${SELF.key}>${ALPHA.key}`, a: 'Me (you)', b: 'Alpha', count: 2 },
+        { id: `${ALPHA.key}>${CONTACT.key}`, a: 'Alpha', b: 'Delta', count: 2 },
+      ]);
+      expect(m.maxCount).toBe(3);
+      expect(m.total).toBe(5);
+      expect(m.stops.find((s) => s.node === ALPHA)!.count).toBe(5);
+    });
+  });
+
   it('merges routes from different origins through a shared hop into one map', () => {
     const m = buildRouteUsageMap(
       [

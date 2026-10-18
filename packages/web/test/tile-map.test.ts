@@ -174,4 +174,56 @@ describe('<mc-tile-map>', () => {
     expect(sw.y).toBeLessThan(600);
     expect(map.shadowRoot!.querySelector('.attribution a')?.getAttribute('href')).toBe('https://www.openstreetmap.org/copyright');
   });
+
+  it('lines with arrow draw an arrowhead per segment pointing in point order; offset shifts a line to its right', async () => {
+    const map = await mount();
+    const a = { lat: 47.61, lon: -122.33 };
+    const b = { lat: 47.62, lon: -122.35 };
+    const c = { lat: 47.6, lon: -122.37 };
+    map.lines = [
+      { points: [a, b], id: 'ab', arrow: true, width: 6 },
+      { points: [b, a], id: 'ba', arrow: true, width: 2, offset: 4 },
+      { points: [a, c], id: 'plain' },
+      // a.lat/lon nudged: far too short on screen for an arrow
+      { points: [a, { lat: 47.6101, lon: -122.33 }], id: 'short', arrow: true },
+    ];
+    await map.updateComplete;
+    const root = map.shadowRoot!;
+    const heads = (id: string) => [...root.querySelectorAll<SVGPolygonElement>(`polygon[data-arrow="${id}"]`)];
+    expect(heads('ab')).toHaveLength(1);
+    expect(heads('ba')).toHaveLength(1);
+    expect(heads('plain')).toHaveLength(0);
+    expect(heads('short')).toHaveLength(0);
+    // the plain line is unchanged: no arrow attribute, path through the projected points
+    const pa = map.project(a.lat, a.lon);
+    const pb = map.project(b.lat, b.lon);
+    const pc = map.project(c.lat, c.lon);
+    expect(root.querySelector('path[data-line="plain"]')!.getAttribute('d')).toBe(`M${pa.x.toFixed(1)} ${pa.y.toFixed(1)} L${pc.x.toFixed(1)} ${pc.y.toFixed(1)}`);
+
+    const pts = (el: SVGPolygonElement) => el.getAttribute('points')!.split(' ').map((p) => p.split(',').map(Number) as [number, number]);
+    const along = (from: { x: number; y: number }, to: { x: number; y: number }, p: [number, number]) => {
+      const len = Math.hypot(to.x - from.x, to.y - from.y);
+      return ((p[0] - from.x) * (to.x - from.x) + (p[1] - from.y) * (to.y - from.y)) / len / len;
+    };
+    // a→b: the tip (first point) is nearer b than the base corners, past the middle
+    const [tip, l, r] = pts(heads('ab')[0]!);
+    expect(along(pa, pb, tip!)).toBeGreaterThan(along(pa, pb, l!));
+    expect(along(pa, pb, l!)).toBeCloseTo(along(pa, pb, r!), 2);
+    expect(along(pa, pb, l!)).toBeGreaterThan(0.5);
+    expect(along(pa, pb, tip!)).toBeLessThan(1);
+    // the arrow is wider than its 6px line
+    expect(Math.hypot(l![0] - r![0], l![1] - r![1])).toBeGreaterThan(6);
+    expect(heads('ab')[0]!.getAttribute('fill')).toBe('var(--mc-accent)');
+    // b→a points the other way, at a different spot along the hop
+    const [tip2, l2] = pts(heads('ba')[0]!);
+    expect(along(pa, pb, tip2!)).toBeLessThan(along(pa, pb, l2!));
+    expect(along(pa, pb, tip2!)).toBeLessThan(0.5);
+    // offset 4: its path runs 4px to the right of b→a (screen y down)
+    const d = root.querySelector('path[data-line="ba"]')!.getAttribute('d')!;
+    const [x0, y0] = d.slice(1).split(' L')[0]!.split(' ').map(Number) as [number, number];
+    const len = Math.hypot(pa.x - pb.x, pa.y - pb.y);
+    const right = { x: -(pa.y - pb.y) / len, y: (pa.x - pb.x) / len };
+    expect(x0).toBeCloseTo(pb.x + right.x * 4, 0);
+    expect(y0).toBeCloseTo(pb.y + right.y * 4, 0);
+  });
 });

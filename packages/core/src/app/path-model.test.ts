@@ -291,4 +291,20 @@ describe('PathModel', () => {
     expect(model.routesUsage([...routes])).not.toBe(m);
     store.close();
   });
+
+  it('routesUsage memoises directed and undirected maps side by side', async () => {
+    const { store, model } = await setup(false);
+    const routes = [
+      { hashes: ['7e'], from: { kind: 'contact' as const, key: ALICE.key }, to: { kind: 'self' as const }, count: 2 },
+      { hashes: ['7e'], from: { kind: 'self' as const }, to: { kind: 'contact' as const, key: ALICE.key }, count: 1 },
+    ];
+    const undirected = model.routesUsage(routes);
+    const directed = model.routesUsage(routes, { directed: true });
+    expect(undirected.edges.find((e) => e.id === [HILL.key, hexKey(0x01)].sort().join('|'))?.count).toBe(3);
+    expect(directed.edges.find((e) => e.id === `${HILL.key}>${hexKey(0x01)}`)?.count).toBe(2);
+    expect(directed.edges.find((e) => e.id === `${hexKey(0x01)}>${HILL.key}`)?.count).toBe(1);
+    expect(model.routesUsage(routes)).toBe(undirected);
+    expect(model.routesUsage(routes, { directed: true })).toBe(directed);
+    store.close();
+  });
 });

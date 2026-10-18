@@ -23,7 +23,7 @@ import { toHex } from '../util/bytes.js';
 import type { ContactView } from './contacts-model.js';
 import { hasLocation } from './geo.js';
 import { buildPathGeometry, type PathEndpoint, type PathGeoNode, type PathGeometry, type PathSpec } from './path-geometry.js';
-import { buildPathUsageMap, buildRouteUsageMap, type PathUsageInput, type PathUsageMap, type PathUsageRoute } from './path-usage.js';
+import { buildPathUsageMap, buildRouteUsageMap, type PathUsageInput, type PathUsageMap, type PathUsageRoute, type RouteUsageOptions } from './path-usage.js';
 import { viewPacket } from './packet-summary.js';
 import { computed, type ReadonlySignal } from './signal.js';
 
@@ -200,6 +200,14 @@ export interface PathModelSources {
   approximatePositions?: ReadonlySignal<boolean>;
 }
 
+interface RoutesMemo {
+  routes: readonly PathUsageRoute[];
+  contacts: readonly ContactView[];
+  selfInfo: SelfInfo | null;
+  estimate: boolean;
+  map: PathUsageMap;
+}
+
 /** `app.paths`: path specs for the "N hops" links and their geometry. */
 export class PathModel {
   /** Known contacts as path nodes. */
@@ -232,23 +240,27 @@ export class PathModel {
 
   /**
    * Merges `routes` (any ends, e.g. the packet Stats tab's `PacketStatsModel.routes`) into
-   * weighted hop segments. Reads the contact / SELF_INFO signals (reactive in a render); memoised
-   * on the last (routes, contacts, selfInfo, estimate), so re-rendering with unchanged inputs
-   * returns the same map. (Keyed on the source signals: `nodes` / `self` recompute on every read
-   * while nothing watches them.)
+   * weighted hop segments; `directed` keeps travel direction ({@link RouteUsageOptions.directed}).
+   * Reads the contact / SELF_INFO signals (reactive in a render); memoised on the last (routes,
+   * contacts, selfInfo, estimate) separately for undirected and directed maps, so both can be on
+   * screen (or alternate) and re-rendering with unchanged inputs returns the same map. (Keyed on
+   * the source signals: `nodes` / `self` recompute on every read while nothing watches them.)
    */
-  routesUsage(routes: readonly PathUsageRoute[], opts: { estimate?: boolean } = {}): PathUsageMap {
+  routesUsage(routes: readonly PathUsageRoute[], opts: RouteUsageOptions = {}): PathUsageMap {
     const estimate = opts.estimate ?? this.src.approximatePositions?.value ?? false;
+    const directed = opts.directed ?? false;
     const contacts = this.src.contacts.value;
     const selfInfo = this.src.selfInfo.value;
-    const m = this.#routesMemo;
+    const slot = directed ? 1 : 0;
+    const m = this.#routesMemo[slot];
     if (m && m.routes === routes && m.contacts === contacts && m.selfInfo === selfInfo && m.estimate === estimate) return m.map;
-    const map = buildRouteUsageMap(routes, this.nodes.value, this.self.value, { estimate });
-    this.#routesMemo = { routes, contacts, selfInfo, estimate, map };
+    const map = buildRouteUsageMap(routes, this.nodes.value, this.self.value, { estimate, directed });
+    this.#routesMemo[slot] = { routes, contacts, selfInfo, estimate, map };
     return map;
   }
 
-  #routesMemo: { routes: readonly PathUsageRoute[]; contacts: readonly ContactView[]; selfInfo: SelfInfo | null; estimate: boolean; map: PathUsageMap } | null = null;
+  /** [undirected, directed]. */
+  #routesMemo: [RoutesMemo | null, RoutesMemo | null] = [null, null];
 
   contactSpec(key: string): PathSpec | null {
     const k = key.toLowerCase();

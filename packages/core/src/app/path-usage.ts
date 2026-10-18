@@ -34,11 +34,17 @@ export interface PathUsageStop extends LatLon {
 }
 
 export interface PathUsageEdge {
-  /** `${a.id}|${b.id}` with the ids sorted, so both directions merge. */
+  /**
+   * Undirected (default): `${a.id}|${b.id}` with the ids sorted, so both directions merge.
+   * Directed ({@link RouteUsageOptions.directed}): `${a.id}>${b.id}` in travel order, so A→B and
+   * B→A are separate edges.
+   */
   id: string;
+  /** Undirected: the stop with the smaller id. Directed: the stop the packets travelled from. */
   a: PathUsageStop;
+  /** Undirected: the stop with the larger id. Directed: the stop the packets travelled to. */
   b: PathUsageStop;
-  /** Packets that crossed this segment. */
+  /** Packets that crossed this segment (directed: in this direction). */
   count: number;
   /**
    * Every path over it had an approximate end here, or skipped a stop that could not be placed
@@ -65,6 +71,15 @@ const posKey = (s: LatLon): string => `${s.lat.toFixed(5)},${s.lon.toFixed(5)}`;
 function stopId(s: PathStop & LatLon): string {
   if (s.node) return s.node.key;
   return `${s.hash ?? s.role}@${posKey(s)}`;
+}
+
+/** Options of {@link buildRouteUsageMap}. */
+export interface RouteUsageOptions extends PathGeometryOptions {
+  /**
+   * Key edges by travel direction (default false): A→B and B→A become separate edges with their
+   * own counts, `a` = the stop travelled from, `b` = the stop travelled to (for arrows).
+   */
+  directed?: boolean;
 }
 
 /** One route to merge: `from` → each of `hashes` (travel order) → `to`, taken by `count` packets. */
@@ -97,14 +112,16 @@ export function buildPathUsageMap(
  * Aggregates routes with arbitrary ends into weighted segments. Stop ids are global, so a node
  * (this radio included) merges across routes whichever end or hop it appears as. An endpoint of
  * kind `unknown` (the origin of a direct packet we only relay, an unknown destination…) is never
- * drawn and never makes a route incomplete, even when `estimate` could extrapolate it.
+ * drawn and never makes a route incomplete, even when `estimate` could extrapolate it. With
+ * `directed`, edges keep their travel direction ({@link PathUsageEdge}).
  */
 export function buildRouteUsageMap(
   routes: readonly PathUsageRoute[],
   nodes: readonly PathGeoNode[],
   self: PathGeoNode | null,
-  opts: PathGeometryOptions = {},
+  opts: RouteUsageOptions = {},
 ): PathUsageMap {
+  const directed = opts.directed ?? false;
   const stops = new Map<string, PathUsageStop>();
   const edges = new Map<string, PathUsageEdge>();
   let total = 0;
@@ -133,8 +150,8 @@ export function buildRouteUsageMap(
       }
       u.count += p.count;
       if (prev && prev.id !== u.id) {
-        const [a, b] = prev.id < u.id ? [prev, u] : [u, prev];
-        const eid = `${a.id}|${b.id}`;
+        const [a, b] = directed || prev.id < u.id ? [prev, u] : [u, prev];
+        const eid = directed ? `${a.id}>${b.id}` : `${a.id}|${b.id}`;
         const approximate = skipped || a.approximate || b.approximate;
         let e = edges.get(eid);
         if (!e) {
