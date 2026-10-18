@@ -108,6 +108,7 @@ describe('packet log path column endpoints', () => {
   it('a REQ flood reads source → relay hops → destination; the count is the relay hops only', async () => {
     const t = await connected();
     await t.go('/packets', '[data-tab="packets"]');
+    await t.click('[data-tab="packets"]'); // the page opens on Stats
     const c = uniqueContact(t);
     const dst = c.key.slice(0, 2);
     const src = dst === '5e' ? '5f' : '5e';
@@ -139,6 +140,7 @@ describe('packet log path column endpoints', () => {
   it('a zero-hop packet shows just its ends; ANON_REQ links its sender key to the node page', async () => {
     const t = await connected();
     await t.go('/packets', '[data-tab="packets"]');
+    await t.click('[data-tab="packets"]'); // the page opens on Stats
     const store = t.app.connection.store.value!;
     const direct = buildPacket({ routeType: RouteType.DIRECT, payloadType: PayloadType.TXT_MSG, path: new Uint8Array(0), payload: concatBytes(Uint8Array.of(0x0c, 0x5e), new Uint8Array(18)) });
     const a = await store.packets.append({ direction: 'rx', source: 'logRxData', bytes: direct, ts: t.clock.now() });

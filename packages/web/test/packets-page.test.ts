@@ -27,6 +27,7 @@ async function openLog(): Promise<Harness> {
   await t.mount();
   await t.connectEmulator('/packets');
   await t.until(() => t.query('[data-tab="packets"]'), 3000, 'packets page');
+  await t.click('[data-tab="packets"]'); // the page opens on Stats
   return t;
 }
 
@@ -43,6 +44,18 @@ async function traffic(t: Harness): Promise<void> {
 }
 
 describe('/packets page', () => {
+  it('opens on the Stats tab, listed first, then the List tab', async () => {
+    const t = (h = createHarness());
+    await t.mount();
+    await t.connectEmulator('/packets');
+    await t.until(() => t.query('mc-packet-stats'), 3000, 'stats tab');
+    const tabs = t.queryAll('[role="tab"]');
+    expect(tabs.map((b) => b.dataset['tab'])).toEqual(['stats', 'packets']);
+    expect(tabs[0]!.getAttribute('aria-selected')).toBe('true');
+    expect(tabs[1]!.textContent!.trim()).toMatch(/^List \(\d+\)$/);
+    expect(t.query('table[data-table="packets"]')).toBeNull();
+  });
+
   it('lists over-the-air packets live with decoded summaries', async () => {
     const t = await openLog();
     expect(t.query('mc-packets-page')).not.toBeNull();
@@ -373,19 +386,19 @@ describe('/packets page', () => {
     }, 3000, 'only DEVICE_QUERY');
   });
 
-  it('hides the Frames tab unless the showFrames setting is on, falling back to Packets when it is turned off', async () => {
+  it('hides the Frames tab unless the showFrames setting is on, falling back to Stats when it is turned off', async () => {
     const t = await openLog();
     expect(t.app.appSettings.showFrames.value).toBe(false);
-    expect(t.queryAll('[role="tab"]').map((b) => b.dataset['tab'])).toEqual(['packets', 'stats']);
+    expect(t.queryAll('[role="tab"]').map((b) => b.dataset['tab'])).toEqual(['stats', 'packets']);
     t.app.appSettings.setShowFrames(true);
     await t.until(() => t.query('[data-tab="frames"]'), 2000, 'frames tab');
-    expect(t.queryAll('[role="tab"]').map((b) => b.dataset['tab'])).toEqual(['packets', 'stats', 'frames']);
+    expect(t.queryAll('[role="tab"]').map((b) => b.dataset['tab'])).toEqual(['stats', 'packets', 'frames']);
     await t.click('[data-tab="frames"]');
     await t.until(() => t.query('tr[data-frame-id]'), 3000, 'frames');
     t.app.appSettings.setShowFrames(false);
     await t.until(() => !t.query('[data-tab="frames"]'), 2000, 'frames tab gone');
-    expect(t.query('[data-tab="packets"]')!.getAttribute('aria-selected')).toBe('true');
-    expect(t.query('table[data-table="packets"]')).not.toBeNull();
+    expect(t.query('[data-tab="stats"]')!.getAttribute('aria-selected')).toBe('true');
+    expect(t.query('mc-packet-stats')).not.toBeNull();
     expect(t.query('mc-packet-filters')!.hidden).toBe(false);
   });
 
@@ -548,5 +561,7 @@ describe('/packets page', () => {
     expect(t.query('mc-packet-inspector')!.shadowRoot!.textContent).toContain(`Packet #${id}`);
     await t.click('[data-action="back"]');
     await t.until(() => location.hash === '#/packets' && t.query('mc-packets-page'), 3000, 'back to list');
+    // back on the List tab it came from, not the default Stats
+    await t.until(() => t.query('[data-tab="packets"]')?.getAttribute('aria-selected') === 'true' && t.query('table[data-table="packets"]'), 3000, 'list tab');
   });
 });

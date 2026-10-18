@@ -147,6 +147,7 @@ describe('path view (issue #2)', () => {
 
   it('packet log rows: the path cell opens the path view without opening the packet', async () => {
     const { t, repeater } = await connected('/packets');
+    await t.click('[data-tab="packets"]'); // the page opens on Stats
     const store = t.app.connection.store.peek()!;
     const bytes = buildPacket({
       routeType: RouteType.FLOOD,

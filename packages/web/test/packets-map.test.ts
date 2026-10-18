@@ -34,6 +34,7 @@ describe('/packets Map button', () => {
     await t.mount();
     await t.connectEmulator('/packets');
     await t.until(() => t.query('[data-tab="packets"]'), 3000, 'packets page');
+    await t.click('[data-tab="packets"]'); // the page opens on Stats
     await t.app.connection.capture!.idle();
     const s = t.emulatorScenario();
     const hill = s.keys.repeater[0]!;
@@ -102,6 +103,7 @@ describe('/packets Map button', () => {
     await t.mount();
     await t.connectEmulator('/packets');
     await t.until(() => t.query('[data-tab="packets"]'), 3000, 'packets page');
+    await t.click('[data-tab="packets"]'); // the page opens on Stats
     await t.app.connection.capture!.idle();
     const s = t.emulatorScenario();
     const hill = s.keys.repeater[0]!;

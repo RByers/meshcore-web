@@ -1,11 +1,12 @@
 /**
- * `/packets`: the packet log (over-the-air packets the radio reported) with live tail, infinite
+ * `/packets`: opens on its Stats tab (`<mc-packet-stats>`), then the List tab: the packet log (over-the-air
+ * packets the radio reported) with live tail, infinite
  * scroll, export / import / clear, and the inspector in a side panel (wide) or on its own page
- * `/packets/:id` (narrow); a "Map" of the listed packets' paths (`<mc-packets-map>`); its Stats; and, with the "Show the Frames tab" setting
+ * `/packets/:id` (narrow); a "Map" of the listed packets' paths (`<mc-packets-map>`); and, with the "Show the Frames tab" setting
  * (`appSettings.showFrames`, off by default), the frame log (every host ↔ device frame).
  * `/packets/node/:key` opens the packet log filtered to the packets that node originated (linked
- * from the contact page; the filter uses the packet log's source index).
- * The Packets and Stats tabs share one filter (the packet log's), rendered once above the tab row
+ * from the contact page; the filter uses the packet log's source index) on the List tab.
+ * The List and Stats tabs share one filter (the packet log's), rendered once above the tab row
  * by `<mc-packet-filters>`; the Frames tab has its own. State and logic live in the core
  * PacketLogModel; this component renders and forwards intents.
  */
@@ -37,6 +38,9 @@ export interface ExportEventDetail {
   text: string;
 }
 
+/** The tab last shown per app, so coming back from a packet's own page (`/packets/:id`) reopens it. */
+const lastTab = new WeakMap<object, LogTab>();
+
 export class McPacketsPage extends AppElement {
   static override properties = {
     params: { attribute: false },
@@ -55,7 +59,7 @@ export class McPacketsPage extends AppElement {
   declare inspector: InspectorProps | null;
   declare confirm: '' | 'clear' | 'key';
   declare busy: boolean;
-  /** The Packets tab's "Map" panel is open (`<mc-packets-map>`, per page instance). */
+  /** The List tab's "Map" panel is open (`<mc-packets-map>`, per page instance). */
   declare showMap: boolean;
   #ro: ResizeObserver | undefined;
   /** Watches the end-of-list sentinel: older rows load as it nears the viewport (infinite scroll). */
@@ -78,7 +82,7 @@ export class McPacketsPage extends AppElement {
   constructor() {
     super();
     this.params = {};
-    this.tab = 'packets';
+    this.tab = 'stats';
     this.wide = true;
     this.selected = null;
     this.inspector = null;
@@ -340,14 +344,16 @@ export class McPacketsPage extends AppElement {
 
   override willUpdate(changed: PropertyValues<this>): void {
     super.willUpdate(changed);
+    if (!this.hasUpdated) this.tab = lastTab.get(this.app) ?? this.tab;
     this.#applyRouteFilter(changed);
     // the Frames tab was turned off in Settings while it was showing
-    if (this.tab === 'frames' && !this.app.appSettings.showFrames.peek()) this.tab = 'packets';
+    if (this.tab === 'frames' && !this.app.appSettings.showFrames.peek()) this.tab = 'stats';
     this.#anchor = this.#findAnchor();
   }
 
   override updated(changed: PropertyValues<this>): void {
     super.updated(changed);
+    lastTab.set(this.app, this.tab);
     const filters = this.renderRoot.querySelector('mc-packet-filters');
     if (filters !== this.#observedFilters) {
       if (this.#observedFilters) this.#filtersRo?.unobserve(this.#observedFilters);
@@ -788,10 +794,10 @@ export class McPacketsPage extends AppElement {
     return html`
       <mc-packet-filters ?node-route=${!!this.params['key']} ?hidden=${this.tab === 'frames'}></mc-packet-filters>
       <div class="tabs" role="tablist" aria-label="Log">
-        <button role="tab" data-tab="packets" aria-selected=${this.tab === 'packets' ? 'true' : 'false'} @click=${() => this.#setTab('packets')}>
-          Packets <span class="muted">(${log.packets.total.value})</span>
-        </button>
         <button role="tab" data-tab="stats" aria-selected=${this.tab === 'stats' ? 'true' : 'false'} @click=${() => this.#setTab('stats')}>Stats</button>
+        <button role="tab" data-tab="packets" aria-selected=${this.tab === 'packets' ? 'true' : 'false'} @click=${() => this.#setTab('packets')}>
+          List <span class="muted">(${log.packets.total.value})</span>
+        </button>
         ${showFrames
           ? html`<button role="tab" data-tab="frames" aria-selected=${this.tab === 'frames' ? 'true' : 'false'} @click=${() => this.#setTab('frames')}>
               Frames <span class="muted">(${log.frames.total.value})</span>

@@ -1,5 +1,5 @@
 /**
- * `<mc-packets-map>`: the Packets tab's "Map" panel. Draws the paths of the newest
+ * `<mc-packets-map>`: the List tab's "Map" panel. Draws the paths of the newest
  * `MAP_PACKET_LIMIT` packets the list shows (core `PacketStatsModel.recentRoutes`: its points are
  * exactly the packets matching the shared filter) as a directed usage map: one arrowed line per
  * hop and direction, as thick as the packets that crossed it that way, and a dot per node sized

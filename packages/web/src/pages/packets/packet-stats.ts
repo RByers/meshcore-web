@@ -8,7 +8,7 @@
  *
  * Drill-down (§6): clicking a source bar, first / final path node bar, last-hop signal bar, hop-count bar or breakdown segment adds a model filter
  * for that value (clicking the active one again removes it). The filter, date range included, is
- * shared with the Packets tab (owned by the packet log) and edited in the filter area above the
+ * shared with the List tab (owned by the packet log) and edited in the filter area above the
  * tabs (`<mc-packet-filters>`); here a "Showing X of Y packets" line notes when it narrows the range.
  */
 import { css, html, nothing, type TemplateResult } from 'lit';

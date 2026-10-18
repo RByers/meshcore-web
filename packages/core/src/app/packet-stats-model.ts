@@ -294,7 +294,7 @@ export function routeTypeOfName(routeName: string): number | undefined {
 /**
  * The drill-down view of a packet log filter (docs/packet-stats.md §6): direction, a single
  * payload type and a single route type from the native fields, then {@link PacketFilter.drill}.
- * Several payload / route types (picked on the Packets tab) have no drill-down equivalent.
+ * Several payload / route types (picked on the List tab) have no drill-down equivalent.
  */
 export function statsFiltersOf(f: PacketFilter): StatsFilter[] {
   const out: StatsFilter[] = [];
@@ -1259,7 +1259,7 @@ function hopCounts(pts: readonly StatPacket[]): HopCount[] {
 
 export interface PacketStatsDeps {
   /**
-   * The packet log's filter (PacketLogModel.sharedFilter), shared with the Packets tab: its
+   * The packet log's filter (PacketLogModel.sharedFilter), shared with the List tab: its
    * `from` / `to` are the date range, every other criterion narrows `points`.
    */
   filter: SharedPacketFilter;
@@ -1622,7 +1622,7 @@ export class PacketStatsModel extends StoreBoundModel implements DrillSource {
       store.events.on('logChanged', (e) => {
         if (e.store === 'packets') void this.reload();
       }),
-      // the shared filter's from / to (setRange, or the Packets tab's date inputs)
+      // the shared filter's from / to (setRange, or the List tab's date inputs)
       effect(() => {
         const r = this.range.value;
         const used = this.#usedRange;

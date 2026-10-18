@@ -260,8 +260,10 @@ marks for a small dataset, links appear, dot click dispatches the id, series bey
 **Page layout.** `/packets` renders, top to bottom: one **shared filter area**
 (`<mc-packet-filters>`, `packages/web/src/pages/packets/packet-filters.ts`, rendered once by the
 page so switching tabs keeps it mounted; sticky under the app header on wide viewports), then the
-tab row *Packets | Stats* (*| Frames* only with the `showFrames` app setting, off by default),
-then the tab content. The filter area edits the shared packet filter (§6): date range — presets
+tab row *Stats | List* (*| Frames* only with the `showFrames` app setting, off by default),
+then the tab content. The page opens on *Stats*; the *List* tab is the packet log table. A page
+reopened in the same session (e.g. back from `/packets/:id`) shows the tab it last showed, and
+`/packets/node/:key` opens *List*. The filter area edits the shared packet filter (§6): date range — presets
 *All* (default), *Last hour*, *24 h*, *7 d*, and one pair of `datetime-local` *From* / *To* inputs
 (`<mc-stats-range parts="range">`; the range is the filter's `from` / `to`) — direction, types,
 route, node, text, removable chips for criteria with no control of their own (the
@@ -348,7 +350,7 @@ active value again removes it. On source bars the *bar* filters and the *label* 
 link. Charts opt in per item with a `key` (`<mc-bar-chart>` dispatches `bar-select`, keyed rows
 are `role=button` hit rects with Enter / Space; `<mc-breakdown>` dispatches `segment-select` from
 segments and from legend `<button>`s), with `selected` marking the active value; items without a
-key (e.g. the contact Stats tab) stay plain. The filter is **shared with the Packets tab** (§6):
+key (e.g. the contact Stats tab) stay plain. The filter is **shared with the List tab** (§6):
 switching tabs never clears it. Drill-downs show in the shared filter area above the tabs: in its
 controls (direction, a single type, a single route) or, for the fields it has no control for
 (source, category, channel, hops, compression, path start / end, last hop), as removable chips ("Source: Alice ✕", removed with
@@ -362,7 +364,7 @@ emulator scenario that produces packets): the tab appears and renders tiles and 
 elements; the source chart has links to `/node/…`; the y/colour selectors change the dot plot's
 axis label / legend; a date preset shrinks the packet count tile; source-bar / segment / keyboard
 filtering, chip removal in the top area, *Reset* and the no-match state; the shared filter across tabs (a
-source drill-down filters the Packets tab and its chip removes it; a text filter narrows Stats with
+source drill-down filters the List tab and its chip removes it; a text filter narrows Stats with
 the filtered count; one preset / *From* pair for both tabs, cleared by *Reset*); the
 compression section's counts, summary, *Compressed* filter, empty state and the *Compression* dot
 colouring; the paths card's summary, map lines and widths, sized markers with counts (this radio
@@ -436,7 +438,7 @@ with the last-hop section (tiles, dots).
 ## 6. Drill-down filters
 
 Clicking a bar on the packets Stats tab narrows every statistic to the matching packets. The
-Packets and Stats tabs share **one filter**, owned by the packet log
+List and Stats tabs share **one filter**, owned by the packet log
 (`app.packetLog.packets.filter`, a `PacketFilter`; in memory only, not persisted; drill-downs
 survive range changes). The stats model reads and writes it through `PacketLogModel.sharedFilter`
 (`PacketStatsDeps.filter`); `stats.filters` is a computed drill-down view of it:
@@ -469,12 +471,12 @@ matchesFilter(p, f) / filterKey(p, field) / filterPoints(points, filters)   // p
 Mapping onto `PacketFilter` (`statsFiltersOf` / `withStatsFilter` / `withoutStatsFilter`):
 
 - The range is `from` / `to` (`range` is computed from them; `setRange` sets them, and a change
-  from the Packets tab's date inputs reloads `allPoints` too).
+  from the List tab's date inputs reloads `allPoints` too).
 - direction → `direction` (`'in'` ↔ `'rx'`, `'out'` ↔ `'tx'`); type → `payloadTypes: [n]`; route →
-  `routeTypes: [n]` — so the Packets tab's selects show them. A type / route key with no number
+  `routeTypes: [n]` — so the List tab's selects show them. A type / route key with no number
   (`'UNKNOWN'` / `'unknown'`) and every other field (source, category, channel, hops, compression, path start / end)
   go to `PacketFilter.drill` (at most one entry per field). `filters` lists direction, a single
-  type, a single route, then `drill`; several types / routes picked on the Packets tab have no
+  type, a single route, then `drill`; several types / routes picked on the List tab have no
   drill-down equivalent (no segment is highlighted) but still narrow `points`.
 - `points` = `allPoints` matching the `drill` entries **and** every packet-log criterion
   (direction, types, routes, `src`, `node`, `text`) via the log's own predicate.

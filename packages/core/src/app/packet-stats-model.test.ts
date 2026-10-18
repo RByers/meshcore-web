@@ -705,7 +705,7 @@ describe('PacketStatsModel — filter shared with the packet log', () => {
     await log.packets.setFilter({ node: '7e' });
     expect(tss(model.points.value)).toEqual([0, 20_000]);
     expect(model.unfilteredCount.value).toBe(5);
-    // several types (Packets tab only): no single-type drill-down to show
+    // several types (List tab only): no single-type drill-down to show
     await log.packets.setFilter({ node: undefined, payloadTypes: [PayloadType.TXT_MSG, PayloadType.ACK] });
     expect(tss(model.points.value)).toEqual([0, 10_000, 30_000]);
     expect(model.filters.value).toEqual([]);

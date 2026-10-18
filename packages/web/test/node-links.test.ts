@@ -94,6 +94,7 @@ describe('path nodes link to node pages', () => {
 
   it('packet log path hops link to the contact without opening the packet', async () => {
     const { t, repeater } = await connected('/packets');
+    await t.click('[data-tab="packets"]'); // the page opens on Stats
     const store = t.app.connection.store.peek()!;
     const bytes = buildPacket({
       routeType: RouteType.FLOOD,
@@ -112,6 +113,7 @@ describe('path nodes link to node pages', () => {
 
   it('packet log hops with an unknown or ambiguous hash link to the listing of the nodes with the hash', async () => {
     const { t, repeater } = await connected('/packets');
+    await t.click('[data-tab="packets"]'); // the page opens on Stats
     const rep = repeater.slice(0, 2);
     // a second repeater sharing the repeater's hash makes that hop ambiguous
     const twin = rep + 'ab'.repeat(31);

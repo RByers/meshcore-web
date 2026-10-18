@@ -212,7 +212,7 @@ export class AppModel {
   get packetStats(): PacketStatsModel {
     if (!this.#packetStats) {
       const log = this.packetLog;
-      // one filter for the Packets and Stats tabs, owned by the packet log; the log matches the
+      // one filter for the List and Stats tabs, owned by the packet log; the log matches the
       // stats drill-downs against the stats model's points
       this.#packetStats = new PacketStatsModel(this.connection, {
         filter: log.sharedFilter,

@@ -1,5 +1,5 @@
 /**
- * `<mc-packet-filters>`: the filter area at the top of `/packets`, shared by the Packets and Stats
+ * `<mc-packet-filters>`: the filter area at the top of `/packets`, shared by the List and Stats
  * tabs (docs/packet-stats.md §3, §6). Renders the packet log's filter (`app.packetLog.packets.filter`):
  * the date range (`<mc-stats-range parts="range">`: presets and one From / To pair), direction,
  * types, route, node and text, removable chips for criteria with no control of their own (the

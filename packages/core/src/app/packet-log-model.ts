@@ -479,7 +479,7 @@ export interface DrillSource {
 }
 
 /**
- * The packet log's filter as shared with the statistics model: the Packets and Stats tabs of
+ * The packet log's filter as shared with the statistics model: the List and Stats tabs of
  * /packets read and write the same {@link PacketFilter}.
  */
 export interface SharedPacketFilter {
