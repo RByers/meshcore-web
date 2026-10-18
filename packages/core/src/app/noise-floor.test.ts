@@ -38,7 +38,9 @@ describe('NoiseFloorSampler (AppModel.noiseFloor)', () => {
     await t.elapsePending(NOISE_FLOOR_INTERVAL_MS);
     await vi.waitFor(async () => expect(await t.store.noiseFloor.count()).toBe(2));
     const [a, b] = await t.store.noiseFloor.range();
-    expect(b!.t - a!.t).toBe(NOISE_FLOOR_INTERVAL_MS);
+    // the fixture's SkippableClock runs on real time between skips, so the sampler's re-arm and its
+    // request timestamp can be a millisecond apart; exact spacing is checked on a ManualClock below
+    expect(Math.abs(b!.t - a!.t - NOISE_FLOOR_INTERVAL_MS)).toBeLessThan(1000);
     expect(t.app.notifications.toasts.value).toEqual([]);
 
     await t.app.connection.disconnect();
@@ -58,7 +60,8 @@ describe('NoiseFloorSampler (AppModel.noiseFloor)', () => {
   it('does not stack requests, skips failures, and restarts on reconnect', async () => {
     const t = await connectedApp({ app: { noiseFloorSampling: false } });
     expect(t.app.noiseFloor.polling).toBe(false);
-    const clock = new ManualClock(t.clock.now());
+    const t0 = t.clock.now();
+    const clock = new ManualClock(t0);
     const calls: Array<ReturnType<typeof deferred<RadioStats | null>>> = [];
     const sampler = new NoiseFloorSampler(t.app.connection, {
       clock,
@@ -91,7 +94,11 @@ describe('NoiseFloorSampler (AppModel.noiseFloor)', () => {
       expect(calls).toHaveLength(3);
       calls[2]!.resolve(radio(-104));
       await vi.waitFor(async () => expect(await t.store.noiseFloor.count()).toBe(2));
-      expect((await t.store.noiseFloor.range()).map((s) => s.noiseFloorDbm)).toEqual([-111, -104]);
+      // stamped with each request's time: the first poll, and the third tick after it (one skipped, one failed)
+      expect((await t.store.noiseFloor.range()).map((s) => [s.t - t0, s.noiseFloorDbm])).toEqual([
+        [NOISE_FLOOR_FIRST_DELAY_MS, -111],
+        [NOISE_FLOOR_FIRST_DELAY_MS + 3 * NOISE_FLOOR_INTERVAL_MS, -104],
+      ]);
       expect(sampler.supported.value).toBe(true);
 
       await t.app.connection.disconnect();

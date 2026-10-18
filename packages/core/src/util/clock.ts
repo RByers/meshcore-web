@@ -144,6 +144,11 @@ export class SkippableClock implements Clock {
     return this.#timers.length;
   }
 
+  /** Due time of a pending timer (undefined once it ran or was cleared). */
+  dueOf(handle: TimerHandle): number | undefined {
+    return this.#timers.find((t) => t.id === handle)?.due;
+  }
+
   /**
    * Jumps `ms` into the future, running every timer that becomes due before returning. Time moves
    * timer by timer (as in {@link ManualClock}), so a timer sees `now()` equal to its due time and a

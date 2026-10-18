@@ -43,6 +43,17 @@ describe('SkippableClock', () => {
     expect(c.now()).toBe(1100);
   });
 
+  it('dueOf reports a pending timer\'s due time until it runs or is cleared', () => {
+    const { base, c } = clocks();
+    base.advance(7);
+    const a = c.setTimeout(() => undefined, 50);
+    const b = c.setTimeout(() => undefined, 80);
+    expect([c.dueOf(a), c.dueOf(b)]).toEqual([57, 87]);
+    c.clearTimeout(b);
+    c.skip(50);
+    expect([c.dueOf(a), c.dueOf(b)]).toEqual([undefined, undefined]);
+  });
+
   it('timers fire on real time when not skipped, in due order', () => {
     const { base, c } = clocks();
     const log: string[] = [];

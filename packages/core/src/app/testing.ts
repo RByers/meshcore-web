@@ -45,12 +45,13 @@ function recordingClock(clock: SkippableClock): Clock & { pending: Map<TimerHand
     pending,
     now: () => clock.now(),
     setTimeout(fn, ms) {
-      const timer = { ms, due: clock.now() + Math.max(0, ms) };
       const h = clock.setTimeout(() => {
         pending.delete(h);
         fn();
       }, ms);
-      pending.set(h, timer);
+      // the clock's own due time: reading now() again here could land a real millisecond earlier,
+      // and elapsePending would then stop short and leave the timer to fire on real time
+      pending.set(h, { ms, due: clock.dueOf(h) ?? clock.now() + Math.max(0, ms) });
       return h;
     },
     clearTimeout(h) {
