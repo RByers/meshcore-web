@@ -58,6 +58,7 @@ export class ChatModel extends StoreBoundModel {
   readonly #channel = signal<ChannelRecord | null>(null);
   readonly #replyTo = signal<MessageRecord | null>(null);
   readonly #active = signal(false);
+  readonly #firstUnreadId = signal<number | null>(null);
   readonly #sending = new Set<Promise<unknown>>();
 
   /** Loaded messages, oldest first. */
@@ -72,6 +73,14 @@ export class ChatModel extends StoreBoundModel {
   readonly replyTo: ReadonlySignal<MessageRecord | null> = this.#replyTo.readonly;
   /** True while the conversation is on screen (incoming messages are read immediately). */
   readonly active: ReadonlySignal<boolean> = this.#active.readonly;
+  /**
+   * The "New messages" divider: the id of the first message that was unread when the
+   * conversation was opened (captured before it is marked read), or null for no divider. It stays
+   * put while the conversation is open (messages read on arrival do not move it), is cleared when
+   * the conversation is hidden or we send a message (our reply shows we have read what is above),
+   * and is captured afresh on the next open.
+   */
+  readonly firstUnreadId: ReadonlySignal<number | null> = this.#firstUnreadId.readonly;
 
   readonly title: ReadonlySignal<string> = computed(() => {
     if (this.convType === 'channel') return this.#channel.value?.name ?? 'Channel';
@@ -172,10 +181,17 @@ export class ChatModel extends StoreBoundModel {
       if (this.convType === 'contact') this.#contact.value = (peer as ContactRecord | undefined) ?? null;
       else this.#channel.value = (peer as ChannelRecord | undefined) ?? null;
     });
-    if (this.#active.peek() && this.#unread.peek() > 0) await this.markRead();
+    if (this.#active.peek() && this.#unread.peek() > 0) await this.#openUnread();
+  }
+
+  /** Opened with unread messages: places the divider (if not already placed), then marks read. */
+  #openUnread(): Promise<void> {
+    if (this.#firstUnreadId.peek() === null) this.#firstUnreadId.value = firstUnreadId(this.#messages.peek(), this.#unread.peek());
+    return this.markRead();
   }
 
   protected reset(): void {
+    this.#firstUnreadId.value = null;
     this.#messages.value = [];
     this.#hasMore.value = false;
     this.#unread.value = 0;
@@ -207,8 +223,10 @@ export class ChatModel extends StoreBoundModel {
 
   /** The conversation is shown (true) or hidden (false); while shown, incoming messages are read. */
   setActive(active: boolean): void {
+    const was = this.#active.peek();
     this.#active.value = active;
-    if (active && this.#unread.peek() > 0) void this.markRead();
+    if (!active) this.#firstUnreadId.value = null;
+    else if (this.#unread.peek() > 0) void (was ? this.markRead() : this.#openUnread());
   }
 
   // ---- composing ----
@@ -313,7 +331,10 @@ export class ChatModel extends StoreBoundModel {
       ...(compressed ? { compressed } : {}),
       ...(this.convType === 'contact' ? { attempt: 0 } : { senderName: this.selfName.peek() }),
     });
-    this.#replyTo.value = null;
+    batch(() => {
+      this.#replyTo.value = null;
+      this.#firstUnreadId.value = null;
+    });
     const done = this.#track(this.#deliver(store, client, record, channelIdx));
     return { record, done };
   }
@@ -472,6 +493,22 @@ export class ChatModel extends StoreBoundModel {
     await chain;
     return last;
   }
+}
+
+/**
+ * Where the "New messages" divider goes when a conversation with `unread` unread messages is
+ * opened: the id of the `unread`-th newest incoming message of `messages` (oldest first), counting
+ * only the messages that bump the unread count (incoming, not CLI; as `MessagesRepo.markUnreadFrom`).
+ * When fewer are loaded, the oldest loaded message. Null when nothing is unread or loaded.
+ */
+export function firstUnreadId(messages: readonly MessageRecord[], unread: number): number | null {
+  if (unread <= 0 || messages.length === 0) return null;
+  let n = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!;
+    if (m.direction === 'in' && m.txtType !== TxtType.CLI_DATA && m.txtType !== TxtType.CLI_COMMAND && ++n === unread) return m.id;
+  }
+  return messages[0]!.id;
 }
 
 /** A delivered message never goes back; a failed one only moves on a late ACK. */

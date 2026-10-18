@@ -1,7 +1,9 @@
 /**
  * One conversation: `/chat/:key` (DM, mode="contact") or `/channel/:key` (mode="channel").
  * Bubbles with status for outgoing messages, auto-scroll with a "new messages" affordance,
- * composer with byte counter (Enter sends, Shift+Enter newline) and replies.
+ * composer with byte counter (Enter sends, Shift+Enter newline) and replies. A "New messages"
+ * divider marks where the unread messages began when the conversation was opened
+ * (`ChatModel.firstUnreadId`); on open the log scrolls to it instead of the bottom.
  */
 import { css, html, nothing, type PropertyValues, type TemplateResult } from 'lit';
 import { parseReply, receivedSignal, type ChatModel } from '@meshcore-web/core/app';
@@ -230,6 +232,22 @@ export class McChatPage extends AppElement {
           animation: none;
         }
       }
+      .unread-divider {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-block: 4px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: var(--mc-accent);
+      }
+      .unread-divider::before,
+      .unread-divider::after {
+        content: '';
+        flex: 1;
+        border-block-start: 1px solid var(--mc-accent);
+        opacity: 0.6;
+      }
       .more {
         display: flex;
         justify-content: center;
@@ -377,11 +395,22 @@ export class McChatPage extends AppElement {
     this.#lastCount = ms.length;
     this.#lastId = last?.id;
     if (!grew) return;
+    if (first && this.#scrollToDivider()) return;
     if (first || this.#atBottom || last?.direction === 'out') this.#scrollToBottom();
     else if (!this.#newBelow) {
       this.#newBelow = true;
       this.requestUpdate();
     }
+  }
+
+  /** Scrolls the "New messages" divider to the top of the log (if there is one). */
+  #scrollToDivider(): boolean {
+    const log = this.#log();
+    const divider = this.renderRoot.querySelector<HTMLElement>('[data-field="unread-divider"]');
+    if (!log || !divider) return false;
+    log.scrollTop += divider.getBoundingClientRect().top - log.getBoundingClientRect().top - 8;
+    this.#onScroll();
+    return true;
   }
 
   async #send(): Promise<void> {
@@ -598,6 +627,7 @@ export class McChatPage extends AppElement {
     // the key placeholder and the composer would send with the wrong compression / byte limit.
     if (chat.loading.value) return html`<p class="muted" data-field="loading">Loading…</p>`;
     const messages = chat.messages.value;
+    const unreadFrom = chat.firstUnreadId.value;
     const channel = this.convType === 'channel';
     const ch = channel ? chat.channel.value : null;
     const kind = channel ? (this.app.channels.views.value.find((c) => c.key === this.key)?.kind ?? 'private') : (this.app.contacts.view(this.key)?.typeName ?? 'chat');
@@ -630,7 +660,9 @@ export class McChatPage extends AppElement {
             ? html`<div class="more"><button data-action="load-more" @click=${() => void chat.loadMore()}>Load older messages</button></div>`
             : nothing}
           ${messages.length
-            ? html`<ol class="messages" aria-label="Messages" aria-live="polite">${messages.map((m) => this.#message(chat, m))}</ol>`
+            ? html`<ol class="messages" aria-label="Messages" aria-live="polite">
+                ${messages.map((m) => html`${m.id === unreadFrom ? unreadDivider : nothing}${this.#message(chat, m)}`)}
+              </ol>`
             : html`<p class="empty muted">No messages yet. Say hello!</p>`}
         </div>
         ${this.#newBelow
@@ -676,6 +708,8 @@ export class McChatPage extends AppElement {
     `;
   }
 }
+
+const unreadDivider = html`<li class="unread-divider" data-field="unread-divider" role="separator" aria-label="New messages">New messages</li>`;
 
 /** Marks a message that went over the air as an "s:" SMAZ envelope, with the size saving as its tooltip. */
 function smazIcon(m: MessageRecord) {

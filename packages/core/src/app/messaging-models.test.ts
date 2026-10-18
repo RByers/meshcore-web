@@ -6,6 +6,7 @@ import type { MessageRecord } from '../store/schema.js';
 import { hashtagChannelSecret, publicChannelSecret, scenarioKey } from '../emulator/scenarios.js';
 import type { AppModelOptions } from './app-model.js';
 import { connectedApp } from './testing.js';
+import { firstUnreadId } from './chat-model.js';
 import { base64Encode } from './messaging.js';
 import { messagePreview } from './contacts-model.js';
 
@@ -152,6 +153,83 @@ describe('unread and read tracking', () => {
     await app.channels.setMuted(pub, true);
     await vi.waitFor(() => expect(unread.totals.value.channels).toBe(0));
     expect(app.channels.views.value.find((c) => c.key === pub)!.unread).toBe(1);
+  });
+});
+
+describe('"New messages" divider (ChatModel.firstUnreadId)', () => {
+  const msg = (id: number, direction: 'in' | 'out', txtType = 0) => ({ id, direction, txtType }) as MessageRecord;
+
+  it('firstUnreadId: the unread-th newest incoming non-CLI message, else the oldest loaded', () => {
+    const ms = [msg(1, 'in'), msg(2, 'in'), msg(3, 'out'), msg(4, 'in', 1 /* CLI_DATA */), msg(5, 'in')];
+    expect(firstUnreadId(ms, 0)).toBeNull();
+    expect(firstUnreadId([], 3)).toBeNull();
+    expect(firstUnreadId(ms, 1)).toBe(5);
+    expect(firstUnreadId(ms, 2)).toBe(2); // skips the CLI reply and our own message
+    expect(firstUnreadId(ms, 3)).toBe(1);
+    expect(firstUnreadId(ms, 9)).toBe(1); // more unread than loaded
+  });
+
+  it('is captured on open before marking read, stays put while open, and clears on send / close', async () => {
+    const { app, hex, s } = await connected();
+    s.emulator.injectContactMessage(s.keys.bob, 'one');
+    s.emulator.injectContactMessage(s.keys.bob, 'two');
+    await vi.waitFor(() => expect(app.contacts.view(hex.bob)?.unread).toBe(2));
+    const chat = app.chat('contact', hex.bob);
+    await chat.settled();
+    await vi.waitFor(() => expect(chat.messages.value).toHaveLength(2));
+    expect(chat.firstUnreadId.value).toBeNull(); // not open yet
+
+    chat.setActive(true);
+    const one = chat.messages.value.find((m) => m.text === 'one')!;
+    expect(chat.firstUnreadId.value).toBe(one.id);
+    await vi.waitFor(() => expect(chat.unread.value).toBe(0));
+    expect(chat.firstUnreadId.value).toBe(one.id);
+
+    // arriving while open: read at once, the divider does not move
+    s.emulator.injectContactMessage(s.keys.bob, 'three');
+    await vi.waitFor(() => expect(chat.messages.value.at(-1)?.text).toBe('three'));
+    await vi.waitFor(() => expect(chat.unread.value).toBe(0));
+    expect(chat.firstUnreadId.value).toBe(one.id);
+    chat.setActive(true); // re-activating while open does not move it either
+    expect(chat.firstUnreadId.value).toBe(one.id);
+
+    // replying clears it
+    const h = await chat.send('hi');
+    expect(chat.firstUnreadId.value).toBeNull();
+    await h.done;
+
+    // closing clears it; reopening with nothing unread shows none
+    chat.setActive(false);
+    chat.setActive(true);
+    expect(chat.firstUnreadId.value).toBeNull();
+    chat.setActive(false);
+
+    // a message while closed: the next open places it there
+    s.emulator.injectContactMessage(s.keys.bob, 'four');
+    await vi.waitFor(() => expect(chat.unread.value).toBe(1));
+    await vi.waitFor(() => expect(chat.messages.value.at(-1)?.text).toBe('four'));
+    chat.setActive(true);
+    expect(chat.firstUnreadId.value).toBe(chat.messages.value.at(-1)!.id);
+    chat.setActive(false);
+    expect(chat.firstUnreadId.value).toBeNull();
+  });
+
+  it('is placed once loading finishes when opened before the first load (DM and channel)', async () => {
+    const { app, hex } = await connected();
+    await vi.waitFor(() => expect(app.unread.totals.value).toEqual({ contacts: 2, channels: 1, total: 3 }));
+    const dm = app.chat('contact', hex.alice);
+    dm.setActive(true);
+    await dm.settled();
+    expect(dm.firstUnreadId.value).toBe(dm.messages.value.find((m) => m.text === 'Hi! Are you on the mesh today?')!.id);
+    await vi.waitFor(() => expect(dm.unread.value).toBe(0));
+
+    const pub = await channelKeyForPsk(publicChannelSecret());
+    const ch = app.chat('channel', pub);
+    ch.setActive(true);
+    await ch.settled();
+    expect(ch.firstUnreadId.value).toBe(ch.messages.value.find((m) => m.text === 'Good morning everyone')!.id);
+    await vi.waitFor(() => expect(ch.unread.value).toBe(0));
+    expect(ch.firstUnreadId.value).not.toBeNull();
   });
 });
 

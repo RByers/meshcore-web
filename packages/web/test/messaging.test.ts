@@ -355,3 +355,67 @@ describe('unread and persistence', () => {
     expect(t.query('.msg[data-dir="out"]')!.dataset['status']).toBe('delivered');
   });
 });
+
+describe('"New messages" divider', () => {
+  /** The message right after the divider, and how many dividers there are. */
+  const afterDivider = (t: Harness) => {
+    const all = t.queryAll('[data-field="unread-divider"]');
+    const next = all[0]?.nextElementSibling as HTMLElement | null | undefined;
+    return { count: all.length, text: next?.querySelector('[data-field="text"]')?.textContent ?? null };
+  };
+
+  it('in a DM: marks the first unread message, stays while open, and clears on send', async () => {
+    const t = await connected();
+    const k = keys(t);
+    const s = t.emulatorScenario();
+    await t.go(`/chat/${k.alice}`, '[data-field="unread-divider"]');
+    expect(afterDivider(t)).toEqual({ count: 1, text: 'Hi! Are you on the mesh today?' });
+    await t.until(() => t.app.unread.totals.value.contacts === 1, 3000, 'Alice read');
+    expect(afterDivider(t).count).toBe(1); // marking read does not remove it
+
+    s.emulator.injectContactMessage(s.keys.alice, 'still there?');
+    await t.until(() => t.text().includes('still there?'), 5000, 'arrived while open');
+    expect(afterDivider(t)).toEqual({ count: 1, text: 'Hi! Are you on the mesh today?' });
+
+    await t.fill('[data-field="composer"]', 'yes');
+    await t.click('[data-action="send"]');
+    await t.until(() => t.query('.msg[data-dir="out"]'), 5000, 'sent');
+    expect(afterDivider(t).count).toBe(0);
+  });
+
+  it('in a channel: shown on open, gone when reopened with nothing unread', async () => {
+    const t = await connected();
+    const pub = await channelKeyForPsk(publicChannelSecret());
+    await t.go(`/channel/${pub}`, '[data-field="unread-divider"]');
+    expect(afterDivider(t)).toEqual({ count: 1, text: 'Good morning everyone' });
+    await t.until(() => t.app.unread.totals.value.channels === 0, 3000, 'channel read');
+
+    await t.go('/channels', '[data-channel]');
+    await t.go(`/channel/${pub}`, '.msg');
+    expect(afterDivider(t).count).toBe(0);
+  });
+
+  it('scrolls to the divider instead of the bottom on open', async () => {
+    const t = await connected();
+    const k = keys(t);
+    const s = t.emulatorScenario();
+    const inject = async (from: number, n: number) => {
+      for (let i = from; i < from + n; i++) s.emulator.injectContactMessage(s.keys.bob, `msg ${i}`);
+      await t.until(() => t.app.chat('contact', k.bob).unread.value === n, 5000, `${n} unread`);
+    };
+    await inject(0, 20);
+    await t.go(`/chat/${k.bob}`, '[data-field="unread-divider"]');
+    await t.until(() => t.app.chat('contact', k.bob).unread.value === 0, 3000, 'read');
+    await t.go('/contacts', `[data-contact="${k.bob}"]`);
+    await inject(20, 20);
+    await t.go(`/chat/${k.bob}`, '[data-field="unread-divider"]');
+    expect(afterDivider(t)).toEqual({ count: 1, text: 'msg 20' });
+    const log = t.query('.log')!;
+    await t.until(() => {
+      const d = t.query('[data-field="unread-divider"]')!.getBoundingClientRect();
+      const l = log.getBoundingClientRect();
+      return d.top >= l.top && d.bottom <= l.bottom;
+    }, 3000, 'divider in view');
+    expect(log.scrollHeight - log.scrollTop - log.clientHeight).toBeGreaterThan(100); // not at the bottom
+  });
+});
