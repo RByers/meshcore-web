@@ -24,6 +24,7 @@ import {
   type CompressionStats,
   type ChannelMessageCount,
   type HopCount,
+  type DecodeLimit,
   type LastHopStats,
   type LoraParams,
   type NodeRef,
@@ -61,6 +62,7 @@ import {
   type DotPoint,
   type Describe,
   type DotSelectDetail,
+  type RefLine,
   type LineSeries,
   type SeriesPalette,
 } from '../../charts/index.js';
@@ -94,6 +96,20 @@ export const Y_OPTIONS: readonly YOption[] = [
   { id: 'hops', label: 'Hops', missing: 'a hop count', value: (p) => p.hops },
   { id: 'size', label: 'Size (bytes)', missing: 'a known size', value: (p) => (p.bytes > 0 ? p.bytes : null) },
 ];
+
+/** dB with a typographic minus, e.g. "−15 dB". */
+function formatDb(v: number): string {
+  return `${v < 0 ? '−' : ''}${formatNumber(Math.abs(v))} dB`;
+}
+
+/**
+ * Reference lines for the dot plot's y field: on SNR, the radio's decode limit
+ * (`PacketStatsModel.decodeLimit`) when known; none otherwise.
+ */
+export function dotRefLines(y: YField, limit: DecodeLimit | null): RefLine[] {
+  if (y !== 'snr' || !limit) return [];
+  return [{ key: 'decode-limit', value: limit.snrDb, label: `SF${limit.sf} decode limit ${formatDb(limit.snrDb)}` }];
+}
 
 export const COLOR_OPTIONS: readonly { id: ColorField; label: string }[] = [
   { id: 'type', label: 'Packet type' },
@@ -599,6 +615,17 @@ export class McPacketStats extends AppElement {
     }
   }
 
+  #refs: { key: readonly unknown[]; lines: RefLine[] } | undefined;
+
+  /** Dot plot reference lines, memoised like `#dotProps` so the plot's layout cache survives re-renders. */
+  #refLines(limit: DecodeLimit | null): RefLine[] {
+    const key = [this.yField, limit];
+    const prev = this.#refs;
+    if (prev && key.every((k, i) => k === prev.key[i])) return prev.lines;
+    this.#refs = { key, lines: dotRefLines(this.yField, limit) };
+    return this.#refs.lines;
+  }
+
   /** Dot plot props for the last (points, y, colour): a new array would re-lay-out every dot. */
   #dots: { key: readonly unknown[]; points: DotPoint[]; palette: SeriesPalette } | undefined;
 
@@ -875,6 +902,7 @@ export class McPacketStats extends AppElement {
           .describe=${this.colorField === 'type' || this.colorField === 'route' ? packetTypeNameDescription : undefined}
           series-label=${COLOR_OPTIONS.find((o) => o.id === this.colorField)?.label ?? ''}
           missing-label=${yOpt.missing}
+          .refLines=${this.#refLines(stats.decodeLimit.value)}
           @dot-select=${this.#onDot}
         ></mc-dot-plot>
       </section>

@@ -7,10 +7,13 @@
  * Built for ~10k points: one `<circle>` each, rendered under `guard` so hover does not re-render
  * them, and no per-dot listeners — the SVG finds the nearest dot within a ≥ 12 px hit radius.
  * Clicking a dot dispatches `dot-select` (`detail: { id }`, bubbles, composed).
+ *
+ * `refLines` draws horizontal dashed reference lines (e.g. the SNR decode limit) under the dots,
+ * labelled at the right end and always inside the y domain.
  */
 import { css, html, nothing, svg, type SVGTemplateResult, type TemplateResult } from 'lit';
 import { guard } from 'lit/directives/guard.js';
-import { scaleLinear, scaleSqrt, scaleTime } from 'd3-scale';
+import { scaleLinear, scaleSqrt, scaleTime, type ScaleLinear } from 'd3-scale';
 import { extent, max } from 'd3-array';
 import { ChartBase, chartStyles, formatDateTime, formatNumber, legend, type Describe, MIN_HIT, tickCount, xTimeAxis, yAxis } from './chart-base.js';
 import { assignSlots, colorOf, keysByCount, legendFor, type SeriesPalette } from './palette.js';
@@ -31,6 +34,20 @@ export interface DotPoint {
   title?: string;
 }
 
+/**
+ * A horizontal reference line at a constant y. A time-varying line (e.g. noise-floor samples) would
+ * be a second member of this union, `{ kind: 'series'; points: readonly { t: number; v: number }[]; … }`,
+ * drawn as a step path by {@link refLineMarks} and widening the y domain by its extent.
+ */
+export interface RefLine {
+  /** y value, in the plot's units. */
+  value: number;
+  /** Text at the right end of the line (e.g. "SF10 decode limit −15 dB"); also in the aria-label. */
+  label: string;
+  /** Stable id for `data-ref-line`; default the label. */
+  key?: string;
+}
+
 export interface DotSelectDetail {
   id: number | string;
 }
@@ -49,6 +66,7 @@ interface Layout {
   r: Float64Array;
   dots: SVGTemplateResult;
   axes: SVGTemplateResult;
+  refs: SVGTemplateResult;
   palette: SeriesPalette;
   nulls: number;
 }
@@ -64,6 +82,7 @@ export class McDotPlot extends ChartBase {
     describe: { attribute: false },
     noun: { type: String },
     missingLabel: { type: String, attribute: 'missing-label' },
+    refLines: { attribute: false },
     height: { type: Number },
     hover: { state: true },
   };
@@ -79,6 +98,18 @@ export class McDotPlot extends ChartBase {
       }
       svg.over {
         cursor: pointer;
+      }
+      .ref line {
+        stroke: var(--mc-warn, GrayText);
+        stroke-width: 1.5;
+        stroke-dasharray: 5 4;
+      }
+      .ref text {
+        fill: var(--chart-muted);
+        paint-order: stroke;
+        stroke: var(--chart-surface);
+        stroke-width: 3px;
+        stroke-linejoin: round;
       }
     `,
   ];
@@ -98,6 +129,8 @@ export class McDotPlot extends ChartBase {
   declare noun: string;
   /** Text after "without" in the note; default `yLabel`. */
   declare missingLabel: string | undefined;
+  /** Horizontal reference lines; default none. */
+  declare refLines: readonly RefLine[];
   declare height: number;
   declare hover: number | null;
 
@@ -113,6 +146,7 @@ export class McDotPlot extends ChartBase {
     this.seriesLabel = '';
     this.noun = 'packet';
     this.missingLabel = undefined;
+    this.refLines = [];
     this.height = 280;
     this.hover = null;
   }
@@ -122,7 +156,7 @@ export class McDotPlot extends ChartBase {
   }
 
   #computeLayout(): Layout {
-    const key = [this.points, this.xDomain, this.palette, this.width, this.height, this.yFormat, this.yLabel];
+    const key = [this.points, this.xDomain, this.palette, this.width, this.height, this.yFormat, this.yLabel, this.refLines];
     const prev = this.#layout;
     if (prev && key.every((k, i) => k === prev.key[i])) return prev;
 
@@ -141,7 +175,8 @@ export class McDotPlot extends ChartBase {
     if (dx0 === dx1) [dx0, dx1] = [dx0 - HOUR / 2, dx1 + HOUR / 2];
     const x = scaleTime().domain([dx0, dx1]).range([x0, x1]);
 
-    let [dy0, dy1] = extent(pts, (p) => p.y);
+    const refs = this.refLines.filter((l) => Number.isFinite(l.value));
+    let [dy0, dy1] = extent([...pts.map((p) => p.y), ...refs.map((l) => l.value)]);
     if (dy0 === undefined || dy1 === undefined) [dy0, dy1] = [0, 1];
     if (dy0 === dy1) [dy0, dy1] = [dy0 - 1, dy1 + 1];
     const y = scaleLinear().domain([dy0, dy1]).nice().range([y0, y1]);
@@ -167,6 +202,7 @@ export class McDotPlot extends ChartBase {
       ${yAxis(y, x0, x1, tickCount(y0 - y1, 40), (v) => this.#fmtY(v))}
       ${xTimeAxis(x, y0, tickCount(x1 - x0, 110))}
       <text class="axis-label" x=${x0 - 6} y=${MARGIN.top - 8} text-anchor="start" data-field="y-label">${this.yLabel}</text>`;
+    const refMarks = refLineMarks(refs, y, x0, x1);
     const layout: Layout = {
       key,
       pts,
@@ -175,6 +211,7 @@ export class McDotPlot extends ChartBase {
       r: rr,
       dots: svg`${circles}`,
       axes,
+      refs: refMarks,
       palette,
       nulls: all.length - n,
     };
@@ -256,12 +293,13 @@ export class McDotPlot extends ChartBase {
           width=${w}
           height=${h}
           role="img"
-          aria-label=${`${this.yLabel} over time, ${l.pts.length} ${this.noun}s`}
+          aria-label=${`${this.yLabel} over time, ${l.pts.length} ${this.noun}s${this.refLines.map((r) => `; ${r.label}`).join('')}`}
           @pointermove=${this.#onMove}
           @pointerleave=${this.#onLeave}
           @click=${this.#onClick}
         >
           ${w > 0 ? l.axes : nothing}
+          ${w > 0 ? l.refs : nothing}
           <g class="dots">${guard([l], () => l.dots)}</g>
           ${hp && hi !== null
             ? svg`<circle class="focus" cx=${l.cx[hi]!} cy=${l.cy[hi]!} r=${l.r[hi]! + 1} fill=${colorOf(l.palette, hp.color)}></circle>`
@@ -275,6 +313,17 @@ export class McDotPlot extends ChartBase {
         : nothing}
     </div>`;
   }
+}
+
+/** Dashed horizontal lines from x0 to x1, each labelled above its right end. */
+function refLineMarks(lines: readonly RefLine[], y: ScaleLinear<number, number>, x0: number, x1: number): SVGTemplateResult {
+  return svg`${lines.map((l) => {
+    const py = Math.round(y(l.value)) + 0.5;
+    return svg`<g class="ref" data-ref-line=${l.key ?? l.label} aria-hidden="true">
+      <line x1=${x0} x2=${x1} y1=${py} y2=${py}></line>
+      <text x=${x1 - 2} y=${py - 4} text-anchor="end" data-field="ref-label">${l.label}</text>
+    </g>`;
+  })}`;
 }
 
 customElements.define('mc-dot-plot', McDotPlot);

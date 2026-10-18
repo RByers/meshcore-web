@@ -288,10 +288,14 @@ describe('PacketStatsModel — per-packet attribution (§1.3)', () => {
 
     // no radio params → no airtime
     expect(h.model.points.value[0]!.airtimeMs).not.toBeNull();
+    expect(h.model.decodeLimit.value).toEqual({ sf: 10, snrDb: -15 });
+    h.selfInfo.value = { ...SELF, radioSf: 7 };
+    expect(h.model.decodeLimit.value).toEqual({ sf: 7, snrDb: -7.5 });
     h.selfInfo.value = null;
     expect(h.model.points.value[0]!.airtimeMs).toBeNull();
     expect(h.model.summary.value.airtimeMs).toBeNull();
     expect(h.model.radio.value).toBeNull();
+    expect(h.model.decodeLimit.value).toBeNull();
   });
 
   it('no distance without an own position', async () => {

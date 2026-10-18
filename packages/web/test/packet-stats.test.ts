@@ -131,6 +131,29 @@ describe('/packets Stats tab', () => {
     expect(legendTitle(alice.key)).toBe('');
   });
 
+  it("draws the radio's decode limit on the SNR plot only", async () => {
+    const { t, el } = await openStats();
+    const refLabel = () => inChart(el, 'dots', 'mc-dot-plot', '[data-ref-line="decode-limit"] [data-field="ref-label"]')[0]?.textContent;
+    await t.until(() => refLabel() !== undefined, 3000, 'decode-limit line');
+    const sf = t.app.connection.selfInfo.value!.radioSf;
+    const floor = { 7: '7.5', 8: '10', 9: '12.5', 10: '15', 11: '17.5', 12: '20' }[sf];
+    expect(floor, `SF${sf}`).toBeDefined();
+    expect(refLabel()).toBe(`SF${sf} decode limit −${floor} dB`);
+    // inside the plot area even when every packet is far above it
+    const line = inChart(el, 'dots', 'mc-dot-plot', '[data-ref-line="decode-limit"] line')[0] as unknown as SVGLineElement;
+    const svgH = Number(line.ownerSVGElement!.getAttribute('height'));
+    expect(Number(line.getAttribute('y1'))).toBeGreaterThan(0);
+    expect(Number(line.getAttribute('y1'))).toBeLessThan(svgH);
+    expect(line.ownerSVGElement!.getAttribute('aria-label')).toContain(`SF${sf} decode limit`);
+
+    select(t.query('[data-select="y"]')!, 'rssi');
+    await settle(t, el);
+    expect(inChart(el, 'dots', 'mc-dot-plot', '[data-ref-line]')).toHaveLength(0);
+    select(t.query('[data-select="y"]')!, 'snr');
+    await settle(t, el);
+    expect(refLabel()).toBe(`SF${sf} decode limit −${floor} dB`);
+  });
+
   it('packet and route type breakdown legends explain each type on hover', async () => {
     const { el } = await openStats();
     const title = (label: string, key: string) =>

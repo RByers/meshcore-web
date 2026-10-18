@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { loraAirtimeMs, loraParamsFromSelfInfo, loraSymbolMs, meshcorePreambleSymbols } from './airtime.js';
+import { loraAirtimeMs, loraDecodeLimit, loraParamsFromSelfInfo, loraSnrFloorDb, loraSymbolMs, meshcorePreambleSymbols } from './airtime.js';
 
 /*
  * Expected values computed by hand with the Semtech time-on-air formula (airtime.ts header;
@@ -60,5 +60,22 @@ describe('loraAirtimeMs', () => {
     expect(loraParamsFromSelfInfo({ radioSf: 10, radioBwHz: 250_000, radioCr: 5 })).toEqual({ sf: 10, bwKhz: 250, cr: 5 });
     expect(loraParamsFromSelfInfo({ radioSf: 0, radioBwHz: 0, radioCr: 0 })).toBeNull();
     expect(loraParamsFromSelfInfo(null)).toBeNull();
+  });
+});
+
+describe('loraSnrFloorDb', () => {
+  // Semtech SX126x datasheet table 6-1 / SX127x table 13: −2.5 dB per SF step
+  it('gives the demodulation floor per spreading factor', () => {
+    expect([5, 6, 7, 8, 9, 10, 11, 12].map(loraSnrFloorDb)).toEqual([-2.5, -5, -7.5, -10, -12.5, -15, -17.5, -20]);
+  });
+
+  it('is null for an unknown spreading factor', () => {
+    for (const sf of [0, 4, 13, 7.5, Number.NaN]) expect(loraSnrFloorDb(sf)).toBeNull();
+  });
+
+  it('loraDecodeLimit pairs the SF with its floor; null without parameters', () => {
+    expect(loraDecodeLimit({ sf: 10 })).toEqual({ sf: 10, snrDb: -15 });
+    expect(loraDecodeLimit({ sf: 3 })).toBeNull();
+    expect(loraDecodeLimit(null)).toBeNull();
   });
 });

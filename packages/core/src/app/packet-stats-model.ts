@@ -24,7 +24,7 @@ import type { RadioStore } from '../store/radio-store.js';
 import type { ContactRecord, PacketRecord } from '../store/schema.js';
 import { fromHex, toHex, utf8Encode } from '../util/bytes.js';
 import type { Unsubscribe } from '../util/events.js';
-import { loraAirtimeMs, loraParamsFromSelfInfo, type LoraParams } from './airtime.js';
+import { loraAirtimeMs, loraDecodeLimit, loraParamsFromSelfInfo, type DecodeLimit, type LoraParams } from './airtime.js';
 import type { ConnectionModel } from './connection.js';
 import { boundsOf, haversineMeters, hasLocation, type Bounds, type LatLon } from './geo.js';
 import type { DrillSource, PacketFilter, SharedPacketFilter } from './packet-log-model.js';
@@ -1337,6 +1337,11 @@ export class PacketStatsModel extends StoreBoundModel implements DrillSource {
   /** The radio's LoRa parameters used for airtime (from SELF_INFO), null when unknown. */
   readonly radio: ReadonlySignal<LoraParams | null>;
   /**
+   * The weakest SNR the radio's spreading factor can decode ({@link loraDecodeLimit}): the SNR dot
+   * plot's reference line. Null when the radio parameters are unknown.
+   */
+  readonly decodeLimit: ReadonlySignal<DecodeLimit | null>;
+  /**
    * Drill-down view of the shared filter ({@link statsFiltersOf}: AND, at most one per field); in
    * memory only, kept across range changes.
    */
@@ -1394,6 +1399,9 @@ export class PacketStatsModel extends StoreBoundModel implements DrillSource {
     this.filters = computed(() => statsFiltersOf(shared.value), { equals: sameFilters });
     this.#dmSig = computed(() => dmSignature(deps.dmKeys?.value ?? null));
     this.radio = computed(() => loraParamsFromSelfInfo(connection.selfInfo.value), { equals: sameParams });
+    this.decodeLimit = computed(() => loraDecodeLimit(this.radio.value), {
+      equals: (a, b) => a === b || (a !== null && b !== null && a.sf === b.sf && a.snrDb === b.snrDb),
+    });
 
     const resolver = computed(() => new Resolver(deps.contacts.value, selfNode(connection.selfInfo.value, connection.store.value)));
     const channels = computed(() => deps.context.value.channels);

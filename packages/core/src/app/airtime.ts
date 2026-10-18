@@ -86,3 +86,28 @@ export function loraParamsFromSelfInfo(si: Pick<SelfInfo, 'radioSf' | 'radioBwHz
   const p: LoraParams = { sf: si.radioSf, bwKhz: si.radioBwHz / 1000, cr: si.radioCr };
   return validLoraParams(p) ? p : null;
 }
+
+/**
+ * Demodulation SNR floor (dB) per spreading factor: the weakest SNR the LoRa receiver can still
+ * decode (Semtech SX126x datasheet §6.1.1.1 table 6-1, SX127x datasheet §4.1.1.2 table 13). Each
+ * SF step buys 2.5 dB. SF5 / SF6 are SX126x only.
+ */
+const SNR_FLOOR_DB: Readonly<Record<number, number>> = { 5: -2.5, 6: -5, 7: -7.5, 8: -10, 9: -12.5, 10: -15, 11: -17.5, 12: -20 };
+
+/** The LoRa demodulation SNR floor (dB) for spreading factor `sf`, or null for an unknown SF. */
+export function loraSnrFloorDb(sf: number): number | null {
+  return SNR_FLOOR_DB[sf] ?? null;
+}
+
+/** The weakest decodable SNR at the radio's spreading factor ({@link loraSnrFloorDb}). */
+export interface DecodeLimit {
+  sf: number;
+  snrDb: number;
+}
+
+/** The decode limit for LoRa parameters, or null when they or their SF are unknown. */
+export function loraDecodeLimit(p: Pick<LoraParams, 'sf'> | null | undefined): DecodeLimit | null {
+  if (!p) return null;
+  const snrDb = loraSnrFloorDb(p.sf);
+  return snrDb === null ? null : { sf: p.sf, snrDb };
+}

@@ -143,6 +143,12 @@ MeshCore uses a non-default value, cite the file in a comment) and the current r
 computed by hand for a couple of (SF, BW, CR, length) combinations, with the formula cited.
 `airtimeMs` is `null` when no radio params are known.
 
+**Decode limit.** `loraSnrFloorDb(sf)` is the LoRa demodulation SNR floor (Semtech SX126x / SX127x
+datasheets): SF5 −2.5, SF6 −5, SF7 −7.5, SF8 −10, SF9 −12.5, SF10 −15, SF11 −17.5, SF12 −20 dB, null
+for any other SF. `PacketStatsModel.decodeLimit` (`{ sf, snrDb } | null`, via `loraDecodeLimit(radio)`)
+is that floor at the connected radio's SF, null when the radio params are unknown; the SNR dot plot
+draws it as a reference line (§3). Packets near or below it are marginal links.
+
 ### 1.6 Aggregations (all `computed` from `points`, i.e. after the §6 filters)
 
 ```ts
@@ -252,7 +258,7 @@ without the app):
 
 - `<mc-bar-chart>` horizontal bars: `items: { label, value, href?, title?, key?, selected? }[]`; label column is a link when `href` is set; value label at the bar end; sorted as given; keyed rows dispatch `bar-select` (§3 drill-down).
 - `<mc-box-plot>` horizontal box-and-whisker rows on one value axis (tick labels below, zero line when 0 is in range): `rows: { label, box: BoxStats | null, href?, title?: string | string[], key?, selected? }[]`, `format`, `empty-row-text`; per row whiskers with end caps, box q1–q3, median line, mean diamond, outlier dots, the median printed at the right; a null box shows `empty-row-text`. Label links, tooltip and keyed-row `bar-select` / pressed state as `<mc-bar-chart>`.
-- `<mc-dot-plot>` `points: { x: number, y: number | null, size: number, color: string /* series key */, id }[]`, `xDomain`, `yLabel`, `yFormat`; dot radius ∝ `sqrt(size)` (area ∝ bytes, 2–9 px); nulls in `y` dropped with a count shown ("n packets without SNR"); click → `dot-select` event with the id; legend with series → colour (≤ 8 + Other).
+- `<mc-dot-plot>` `points: { x: number, y: number | null, size: number, color: string /* series key */, id }[]`, `xDomain`, `yLabel`, `yFormat`; dot radius ∝ `sqrt(size)` (area ∝ bytes, 2–9 px); nulls in `y` dropped with a count shown ("n packets without SNR"); click → `dot-select` event with the id; legend with series → colour (≤ 8 + Other). `refLines: { value, label, key? }[]` draws horizontal dashed reference lines (`--mc-warn` stroke, muted label above the right end, `data-ref-line=key`, labels appended to the SVG's aria-label) and widens the y domain so each line is always visible. A time-varying line (e.g. noise-floor samples) is meant to join `RefLine` as a second union member `{ kind: 'series', points: { t, v }[], label }`, drawn as a step path in `refLineMarks` (dot-plot.ts).
 - `<mc-line-chart>` `series: { key, points: { t, v }[] }[]`, `xDomain`, `stacked?: boolean`; crosshair tooltip listing all series at the hovered bin; legend.
 - `<mc-breakdown>` a single horizontal 100 % stacked bar per dimension: `segments: { label, value, title?, key?, selected? }[]` with a legend / inline labels; 2 px gaps between segments; keyed segments dispatch `segment-select`.
 - `<mc-stat-tile>` label + big value + optional sub-text.
@@ -299,6 +305,8 @@ is not shown; the inspector split is hidden). The Stats panel, top to bottom:
    ACK 4, PATH 5, TRACE 6, REQ/RESPONSE 7, CONTROL 8, rest Other); for node / channel colourings
    the top 8 by count in the current points take slots in count order, rest "Other". *Compression*
    uses fixed slots (Compressed 1, Plain 2, Not decrypted / non-text packets "Other").
+   On *SNR*, a dashed line marks the radio's decode limit (`decodeLimit`, §1.5), labelled e.g.
+   "SF10 decode limit −15 dB"; no line when the SF is unknown (`dotRefLines`).
 5. **Network utilisation**: `mc-line-chart` of airtime fraction over time (single series, %), then
    `mc-breakdown` rows for payload type, route type, direction, channel / category — each showing
    airtime share (with packet count in the tooltip). When airtime is unknown, fall back to bytes
