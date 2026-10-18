@@ -266,20 +266,20 @@ is not shown; the inspector split is hidden). The Stats panel, top to bottom:
    stats model, not in the URL), and, while any criterion other than the range is active,
    "Showing X of Y packets" (`data-field="filter-count"`). A line of stat tiles: packets, bytes, airtime %
    (with the radio params in the tooltip, "—" when unknown), unique sources, span.
-2. **Packets per source node** (`mc-bar-chart`, top 50, count desc): the label links to
+2. **Packet rate** (`mc-line-chart`): the `timeline` series (per channel, unknown channels, DMs,
+   adverts, ACKs, paths, traces, requests, control); the 8 biggest get a line, the rest are summed into *Other*; hovering a legend entry lists the payload types it counts (`timelineSeriesDescription`; a folded *Other* lists the series it sums); always stacked, so the top edge is the total rate.
+3. **Packets per source node** (`mc-bar-chart`, top 50, count desc): the label links to
    `/node/:key` (via `hrefFor`) when the node resolved to a contact, plain text for self /
    unresolved; footer line "n packets could not be attributed, m more nodes".
    **Group messages per channel** (`mc-bar-chart`, `channelMessages`): one bar per channel, by
    name or `channel xx` (hash) when the PSK is unknown; tooltip "n received, m sent · bytes".
-3. **Packets over time** (`mc-dot-plot`): x = time (range or log bounds), y selector
+4. **Packets over time** (`mc-dot-plot`): x = time (range or log bounds), y selector
    (*SNR* default, *RSSI*, *Distance*, *Hops*, *Size*), colour selector (*Packet type* default,
    *Route type*, *Last hop*, *Source*, *Channel*, *Direction*, *Compression*), dot area ∝ bytes. Clicking a dot
    navigates to `/packets/:id`. Payload types get a fixed slot map (TXT_MSG 1, GRP_TXT 2, ADVERT 3,
    ACK 4, PATH 5, TRACE 6, REQ/RESPONSE 7, CONTROL 8, rest Other); for node / channel colourings
    the top 8 by count in the current points take slots in count order, rest "Other". *Compression*
    uses fixed slots (Compressed 1, Plain 2, Not decrypted / non-text packets "Other").
-4. **Packet rate** (`mc-line-chart`): the `timeline` series (per channel, unknown channels, DMs,
-   adverts, ACKs, paths, traces, requests, control); the 8 biggest get a line, the rest are summed into *Other*; hovering a legend entry lists the payload types it counts (`timelineSeriesDescription`; a folded *Other* lists the series it sums); toggle *stacked*.
 5. **Network utilisation**: `mc-line-chart` of airtime fraction over time (single series, %), then
    `mc-breakdown` rows for payload type, route type, direction, channel / category — each showing
    airtime share (with packet count in the tooltip). When airtime is unknown, fall back to bytes

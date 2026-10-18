@@ -1,7 +1,7 @@
 /**
  * `<mc-packet-stats>`: the Stats tab of `/packets` (docs/packet-stats.md §3). Renders the core
- * `PacketStatsModel` (`app.packetStats`) as tiles and charts: packets per source node, packets
- * over time (dot plot with y / colour selectors), packet rate, network utilisation, text compression, the hop
+ * `PacketStatsModel` (`app.packetStats`) as tiles and charts: packet rate (stacked), packets per
+ * source node, packets over time (dot plot with y / colour selectors), network utilisation, text compression, the hop
  * count distribution, then the paths: a "Packet paths" map (on demand: each hop's line as thick as the packets
  * that crossed it, each node's dot sized by use) and the most common first and final nodes in the path. The bin size lives in the model (`<mc-stats-range parts="bin">`); only
  * the chart selectors are local state. Everything here maps model output to chart props.
@@ -332,12 +332,10 @@ export class McPacketStats extends AppElement {
   static override properties = {
     yField: { state: true },
     colorField: { state: true },
-    stacked: { state: true },
     showMap: { state: true },
   };
   declare yField: YField;
   declare colorField: ColorField;
-  declare stacked: boolean;
   /** The "Packet paths" card shows its map (else a one-line summary). */
   declare showMap: boolean;
 
@@ -425,7 +423,6 @@ export class McPacketStats extends AppElement {
     super();
     this.yField = 'snr';
     this.colorField = 'type';
-    this.stacked = false;
     this.showMap = false;
   }
 
@@ -668,6 +665,22 @@ export class McPacketStats extends AppElement {
         <mc-stat-tile data-tile="span" label="Span" .value=${formatDuration(s.spanMs)}></mc-stat-tile>
       </div>
 
+      <section class="card" data-section="rate">
+        <h3>Packet rate</h3>
+        <div class="controls">
+          <span>Packets per ${formatDuration(timeline.binMs)}</span>
+        </div>
+        <mc-line-chart
+          data-chart-id="rate"
+          .series=${rateSeries}
+          .palette=${timelinePalette(rateSeries)}
+          .describe=${timelineDescribe(timeline)}
+          .xDomain=${xDomain}
+          stacked
+          y-label="Packets"
+        ></mc-line-chart>
+      </section>
+
       <section class="card" data-section="sources">
         <h3>Packets per source node</h3>
         <mc-bar-chart class="sources" .items=${sourceItems(bySource, active('source'))} @bar-select=${this.#onSource}></mc-bar-chart>
@@ -711,26 +724,6 @@ export class McPacketStats extends AppElement {
           missing-label=${yOpt.missing}
           @dot-select=${this.#onDot}
         ></mc-dot-plot>
-      </section>
-
-      <section class="card" data-section="rate">
-        <h3>Packet rate</h3>
-        <div class="controls">
-          <label
-            ><input type="checkbox" data-action="stacked" .checked=${this.stacked} @change=${(e: Event) => (this.stacked = (e.target as HTMLInputElement).checked)} />
-            Stacked</label
-          >
-          <span>Packets per ${formatDuration(timeline.binMs)}</span>
-        </div>
-        <mc-line-chart
-          data-chart-id="rate"
-          .series=${rateSeries}
-          .palette=${timelinePalette(rateSeries)}
-          .describe=${timelineDescribe(timeline)}
-          .xDomain=${xDomain}
-          ?stacked=${this.stacked}
-          y-label="Packets"
-        ></mc-line-chart>
       </section>
 
       <section class="card" data-section="utilization">

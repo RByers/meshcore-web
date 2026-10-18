@@ -92,6 +92,15 @@ describe('/packets Stats tab', () => {
     expect(links.some((a) => a.getAttribute('href') === `#/node/${alice.key}`)).toBe(true);
   });
 
+  it('shows the packet rate first, always stacked', async () => {
+    const { el } = await openStats();
+    const order = [...el.shadowRoot!.querySelectorAll('[data-section]')].map((s) => s.getAttribute('data-section'));
+    expect(order[0]).toBe('rate');
+    const chart = el.shadowRoot!.querySelector('[data-section="rate"] mc-line-chart') as HTMLElement & { stacked: boolean };
+    expect(chart.stacked).toBe(true);
+    expect(el.shadowRoot!.querySelector('[data-action="stacked"]')).toBeNull();
+  });
+
   it('switches the dot plot y axis and colouring', async () => {
     const { t, el } = await openStats();
     const yLabel = () => inChart(el, 'dots', 'mc-dot-plot', '[data-field="y-label"]')[0]?.textContent;
