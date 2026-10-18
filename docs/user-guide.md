@@ -146,10 +146,9 @@ A **region** (flood scope, e.g. `#east`) limits how far a channel message floods
 repeaters that serve the region forward it. Direct messages are never scoped by the app.
 
 - **Settings → Regions** keeps the list of region names you know (works without a radio).
-  Add one by name (lowercase letters, digits and `-`), remove it, or **Fetch from repeaters**
-  to ask every repeater contact which regions it serves (only repeaters reachable direct or
-  along a known path answer; the fetch can be cancelled). A single repeater can be asked
-  from its node page: **Tools → Regions → Fetch regions**, then add the names you want.
+  Add one by name (lowercase letters, digits and `-`) or remove it. To learn the regions a
+  repeater serves, open it and use **Tools → Regions → Fetch regions** (only a repeater
+  reachable direct or along a known path answers), then add the names you want.
 - **Settings → Advanced → Default flood scope** is the radio's own default, used for every
   flood the radio sends; the field suggests the saved names.
 - In a channel's header, the region button shows where messages go: `#east`,
@@ -254,7 +253,7 @@ distant path; the app runs one remote request at a time, as the firmware require
 - **Adverts**: send an advert now (flood or zero-hop), advert interval and location sharing.
 - **Device**: battery, storage, stats, clock drift with **Sync time**, BLE PIN.
 - **Contacts**: auto-add policy and telemetry permissions.
-- **Regions** (works without a radio): saved region names, fetch from repeaters (see
+- **Regions** (works without a radio): saved region names (see
   [Regions](#regions)).
 - **Advanced**: tuning, export/import private key, reboot, factory reset (requires typing a
   confirmation).

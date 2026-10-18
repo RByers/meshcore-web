@@ -2,8 +2,8 @@
  * Settings page (Phase 11): device settings of the connected radio (identity, radio, clock and
  * PIN, contacts policy, advanced) and local app settings. Thin view over
  * `app.deviceSettings` (DeviceSettingsModel) and `app.appSettings` (AppSettingsModel).
- * The Regions card (`app.regions`) edits the saved region list without a radio; fetching regions
- * from repeaters needs a connection.
+ * The Regions card (`app.regions`) edits the saved region list without a radio; a repeater's
+ * node page can fetch the regions it serves.
  */
 import { css, html, nothing, type TemplateResult } from 'lit';
 import {
@@ -269,8 +269,6 @@ export class McSettingsPage extends AppElement {
   #exportedKey: string | null = null;
   #dialog: DialogRequest | null = null;
   #dialogText = '';
-  /** A running "Fetch from repeaters": progress and its abort controller. */
-  #regionFetch: { done: number; total: number; ac: AbortController } | null = null;
   #off: (() => void) | undefined;
   #tick: ReturnType<typeof setInterval> | undefined;
 
@@ -305,8 +303,6 @@ export class McSettingsPage extends AppElement {
     this.#tick = undefined;
     this.#dialog?.resolve(false);
     this.#dialog = null;
-    this.#regionFetch?.ac.abort();
-    this.#regionFetch = null;
   }
 
   // ---- helpers ----
@@ -388,13 +384,13 @@ export class McSettingsPage extends AppElement {
       <h2 class="visually-hidden">Settings</h2>
       <div class="sections">
         ${connected
-          ? html`${this.#identity()} ${this.#radio()} ${this.#device()} ${this.#contactsPolicy()} ${this.#regions(true)}
+          ? html`${this.#identity()} ${this.#radio()} ${this.#device()} ${this.#contactsPolicy()} ${this.#regions()}
             ${this.#advanced()}`
           : html`<section class="card" data-section="no-radio">
                 <h2>Radio settings</h2>
                 <p><a href=${hrefFor('/')}>Connect a radio</a> to change its settings.</p>
               </section>
-              ${this.#regions(false)}`}
+              ${this.#regions()}`}
         ${this.#appSection()}
       </div>
       ${this.#about()}
@@ -832,11 +828,10 @@ export class McSettingsPage extends AppElement {
     </section>`;
   }
 
-  #regions(connected: boolean): TemplateResult {
+  #regions(): TemplateResult {
     const r = this.app.regions;
     const names = r.names.value;
     const def = r.radioDefault.value;
-    const f = this.#regionFetch;
     return html`<section class="card" data-section="regions" id="regions" aria-labelledby="s-regions">
       <h2 id="s-regions">Regions</h2>
       <p class="hint">
@@ -862,17 +857,7 @@ export class McSettingsPage extends AppElement {
         ${this.#err('region')}
         <div class="actions"><button type="submit" data-action="add-region">Add</button></div>
       </form>
-      <h3>From repeaters</h3>
-      <p class="hint">Asks each repeater contact for the regions it serves (only repeaters with a direct or known path answer).</p>
-      <div class="actions">
-        ${f
-          ? html`<span class="saving" data-field="region-fetch-progress" role="status">Asking repeaters… ${f.done} / ${f.total || '?'}</span>
-              <button type="button" data-action="cancel-fetch-regions" @click=${() => f.ac.abort()}>Cancel</button>`
-          : html`<button type="button" data-action="fetch-regions" ?disabled=${!connected} @click=${() => void this.#fetchRegions()}>
-                Fetch from repeaters
-              </button>
-              ${connected ? nothing : html`<span class="hint">Connect a radio to fetch.</span>`}`}
-      </div>
+      <p class="hint" data-field="regions-from-repeater">To add the regions a repeater serves, open the repeater and use Tools → Fetch regions.</p>
     </section>`;
   }
 
@@ -896,39 +881,6 @@ export class McSettingsPage extends AppElement {
       await this.app.regions.remove(name);
     } catch (err) {
       this.app.notifications.error(`Could not remove #${name}`, err);
-    }
-  }
-
-  async #fetchRegions(): Promise<void> {
-    if (this.#regionFetch) return;
-    const ac = new AbortController();
-    const state = { done: 0, total: 0, ac };
-    this.#regionFetch = state;
-    this.requestUpdate();
-    try {
-      const res = await this.app.regions.fetchFromRepeaters({
-        signal: ac.signal,
-        onProgress: (done, total) => {
-          state.done = done;
-          state.total = total;
-          this.requestUpdate();
-        },
-      });
-      if (!this.isConnected) return; // left the page (aborted)
-      const added = this.app.regions.addAll(res.regions);
-      const n = (k: number, one: string, many: string): string => `${k} ${k === 1 ? one : many}`;
-      if (res.asked === 0) this.app.notifications.info('No repeater contacts to ask');
-      else if (res.answered === 0) this.app.notifications.warning(`None of ${n(res.asked, 'repeater', 'repeaters')} answered`);
-      else
-        this.app.notifications.success(
-          `${n(added, 'new region', 'new regions')} from ${n(res.answered, 'repeater', 'repeaters')}`,
-          res.regions.length ? res.regions.map((r) => `#${r}`).join(', ') : 'They reported no regions',
-        );
-    } catch (err) {
-      this.app.notifications.error('Could not fetch regions', err);
-    } finally {
-      if (this.#regionFetch === state) this.#regionFetch = null;
-      this.requestUpdate();
     }
   }
 

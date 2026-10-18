@@ -1,18 +1,17 @@
 /**
  * Regions (flood scopes, mesh-packet-format.md §1.2): the saved list of known region names
- * (global, in the PreferencesStore), fetched from repeaters with the anon regions request
- * (§3.8), their transport keys for matching TRANSPORT_FLOOD codes, and the radio's default scope.
+ * (global, in the PreferencesStore), fetched from one repeater at a time with the anon regions
+ * request (§3.8), their transport keys for matching TRANSPORT_FLOOD codes, and the radio's default scope.
  *
  * Region names are stored without the '#'; the public region key is SHA256("#name")[0..16].
  * Per-channel scope lives on `ChannelRecord.region` (see `ChatModel.setRegion`).
  */
 
 import type { CompanionClient } from '../client/companion-client.js';
-import { ContactType } from '../protocol/constants.js';
 import type { Contact } from '../protocol/types.js';
 import { sha256Sync } from '../emulator/crypto-sync.js';
 import { matchRegionCode, type RegionKeys } from '../packet/regions.js';
-import { concatBytes, fromHex, toHex, utf8Decode, utf8Encode } from '../util/bytes.js';
+import { concatBytes, fromHex, utf8Decode, utf8Encode } from '../util/bytes.js';
 import type { ConnectionModel, PreferencesStore } from './connection.js';
 import type { FloodScopeView } from './device-settings-model.js';
 import { computed, effect, signal, untracked, type ReadonlySignal, type Signal } from './signal.js';
@@ -105,20 +104,6 @@ export interface FetchRegionsOptions {
   signal?: AbortSignal;
   /** Overrides the request timeout (est_timeout + the client's grace). */
   timeoutMs?: number;
-}
-
-export interface FetchAllRegionsOptions extends FetchRegionsOptions {
-  /** After each repeater: how many were asked so far, of how many. */
-  onProgress?: (done: number, total: number) => void;
-}
-
-export interface FetchAllRegionsResult {
-  /** Every usable name reported, sorted, deduplicated (not added to the list). */
-  regions: string[];
-  /** Repeaters asked. */
-  asked: number;
-  /** Repeaters that answered. */
-  answered: number;
 }
 
 export interface RegionsModelDeps {
@@ -295,30 +280,6 @@ export class RegionsModel {
         release?.();
       }
     }
-  }
-
-  /**
-   * Asks every repeater contact in turn ({@link fetchFromRepeater}); repeaters that do not
-   * answer are skipped. Aborting stops after the current one and resolves with what was found.
-   */
-  async fetchFromRepeaters(opts: FetchAllRegionsOptions = {}): Promise<FetchAllRegionsResult> {
-    this.#client();
-    const repeaters = this.#deps.contacts.peek().filter((c) => c.type === ContactType.REPEATER);
-    const found = new Set<string>();
-    let asked = 0;
-    let answered = 0;
-    for (const r of repeaters) {
-      if (opts.signal?.aborted) break;
-      asked++;
-      try {
-        for (const n of await this.fetchFromRepeater(toHex(r.pubKey), opts)) found.add(n);
-        answered++;
-      } catch {
-        // no answer (timeout, not direct-reachable, old firmware) or aborted
-      }
-      opts.onProgress?.(asked, repeaters.length);
-    }
-    return { regions: [...found].sort(), asked, answered };
   }
 }
 

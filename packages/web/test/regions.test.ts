@@ -28,10 +28,6 @@ function savedRegions(t: Harness): string[] {
   return t.queryAll('[data-section="regions"] [data-region]').map((e) => e.dataset['region'] ?? '');
 }
 
-function toastText(t: Harness): string {
-  return t.queryAll('.toast').map((e) => e.textContent ?? '').join('\n');
-}
-
 /** GRP_TXT packets the radio put on air from `start` on. */
 function sentGroupPackets(t: Harness, start: number): ParsedPacket[] {
   return t
@@ -54,7 +50,7 @@ describe('Settings: Regions card', () => {
     location.hash = '#/settings';
     await t.until(() => t.query('[data-section="regions"]'), 2000, 'regions card');
     expect(t.query('[data-field="no-regions"]')).not.toBeNull();
-    expect(t.query<HTMLButtonElement>('[data-section="regions"] [data-action="fetch-regions"]')!.disabled).toBe(true);
+    expect(t.query('[data-section="regions"] [data-action="fetch-regions"]')).toBeNull();
 
     await t.fill('[data-form="add-region"] input[name="region"]', 'East Side');
     await t.click('[data-action="add-region"]');
@@ -83,29 +79,13 @@ describe('Settings: Regions card', () => {
     expect(t.app.regions.names.value).toEqual(['west']);
   });
 
-  it('fetches regions from the repeaters, adds them and offers them for the default flood scope', async () => {
+  it('offers the saved regions for the default flood scope', async () => {
     const t = await connected();
-    t.emulatorScenario().nodes.repeater.remote.config.regions = ['*', 'west', 'east'];
-    await t.go('/settings', '[data-section="regions"] [data-action="fetch-regions"]:not([disabled])');
-    await t.click('[data-section="regions"] [data-action="fetch-regions"]');
-    await t.until(() => savedRegions(t).length === 2, 5000, 'fetched regions');
-    expect(savedRegions(t)).toEqual(['east', 'west']);
-    await t.until(() => toastText(t).includes('2 new regions from 1 repeater'), 2000, 'result toast');
+    t.app.regions.addAll(['west', 'east']);
+    await t.go('/settings', '[data-form="flood-scope"] input[name="scope"]');
+    await t.until(() => t.queryAll('datalist#saved-regions option').length === 2, 2000, 'datalist');
     expect(t.queryAll('datalist#saved-regions option').map((o) => o.getAttribute('value'))).toEqual(['east', 'west']);
     expect(t.query('[data-form="flood-scope"] input[name="scope"]')!.getAttribute('list')).toBe('saved-regions');
-  });
-
-  it('shows progress and can be cancelled; reports that no repeater answered', async () => {
-    const t = await connected();
-    t.emulatorScenario().nodes.repeater.remote.config.online = false;
-    await t.go('/settings', '[data-section="regions"] [data-action="fetch-regions"]:not([disabled])');
-    await t.click('[data-section="regions"] [data-action="fetch-regions"]');
-    await t.until(() => t.query('[data-field="region-fetch-progress"]'), 2000, 'progress');
-    expect(t.query('[data-field="region-fetch-progress"]')!.textContent).toContain('Asking repeaters');
-    await t.click('[data-action="cancel-fetch-regions"]');
-    await t.until(() => toastText(t).includes('None of 1 repeater answered'), 2000, 'none answered');
-    expect(t.query('[data-field="region-fetch-progress"]')).toBeNull();
-    expect(savedRegions(t)).toEqual([]);
   });
 });
 

@@ -283,7 +283,7 @@ export class AppModel {
     return (this.#storage ??= new StorageModel({ devices: this.devices, storeOptions: () => this.#idbOpts() }));
   }
 
-  /** Saved region names, region keys, the radio's default scope, fetching regions from repeaters. */
+  /** Saved region names, region keys, the radio's default scope, fetching a repeater's regions. */
   get regions(): RegionsModel {
     if (!this.#regions) {
       const settings = this.deviceSettings;

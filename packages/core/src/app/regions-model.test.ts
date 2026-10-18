@@ -117,7 +117,7 @@ describe('RegionsModel: radio default and channels', () => {
   });
 });
 
-describe('RegionsModel: fetch from repeaters (anon request 0x01)', () => {
+describe('RegionsModel: fetch from a repeater (anon request 0x01)', () => {
   it('asks a repeater with a known path directly and parses its names', async () => {
     const t = await connectedApp();
     t.scenario.nodes.repeater.remote.config.regions = ['*', 'east', 'west', '$secret'];
@@ -175,16 +175,6 @@ describe('RegionsModel: fetch from repeaters (anon request 0x01)', () => {
     await t.missResponse();
     expect(await caught).toBeInstanceOf(RemoteTimeoutError);
     expect(t.scenario.nodes.repeater.remote.requests.some((x) => x.kind === 'anon')).toBe(true);
-  });
-
-  it('fetchFromRepeaters asks every repeater contact and reports progress', async () => {
-    const t = await connectedApp();
-    t.scenario.nodes.repeater.remote.config.regions = ['*', 'west', 'east'];
-    const progress: Array<[number, number]> = [];
-    const res = await t.app.regions.fetchFromRepeaters({ onProgress: (d, n) => progress.push([d, n]) });
-    expect(res).toEqual({ regions: ['east', 'west'], asked: 1, answered: 1 });
-    expect(progress).toEqual([[1, 1]]);
-    expect(t.app.regions.addAll(res.regions)).toBe(2);
   });
 
   it('an aborted fetch rejects and still restores the path', async () => {
