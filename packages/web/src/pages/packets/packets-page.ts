@@ -266,6 +266,9 @@ export class McPacketsPage extends AppElement {
         font-variant-numeric: tabular-nums;
         color: var(--mc-text-muted);
       }
+      .answered {
+        color: var(--mc-text-muted);
+      }
       .send-sent,
       .send-confirmed {
         color: var(--mc-ok);
@@ -457,6 +460,15 @@ export class McPacketsPage extends AppElement {
     } catch (err) {
       this.app.notifications.error('Could not inspect', err);
     }
+  }
+
+  /** A "Related" link in the side panel opens that packet in the panel instead of its page. */
+  #inspectorClick(e: MouseEvent): void {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const a = e.composedPath().find((t): t is HTMLAnchorElement => t instanceof HTMLAnchorElement && t.dataset['relatedId'] !== undefined);
+    if (!a) return;
+    e.preventDefault();
+    void this.#open('packets', Number(a.dataset['relatedId']));
   }
 
   #close(): void {
@@ -707,7 +719,9 @@ export class McPacketsPage extends AppElement {
               <td class="dir-${rec.direction}" data-dir=${rec.direction} title=${rec.direction === 'rx' ? 'received: heard by the radio' : 'sent: transmitted at this app\'s request'}>
                 ${rec.direction === 'rx' ? '↓ rx' : '↑ tx'}${this.#sendMarker(r, now)}
               </td>
-              <td>${r.typeName}</td>
+              <td>${r.typeName}${this.#log.answered(r.id)
+                ? html` <span class="answered" data-answered title="Answered: an ACK or reply was logged (see Related in its details)">↩</span>`
+                : nothing}</td>
               <td>${r.routeName || '—'}</td>
               ${this.#pathCell(r)}
               <td class="num">${rec.snr !== undefined ? `${rec.snr} dB` : '—'}${rec.rssi !== undefined ? ` / ${rec.rssi}` : ''}</td>
@@ -818,7 +832,7 @@ export class McPacketsPage extends AppElement {
           ${this.tab === 'packets' ? this.#packetTable(log.packets.rows.value) : this.#frameTable(log.frames.rows.value)}
         </section>
         ${split
-          ? html`<aside class="card" aria-label="Inspector">
+          ? html`<aside class="card" aria-label="Inspector" @click=${(e: MouseEvent) => this.#inspectorClick(e)}>
               <div class="toolbar">
                 <span class="spacer"></span>
                 <a href=${hrefFor(this.selected!.tab === 'packets' ? `/packets/${this.selected!.id}` : `/packets/frame/${this.selected!.id}`)}>Open full page</a>

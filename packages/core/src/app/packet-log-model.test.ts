@@ -7,7 +7,8 @@ import type { AnnotationNode } from '../packet/annotate.js';
 import type { AppModel } from './app-model.js';
 import { effect } from './signal.js';
 import { testApp, connectedApp } from './testing.js';
-import { packetFilterChips, withoutChip, type PacketFilter, type PacketLogModel } from './packet-log-model.js';
+import { groupRelated, packetFilterChips, withoutChip, type PacketFilter, type PacketLogModel, type PacketRow, type RelatedRow } from './packet-log-model.js';
+import type { PacketRecord } from '../store/schema.js';
 import { SEND_BACKFILL_SETTING } from '../store/send-backfill.js';
 import { relationKeysOf } from './packet-relations.js';
 
@@ -560,6 +561,22 @@ describe('PacketLogModel — filter shared with the packet statistics', () => {
 });
 
 describe('PacketLogModel — request ↔ reply pairing', () => {
+  it('groups related copies of one packet by relation and hash, ordered by first row', () => {
+    const row = (id: number, hash?: string): RelatedRow => {
+      const record = { id, hash } as PacketRecord;
+      return { id, relation: 'ack', rule: 'ack', row: { id, record } as PacketRow };
+    };
+    const reply = { ...row(4, 'aa'), relation: 'reply' as const, rule: 'trace' as const };
+    const groups = groupRelated([row(1, 'aa'), row(2, 'bb'), row(3, 'aa'), reply, row(5), row(6)]);
+    expect(groups.map((g) => [g.relation, g.rows.map((r) => r.id)])).toEqual([
+      ['ack', [1, 3]],
+      ['ack', [2]],
+      ['reply', [4]],
+      ['ack', [5]],
+      ['ack', [6]],
+    ]);
+  });
+
   it('links our DM to its ACK and our trace to the trace back, live and after a rebuild', async () => {
     const { app, log, scenario } = await connected();
     const store = app.connection.store.value!;
@@ -580,7 +597,13 @@ describe('PacketLogModel — request ↔ reply pairing', () => {
     expect(log.related(sent.id).every((r) => r.relation === 'ack' && r.rule === 'ack')).toBe(true);
     expect(log.answered(sent.id)).toBe(true);
     expect(log.related(acks[0]!.id)).toEqual([{ id: sent.id, relation: 'acked', rule: 'ack' }]);
-    expect((await log.inspect(sent.id))!.related.length).toBe(acks.length);
+    const ins = (await log.inspect(sent.id))!;
+    expect(ins.related.length).toBe(acks.length);
+    // copies of one ACK (same hash) share a group; each row carries its list row
+    expect(ins.relatedGroups.flatMap((g) => g.rows.map((r) => r.id)).sort()).toEqual(acks.map((r) => r.id).sort());
+    expect(ins.relatedGroups.length).toBe(new Set(acks.map((r) => r.hash)).size);
+    expect(ins.relatedGroups[0]!.rows[0]!.row.typeName).toBe('ACK');
+    expect((await log.inspect(acks[0]!.id))!.relatedGroups.map((g) => [g.relation, g.rows[0]!.id])).toEqual([['acked', sent.id]]);
 
     const client = app.connection.client.value!;
     await client.tracePath(scenario.keys.repeater.subarray(0, 1)).catch(() => undefined);
@@ -599,7 +622,8 @@ describe('PacketLogModel — request ↔ reply pairing', () => {
     await log.clearPackets();
     await log.settled();
     expect(log.related(sent.id)).toEqual([]);
-    expect(seen).toEqual([true, false]);
+    // (a late live packet may re-run the effect with an unchanged value: compare transitions)
+    expect(seen.filter((v, i) => i === 0 || v !== seen[i - 1])).toEqual([true, false]);
     await log.importJson(exported);
     await log.settled();
     expect(log.related((await dmRow()).id).length).toBe(before);

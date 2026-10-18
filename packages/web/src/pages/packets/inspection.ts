@@ -1,11 +1,22 @@
 /** Formatting helpers for the packet log pages and the inputs of `<mc-packet-inspector>`. */
-import { html } from 'lit';
-import { NO_BYTES_MEANING, formatDurationMs, sendOutcomeLabel, type FrameInspection, type PacketInspection, type ResolvedHop } from '@meshcore-web/core/app';
+import { html, nothing } from 'lit';
+import {
+  NO_BYTES_MEANING,
+  formatDurationMs,
+  sendOutcomeLabel,
+  type FrameInspection,
+  type PacketInspection,
+  type PacketRelation,
+  type RelatedGroup,
+  type RelationRule,
+  type ResolvedHop,
+} from '@meshcore-web/core/app';
 import type { Annotation } from '@meshcore-web/core/packet';
 import type { PacketRecord } from '@meshcore-web/core/store';
 import { toHex } from '@meshcore-web/core/util/bytes';
 import type { InspectorMeta } from './packet-inspector.js';
 import { hopsLink } from '../../components/path-dialog.js';
+import { hrefFor } from '../../router.js';
 import { hashLink, nodeLink, pathHops } from '../../components/node-link.js';
 
 /** "14:05:09.123" (local), with the date when not today. */
@@ -64,6 +75,61 @@ export function sendSection(r: PacketRecord, now: number): InspectorMeta | null 
   };
 }
 
+/** What the other packet is to this one (see core packet-relations.ts). */
+const RELATION_LABEL: Record<PacketRelation, string> = {
+  ack: 'ACK',
+  acked: 'Acknowledges',
+  reply: 'Reply',
+  request: 'Request',
+  hop: 'Trace hop',
+};
+
+/** Rules whose name the relation label already implies (an ACK pairs by the `ack` rule). */
+const IMPLIED_RULE: Partial<Record<PacketRelation, RelationRule>> = { ack: 'ack', acked: 'ack', hop: 'trace' };
+
+/** "Reply (trace) →" / "← Acknowledges": the arrow points to where the other packet is in time. */
+export function relationLabel(g: RelatedGroup, ts: number): string {
+  const rule = IMPLIED_RULE[g.relation] === g.rule ? '' : ` (${g.rule})`;
+  const text = `${RELATION_LABEL[g.relation]}${rule}`;
+  const first = g.rows[0];
+  return first && first.row.record.ts < ts ? `← ${text}` : `${text} →`;
+}
+
+/** "+1.2 s" / "−350 ms": a time relative to this packet's. */
+export function relativeTime(ms: number): string {
+  return `${ms < 0 ? '−' : '+'}${formatDurationMs(Math.abs(ms))}`;
+}
+
+/**
+ * The "Related" entry: requests / replies / ACKs paired with this packet, each a link to its detail
+ * page (copies of one packet grouped: "ACK → · heard 3×"). Null when there are none.
+ */
+export function relatedSection(ins: PacketInspection): InspectorMeta | null {
+  const groups = ins.relatedGroups;
+  if (!groups.length) return null;
+  const ts = ins.record.ts;
+  return {
+    label: 'Related',
+    value: html`<dl class="sub" data-section="related">
+      ${groups.map((g) => {
+        const first = g.rows[0]!.row;
+        const heard = g.rows.length > 1 ? html` <span class="muted" data-related-copies>· heard ${g.rows.length}×</span>` : nothing;
+        return html`<dt data-relation=${g.relation} data-rule=${g.rule}>${relationLabel(g, ts)}</dt>
+          <dd data-relation=${g.relation}>
+            ${first.typeName}${first.summary ? html` · <span>${first.summary}</span>` : nothing}${heard}<br />
+            ${g.rows.map(
+              (r, i) =>
+                html`${i ? ', ' : ''}<a href=${hrefFor(`/packets/${r.id}`)} data-related-id=${r.id} title=${`Packet #${r.id} (${r.row.record.direction})`}
+                    >#${r.id}</a
+                  >
+                  ${relativeTime(r.row.record.ts - ts)}${r.row.record.snr !== undefined ? ` · ${r.row.record.snr} dB` : ''}`,
+            )}
+          </dd>`;
+      })}
+    </dl>`,
+  };
+}
+
 export function packetInspectorProps(ins: PacketInspection, resolve: HopResolver | undefined, now: number): InspectorProps {
   const r = ins.record;
   const meta: InspectorMeta[] = [
@@ -101,6 +167,8 @@ export function packetInspectorProps(ins: PacketInspection, resolve: HopResolver
   if (r.format === 'none') meta.push({ label: 'Bytes', value: `none: ${NO_BYTES_MEANING}` });
   else meta.push({ label: 'Size', value: `${r.bytes.length} B${r.format === 'payload' ? ' (payload only)' : ''}` });
   if (r.hash) meta.push({ label: 'Packet hash', value: `${r.hash}${ins.copies > 1 ? ` (${ins.copies} copies logged)` : ''}` });
+  const related = relatedSection(ins);
+  if (related) meta.push(related);
   const send = sendSection(r, now);
   if (send) meta.push(send);
   meta.push({ label: 'Source', value: r.source + (ins.sourceFrame ? ` · frame #${ins.sourceFrame.id} (${ins.sourceFrame.kind})` : '') });

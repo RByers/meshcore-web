@@ -42,7 +42,7 @@ import {
 import { contactTypeName, type ContactKind } from './messaging.js';
 import { STATS_FIELD_LABEL, filterKey, type StatPacket, type StatsFilter } from './packet-stats-model.js';
 import { StoreBoundModel } from './store-bound.js';
-import { PacketRelationIndex, RELATION_PAYLOAD_TYPES, type RelatedPacket } from './packet-relations.js';
+import { PacketRelationIndex, RELATION_PAYLOAD_TYPES, type PacketRelation, type RelatedPacket, type RelationRule } from './packet-relations.js';
 import { batch, computed, signal, type ReadonlySignal, type Signal } from './signal.js';
 import type { Unsubscribe } from '../util/events.js';
 
@@ -203,6 +203,42 @@ export interface PacketInspection {
   copies: number;
   /** Requests / replies / ACKs paired with this packet ({@link PacketLogModel.related}). */
   related: readonly RelatedPacket[];
+  /** {@link related} with each other packet's list row, copies grouped ({@link groupRelated}); pruned ones left out. */
+  relatedGroups: readonly RelatedGroup[];
+}
+
+/** A related packet with its list row (for its time / type / summary / SNR). */
+export interface RelatedRow extends RelatedPacket {
+  row: PacketRow;
+}
+
+/** Related packets of one relation that are copies of one packet (same packet hash), oldest first. */
+export interface RelatedGroup {
+  relation: PacketRelation;
+  rule: RelationRule;
+  rows: readonly RelatedRow[];
+}
+
+/**
+ * Groups related rows (oldest first) so the copies of one packet with the same relation (an ACK
+ * heard three times via different repeaters) share a group; groups are ordered by their first row.
+ */
+export function groupRelated(rows: readonly RelatedRow[]): RelatedGroup[] {
+  const out: { relation: PacketRelation; rule: RelationRule; rows: RelatedRow[] }[] = [];
+  const byKey = new Map<string, RelatedRow[]>();
+  for (const r of rows) {
+    const hash = r.row.record.hash;
+    const key = hash ? `${r.relation}|${r.rule}|${hash}` : null;
+    const existing = key !== null ? byKey.get(key) : undefined;
+    if (existing) {
+      existing.push(r);
+      continue;
+    }
+    const g = { relation: r.relation, rule: r.rule, rows: [r] };
+    out.push(g);
+    if (key !== null) byKey.set(key, g.rows);
+  }
+  return out;
 }
 
 export interface FrameInspection {
@@ -910,7 +946,13 @@ export class PacketLogModel extends StoreBoundModel {
       record.hash ? store.packets.count({ hash: record.hash }) : Promise.resolve(1),
     ]);
     await this.#ensureRelations();
-    const out: PacketInspection = { record, annotation, view, summary, copies, related: this.#relations.related(id) };
+    const related = this.#relations.related(id);
+    const relatedRows: RelatedRow[] = [];
+    for (const rel of related) {
+      const other = await store.packets.get(rel.id);
+      if (other) relatedRows.push({ ...rel, row: await this.#packetRow(other) });
+    }
+    const out: PacketInspection = { record, annotation, view, summary, copies, related, relatedGroups: groupRelated(relatedRows) };
     if (sourceFrame) out.sourceFrame = sourceFrame;
     return out;
   }

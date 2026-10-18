@@ -564,4 +564,50 @@ describe('/packets page', () => {
     // back on the List tab it came from, not the default Stats
     await t.until(() => t.query('[data-tab="packets"]')?.getAttribute('aria-selected') === 'true' && t.query('table[data-table="packets"]'), 3000, 'list tab');
   });
+
+  it('links a sent DM and its ACK both ways: list marker, Related links on the detail pages', async () => {
+    await page.viewport(375, 800);
+    const t = await openLog();
+    const dm = t.app.chat('contact', toHex(t.emulatorScenario().keys.alice));
+    await dm.settled();
+    expect((await (await dm.send('ping for a reply link')).done).status).toBe('delivered');
+    // the DM row gets the "answered" marker once its ACK is logged; ACK rows do not
+    await t.until(() => t.query('tr[data-type="TXT_MSG"] [data-answered]'), 5000, 'answered marker');
+    // (the emulator's nodes also relay DMs: the rx copies are TXT_MSG rows too, never answered)
+    const marker = t.query('tr[data-type="TXT_MSG"] [data-answered]')!;
+    expect(marker.getAttribute('title')).toContain('Answered');
+    const dmRow = marker.closest('tr')!;
+    expect(dmRow.querySelector('[data-dir]')!.getAttribute('data-dir')).toBe('tx');
+    const dmId = dmRow.dataset['packetId']!;
+    expect(t.query('tr[data-type="ACK"] [data-answered]')).toBeNull();
+
+    dmRow.click();
+    await t.until(() => location.hash === `#/packets/${dmId}` && t.query('[data-section="related"] a[data-related-id]'), 3000, 'DM detail with Related');
+    const label = t.query('[data-section="related"] dt[data-relation="ack"]')!;
+    expect(label.textContent).toBe('ACK →');
+    const link = t.query<HTMLAnchorElement>('[data-section="related"] a[data-related-id]')!;
+    const ackId = link.dataset['relatedId']!;
+    expect(link.textContent).toBe(`#${ackId}`);
+    expect(t.query('[data-section="related"] dd[data-relation="ack"]')!.textContent).toMatch(/ACK[\s\S]*\+\d+(\.\d)? m?s/);
+
+    link.click();
+    await t.until(() => location.hash === `#/packets/${ackId}` && t.query(`[data-section="related"] a[data-related-id="${dmId}"]`), 3000, 'ACK detail linking back');
+    expect(t.query('mc-packet-inspector')!.shadowRoot!.textContent).toContain(`Packet #${ackId}`);
+    expect(t.query('[data-section="related"] dt[data-relation="acked"]')!.textContent).toBe('← Acknowledges');
+  });
+
+  it('a Related link in the side panel opens that packet in the panel', async () => {
+    const t = await openLog();
+    const dm = t.app.chat('contact', toHex(t.emulatorScenario().keys.alice));
+    await dm.settled();
+    expect((await (await dm.send('ping for the panel')).done).status).toBe('delivered');
+    await t.until(() => t.query('tr[data-type="TXT_MSG"] [data-answered]'), 5000, 'answered marker');
+    t.query('tr[data-type="TXT_MSG"] [data-answered]')!.closest('tr')!.click();
+    await t.until(() => t.query('[data-section="related"] a[data-related-id]'), 3000, 'Related in the panel');
+    const ackId = t.query('[data-section="related"] a[data-related-id]')!.dataset['relatedId']!;
+    t.query<HTMLAnchorElement>('[data-section="related"] a[data-related-id]')!.click();
+    await t.until(() => t.query('mc-packet-inspector')?.shadowRoot?.textContent?.includes(`Packet #${ackId}`), 3000, 'ACK in the panel');
+    expect(location.hash).toBe('#/packets');
+    expect(t.query('[data-section="related"] dt[data-relation="acked"]')).not.toBeNull();
+  });
 });

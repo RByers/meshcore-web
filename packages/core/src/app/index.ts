@@ -12,6 +12,7 @@ export * from './unread-model.js';
 export * from './chat-model.js';
 export * from './packet-summary.js';
 export * from './packet-log-model.js';
+export * from './packet-relations.js';
 export * from './node-model.js';
 export * from './airtime.js';
 export * from './box-stats.js';
