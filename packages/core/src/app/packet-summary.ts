@@ -45,11 +45,42 @@ export interface PacketView {
   nodeKeys: string[];
   /** Sync one-line summary (no decrypted content). */
   summary: string;
+  /** Source / destination named by the payload ({@link packetEndpoints}). */
+  endpoints: PacketEndpoints;
   /** The parsed payload, when it parsed. */
   payload?: ParsedPayload;
   /** The payload bytes (the record's bytes for payload-only records). */
   payloadBytes: Uint8Array;
   error?: string;
+}
+
+/**
+ * The nodes a packet's payload names as its ends (docs/mesh-packet-format.md): REQ / RESPONSE /
+ * TXT_MSG / PATH carry `dest_hash` and `src_hash` (§3.0: `dest_pubkey[0]`, `src_pubkey[0]`);
+ * ANON_REQ carries `dest_hash` and the sender's full public key (§3.8). Other payloads name none.
+ */
+export interface PacketEndpoints {
+  /** The source: a 1-byte hash as hex ("a3"), or ANON_REQ's full sender key (64 hex). */
+  src: string | null;
+  /** The destination's 1-byte hash as hex. */
+  dst: string | null;
+}
+
+const NO_ENDPOINTS: PacketEndpoints = { src: null, dst: null };
+
+/** {@link PacketEndpoints} of a parsed payload (none for other payloads, or when it didn't parse). */
+export function packetEndpoints(p: ParsedPayload | undefined): PacketEndpoints {
+  switch (p?.kind) {
+    case 'req':
+    case 'response':
+    case 'txtMsg':
+    case 'path':
+      return { src: hex2(p.srcHash), dst: hex2(p.destHash) };
+    case 'anonReq':
+      return { src: toHex(p.senderPublicKey), dst: hex2(p.destHash) };
+    default:
+      return NO_ENDPOINTS;
+  }
 }
 
 const NODE_TYPE: Record<number, string> = Object.fromEntries(Object.entries(ContactType).map(([k, v]) => [v, k.toLowerCase()]));
@@ -105,7 +136,7 @@ export function viewPacket(rec: PacketRecord, ctx: SummaryContext = EMPTY_SUMMAR
   }
   nodeHashes.push(...path);
   const typeName = payloadType >= 0 ? payloadTypeName(payloadType) : 'UNKNOWN';
-  const view: PacketView = { typeName, routeName, hops, path, nodeHashes, nodeKeys, summary: '', payloadBytes };
+  const view: PacketView = { typeName, routeName, hops, path, nodeHashes, nodeKeys, summary: '', endpoints: NO_ENDPOINTS, payloadBytes };
   if (rec.format === 'none') {
     // a requested transmission: no bytes, only what the command asked for
     view.summary = rec.decodedSummary ?? `${typeName} (requested)`;
@@ -120,6 +151,7 @@ export function viewPacket(rec: PacketRecord, ctx: SummaryContext = EMPTY_SUMMAR
   try {
     payload = parsePayload(payloadType, payloadBytes);
     view.payload = payload;
+    view.endpoints = packetEndpoints(payload);
   } catch (e) {
     view.error = e instanceof Error ? e.message : String(e);
     view.summary = `${typeName} (malformed: ${view.error})`;

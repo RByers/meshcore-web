@@ -28,6 +28,41 @@ export type NodeIdentity =
   /** Nothing known. `valid` is false when `ref` is not even-length hex of 1..32 bytes. */
   | { kind: 'unknown'; ref: string; valid: boolean };
 
+/** One node a reference may name: a stored contact, or a node only heard advertising. */
+export interface NodeCandidate {
+  /** Full public key hex. */
+  key: string;
+  /** Contact / advertised name ('' when a heard advert has none). */
+  name: string;
+  typeName: ContactKind;
+  /** Only heard advertising (not a stored contact). */
+  heard: boolean;
+  /** The contact's local note ('' for heard nodes). */
+  note: string;
+}
+
+/**
+ * The contacts, then the heard nodes that aren't contacts, as one candidate list (the node page's
+ * "N nodes match" and the `/nodes/:prefix` listing).
+ */
+export function nodeCandidates(contacts: readonly ContactView[], heard: readonly HeardNode[]): NodeCandidate[] {
+  const keys = new Set(contacts.map((v) => v.key));
+  return [
+    ...contacts.map((v) => ({ key: v.key, name: v.name, typeName: v.typeName, heard: false, note: v.note })),
+    ...heard
+      .filter((h) => !keys.has(h.key))
+      .map((h) => ({ key: h.key, name: h.name, typeName: h.typeName, heard: true, note: '' })),
+  ];
+}
+
+export interface NodeModelOptions {
+  /**
+   * Listing mode (`/nodes/:prefix`): always look the reference up in the packet log, so
+   * {@link NodeModel.candidates} lists every match even when exactly one contact has the prefix.
+   */
+  list?: boolean;
+}
+
 /** Lowercase hex of 1..32 whole bytes, or null. */
 export function normalizeNodeRef(ref: string): string | null {
   const n = ref.trim().toLowerCase();
@@ -101,12 +136,21 @@ export class NodeModel {
   readonly tabs: ReadonlySignal<readonly NodeTab[]>;
   /** A heard (non-contact) node while connected: it can be added from its advert. */
   readonly canAddContact: ReadonlySignal<boolean>;
+  /** Listing mode ({@link NodeModelOptions.list}). */
+  readonly list: boolean;
+  /**
+   * Every known node whose key starts with `ref` ({@link nodeCandidates}): the matching contacts
+   * and, once looked up, the matching heard nodes. Null while resolving. Without listing mode the
+   * packet log isn't consulted while exactly one contact matches, so that contact is all it lists.
+   */
+  readonly candidates: ReadonlySignal<readonly NodeCandidate[] | null>;
 
-  constructor(ref: string, deps: NodeModelDeps) {
+  constructor(ref: string, deps: NodeModelDeps, opts: NodeModelOptions = {}) {
     const n = normalizeNodeRef(ref);
     this.ref = n ?? ref.trim().toLowerCase();
     this.#valid = n !== null;
     this.#deps = deps;
+    this.list = opts.list ?? false;
     const { connection, contacts, packetLog } = deps;
 
     this.#matches = computed(() => (this.#valid ? contacts.views.value.filter((v) => v.key.startsWith(this.ref)) : []));
@@ -117,6 +161,14 @@ export class NodeModel {
     this.identity = computed((): NodeIdentity | null => (last = this.#resolve(last)));
     this.tabs = computed(() => nodeTabs(this.identity.value), { equals: (a, b) => a.length === b.length && a.every((t, i) => t === b[i]) });
     this.canAddContact = computed(() => this.identity.value?.kind === 'heard' && connection.phase.value === 'connected');
+    this.candidates = computed(() => {
+      if (!this.#valid) return [];
+      if (!connection.store.value || contacts.loading.value) return null;
+      const matches = this.#matches.value;
+      const heard = this.#heard.value;
+      if (heard === null) return !this.list && matches.length === 1 ? nodeCandidates(matches, []) : null;
+      return nodeCandidates(matches, heard);
+    });
 
     // Heard lookup: while no single contact matches, re-run whenever the packet log grows.
     this.#off = effect(() => {
@@ -128,7 +180,7 @@ export class NodeModel {
         this.#heard.value = null;
         return;
       }
-      if (this.#matches.value.length === 1) return;
+      if (!this.list && this.#matches.value.length === 1) return;
       const gen = ++this.#gen;
       this.#lookup = this.#lookup
         .then(() => heardNodesIn(store, this.ref))

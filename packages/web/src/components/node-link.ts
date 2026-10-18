@@ -1,7 +1,8 @@
 /**
  * Clickable nodes in displayed paths: every hop that resolves to exactly one known contact links
- * to its node page (`/node/:key`); ambiguous / unknown hops link to the node page of the bare hash
- * (`/node/<hash>`: candidates, or what the packet log heard). This radio stays plain text.
+ * to its node page (`/node/:key`); ambiguous / unknown hops — and packet source / destination
+ * hashes — link to the listing of every known node with that hash (`/nodes/<hash>`: contacts and
+ * nodes heard advertising). This radio stays plain text.
  *
  * Test hooks: `a[data-node-link="<key>"]`, `a[data-hash-link="<hash>"]`, `[data-hop="<hash>"]` on every hop.
  */
@@ -24,6 +25,11 @@ export function contactNote(note: string | undefined): TemplateResult | typeof n
   return note ? html`<span class="contact-note" data-field="contact-note">${note}</span>` : nothing;
 }
 
+/** The listing of every known node whose key starts with `prefix` (a hash or key prefix). */
+export function nodesHref(prefix: string): string {
+  return hrefFor(`/nodes/${prefix}`);
+}
+
 /** Link clicks must not reach row handlers (packet rows open the inspector on click). */
 const stop = (e: Event): void => e.stopPropagation();
 
@@ -33,9 +39,9 @@ export function nodeLink(label: string | TemplateResult, key: string | undefined
   return html`<a class="node-link" href=${nodeHref(key)} data-node-link=${key} title=${title ?? 'Node details'} @click=${stop} @keydown=${stop}>${label}</a>`;
 }
 
-/** `label` linking to the node page of an unresolved / ambiguous hop hash. */
+/** `label` linking to the listing of the nodes with a (hop / source / destination) hash. */
 export function hashLink(label: string | TemplateResult, hash: string, title?: string): TemplateResult {
-  return html`<a class="node-link" href=${nodeHref(hash)} data-hash-link=${hash} title=${title ?? 'Nodes with this hash'} @click=${stop} @keydown=${stop}>${label}</a>`;
+  return html`<a class="node-link" href=${nodesHref(hash)} data-hash-link=${hash} title=${title ?? 'Nodes with this hash'} @click=${stop} @keydown=${stop}>${label}</a>`;
 }
 
 /** The contact key of a hop that resolves to exactly one known contact. */

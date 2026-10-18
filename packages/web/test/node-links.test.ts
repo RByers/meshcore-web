@@ -1,6 +1,6 @@
 /**
  * Clickable nodes in displayed paths (known contacts → their node page; unknown / ambiguous hop
- * hashes → the node page of the bare hash), the node Info tab's "Packets from this node" link
+ * hashes → the listing of the nodes with that hash, `/nodes/<hash>`), the node Info tab's "Packets from this node" link
  * (packet log filtered by source node).
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -110,7 +110,7 @@ describe('path nodes link to node pages', () => {
     expect(t.query('mc-packet-inspector')).toBeNull();
   });
 
-  it('packet log hops with an unknown or ambiguous hash link to the node page of the hash', async () => {
+  it('packet log hops with an unknown or ambiguous hash link to the listing of the nodes with the hash', async () => {
     const { t, repeater } = await connected('/packets');
     const rep = repeater.slice(0, 2);
     // a second repeater sharing the repeater's hash makes that hop ambiguous
@@ -129,22 +129,24 @@ describe('path nodes link to node pages', () => {
     const row = `tr[data-packet-id="${rec.id}"] [data-field="path"]`;
     await t.until(() => t.query(`${row} a[data-hash-link="${rep}"]`), 5000, 'hop links');
     const unknown = t.query<HTMLAnchorElement>(`${row} a[data-hash-link="${free}"]`)!;
-    expect(unknown.getAttribute('href')).toBe(`#/node/${free}`);
-    expect(t.query<HTMLAnchorElement>(`${row} a[data-hash-link="${rep}"]`)!.getAttribute('href')).toBe(`#/node/${rep}`);
+    expect(unknown.getAttribute('href')).toBe(`#/nodes/${free}`);
+    expect(t.query<HTMLAnchorElement>(`${row} a[data-hash-link="${rep}"]`)!.getAttribute('href')).toBe(`#/nodes/${rep}`);
     expect(t.query(`${row} a[data-node-link]`)).toBeNull();
 
-    // the unknown hash: its node page says nothing is known, without opening the packet
+    // the unknown hash: its listing says nothing is known, without opening the packet
     unknown.click();
-    await t.until(() => location.hash === `#/node/${free}` && info(t, '[data-field="unknown"]'), 5000, 'unknown hash page');
+    await t.until(() => location.hash === `#/nodes/${free}` && t.query('[data-field="none"]'), 5000, 'unknown hash listing');
     expect(t.query('mc-packet-inspector')).toBeNull();
-    expect(info(t, '[data-field="key"]')!.textContent).toBe(free);
+    expect(t.query('[data-field="prefix"]')!.textContent).toBe(free);
 
-    // the ambiguous hash: its node page lists both contacts
+    // the ambiguous hash: its listing, and its node page, list both contacts
+    await go(t, `/nodes/${rep}`, '[data-list="nodes"]');
+    expect(t.queryAll<HTMLElement>('[data-candidate]').map((a) => a.dataset['candidate']).sort()).toEqual([repeater, twin].sort());
     await go(t, `/node/${rep}`, '[data-field="candidates"]');
     expect(t.queryAll<HTMLAnchorElement>('[data-candidate]').map((a) => a.dataset['candidate']).sort()).toEqual([repeater, twin].sort());
   });
 
-  it('an ambiguous hop in a message path and in the path view links to the node page of its hash', async () => {
+  it('an ambiguous hop in a message path and in the path view links to the listing of its hash', async () => {
     const { t, repeater } = await connected();
     t.app.appSettings.setPathNames(true);
     const rep = repeater.slice(0, 2);
@@ -156,14 +158,14 @@ describe('path nodes link to node pages', () => {
     await t.until(() => msgWith(t, 'which hill?')?.querySelector('[data-hash-link]'), 5000, 'hash link');
     const path = msgWith(t, 'which hill?')!.querySelector('[data-field="path"]')!;
     expect(path.querySelector('[data-node-link]')).toBeNull();
-    expect(path.querySelector<HTMLAnchorElement>(`a[data-hash-link="${rep}"]`)!.getAttribute('href')).toBe(`#/node/${rep}`);
+    expect(path.querySelector<HTMLAnchorElement>(`a[data-hash-link="${rep}"]`)!.getAttribute('href')).toBe(`#/nodes/${rep}`);
 
     path.querySelector<McHopsLink>('mc-hops-link[icon]')!.shadowRoot!.querySelector('button')!.click();
     await t.until(() => t.query<HTMLDialogElement>('[data-path-dialog]')?.open && t.query('[data-path-list]'), 5000, 'path dialog');
     const stop = t.query<HTMLAnchorElement>(`[data-path-list] li[data-role="hop"] a[data-field="label"][data-hash-link="${rep}"]`)!;
     expect(t.query('[data-path-list] li[data-role="hop"] [data-field="candidates"]')!.textContent).toContain('2 known nodes');
     stop.click();
-    await t.until(() => location.hash === `#/node/${rep}` && !t.query<HTMLDialogElement>('[data-path-dialog]')!.open, 5000, 'hash page');
+    await t.until(() => location.hash === `#/nodes/${rep}` && !t.query<HTMLDialogElement>('[data-path-dialog]')!.open, 5000, 'hash listing');
     await t.until(() => t.queryAll('[data-candidate]').length === 2, 5000, 'candidates');
   });
 });

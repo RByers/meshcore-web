@@ -26,7 +26,7 @@ import {
 import { AppElement } from '../app-context.js';
 import { hrefFor } from '../router.js';
 import { shared } from '../styles.js';
-import { contactNote, nodeHref } from './node-link.js';
+import { contactNote, nodeHref, nodesHref } from './node-link.js';
 import './tile-map.js';
 import type { MapLine, McTileMap } from './tile-map.js';
 
@@ -333,7 +333,7 @@ export class McPathDialog extends AppElement {
         ${s.node && s.node.kind !== 'self'
           ? html`<a data-field="label" data-node-link=${s.node.key} href=${nodeHref(s.node.key)} title="Node details" @click=${() => this.close()}>${s.label}</a>${contactNote(this.app.contacts.noteFor(s.node.key))}`
           : !s.node && s.hash
-            ? html`<a data-field="label" data-hash-link=${s.hash} href=${nodeHref(s.hash)} title="Nodes with this hash" @click=${() => this.close()}>${s.label}</a>`
+            ? html`<a data-field="label" data-hash-link=${s.hash} href=${nodesHref(s.hash)} title="Nodes with this hash" @click=${() => this.close()}>${s.label}</a>`
             : html`<span data-field="label">${s.label}</span>`}
         ${s.hash && s.label !== s.hash ? html` <span class="hash">${s.hash}</span>` : nothing}
       </span>

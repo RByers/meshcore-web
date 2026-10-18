@@ -8,7 +8,7 @@ import { ContactType } from '../protocol/constants.js';
 import { concatBytes, fromHex, toHex } from '../util/bytes.js';
 import { scenarioKey } from '../emulator/scenarios.js';
 import { connectedApp, type ConnectedApp } from './testing.js';
-import { entryTab, nodeTabFor, nodeTabs, normalizeNodeRef, resolveContactRef, NODE_TAB_ORDER, type NodeIdentity } from './node-model.js';
+import { entryTab, nodeCandidates, nodeTabFor, nodeTabs, normalizeNodeRef, resolveContactRef, NODE_TAB_ORDER, type NodeIdentity } from './node-model.js';
 import { effect, when } from './signal.js';
 import { NODE_CACHE_SIZE } from './app-model.js';
 
@@ -224,5 +224,42 @@ describe('NodeModel', () => {
     if (both.kind !== 'ambiguous') throw new Error(both.kind);
     expect(both.contacts.map((c) => c.name).sort()).toEqual(['P', 'Q']);
     expect(await resolved(t, q.slice(0, 4))).toMatchObject({ kind: 'contact', key: q });
+  });
+
+  it('listing mode lists every contact and heard node with the prefix, even when one contact matches', async () => {
+    const t = await connectedApp();
+    const hash = t.keys.alice.slice(0, 2);
+    const others = t.app.contacts.views.value.filter((v) => v.key.startsWith(hash) && v.key !== t.keys.alice);
+    expect(others).toEqual([]); // the scenario's Alice is the only contact with her hash
+    const stranger = `${hash}${'07'.repeat(31)}`;
+    await hearAdvert(t, stranger, { name: 'Stranger', type: ContactType.REPEATER });
+    await hearAdvert(t, t.keys.alice, { name: 'Alice' }); // a contact heard advertising stays listed once
+
+    // the node page goes straight to the one contact…
+    expect(await resolved(t, hash)).toMatchObject({ kind: 'contact', key: t.keys.alice });
+    // …the listing shows both
+    const list = t.app.node(hash, { list: true });
+    expect(list).not.toBe(t.app.node(hash));
+    expect(t.app.node(` ${hash.toUpperCase()}`, { list: true })).toBe(list); // cached per normalised ref
+    await list.settled();
+    const c = await when(list.candidates, (v) => v !== null);
+    expect(c).toEqual([
+      { key: t.keys.alice, name: 'Alice', typeName: 'chat', heard: false, note: '' },
+      { key: stranger, name: 'Stranger', typeName: 'repeater', heard: true, note: '' },
+    ]);
+
+    expect(t.app.node('zz', { list: true }).candidates.value).toEqual([]); // invalid: nothing
+  });
+
+  it('nodeCandidates puts contacts first, then heard nodes not already listed', () => {
+    const contact = { key: 'aa01', name: 'C', typeName: 'chat', note: 'n' } as never;
+    const heard = [
+      { key: 'aa01', name: 'C', typeName: 'chat' },
+      { key: 'aa02', name: '', typeName: 'sensor' },
+    ] as never;
+    expect(nodeCandidates([contact], heard)).toEqual([
+      { key: 'aa01', name: 'C', typeName: 'chat', heard: false, note: 'n' },
+      { key: 'aa02', name: '', typeName: 'sensor', heard: true, note: '' },
+    ]);
   });
 });

@@ -15,6 +15,7 @@
 import { css, html, nothing, type TemplateResult } from 'lit';
 import {
   hasLocation,
+  nodeCandidates,
   type ContactView,
   type HeardNode,
   type NodeIdentity,
@@ -189,17 +190,16 @@ export class McNodeInfo extends AppElement {
         <p class="hint">Heard advertising; not in your contacts.</p>`;
       }
       case 'ambiguous': {
-        const items = [
-          ...id.contacts.map((v) => ({ key: v.key, name: v.name, type: TYPE_LABEL[v.typeName], note: v.note })),
-          ...id.heard
-            .filter((h) => !id.contacts.some((v) => v.key === h.key))
-            .map((h) => ({ key: h.key, name: h.name || shortKey(h.key), type: `${TYPE_LABEL[h.typeName]}, heard`, note: '' })),
-        ];
+        const items = nodeCandidates(id.contacts, id.heard);
         return html`${this.#refFact(id.ref)}
           <p class="hint">${items.length} nodes match:</p>
           <ul class="candidates" data-field="candidates">
             ${items.map(
-              (c) => html`<li><a data-candidate=${c.key} href=${nodeHref(c.key)}>${c.name}</a>${contactNote(c.note)} <span class="muted">(${c.type}, ${shortKey(c.key)})</span></li>`,
+              (c) =>
+                html`<li>
+                  <a data-candidate=${c.key} href=${nodeHref(c.key)}>${c.name || shortKey(c.key)}</a>${contactNote(c.note)}
+                  <span class="muted">(${TYPE_LABEL[c.typeName]}${c.heard ? ', heard' : ''}, ${shortKey(c.key)})</span>
+                </li>`,
             )}
           </ul>`;
       }

@@ -48,7 +48,7 @@ export function loginLabel(s: LoginState): string {
   }
 }
 
-/** A hop hash plus its name: the contact's node page, or (unresolved / ambiguous) the bare hash's. */
+/** A hop hash plus its name: the contact's node page, or (unresolved / ambiguous) the listing of the nodes with the hash. */
 function hopLabel(h: HopRef, notes: NoteLookup): TemplateResult {
   if (h.key) return html`<span class="mono">${h.hash}</span> ${nodeLink(h.name ?? h.hash, h.key)}${contactNote(notes(h.key))}`;
   // this radio has a name but no key: plain text

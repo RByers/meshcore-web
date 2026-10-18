@@ -173,7 +173,10 @@ heard node with an advert gets *Add contact* (`ContactsModel.addFromAdvert`, CMD
 so it works in manual-add mode). Contact list / map clicks open chat and room contacts on Messages,
 others on Info; a Messages-list conversation always opens on Messages. There are no `/contact/` or `/chat/` routes (they 404); `/channel/:key`
 is unchanged. Path hops that resolve to one contact link to its node page; unknown or ambiguous
-hop hashes link to `/node/<hash>` (`data-hash-link`). Channel sender names link to the node page
+hop hashes, and packet source / destination hashes (the inspector's *From* / *To*), link to
+`/nodes/<hash>` (`data-hash-link`; `mc-node-list-page`, core `app.node(prefix, { list: true }).candidates`):
+the listing of every contact and heard node whose key starts with the hash — a listing even when
+only one node matches, since a 1-byte hash may also be a node never heard. Channel sender names link to the node page
 when exactly one contact has the name (several → the contacts list searched by name; core
 `resolveSenderName`, `ContactsModel.senderTarget` / `showByName`).
 

@@ -6,7 +6,7 @@ import type { PacketRecord } from '@meshcore-web/core/store';
 import { toHex } from '@meshcore-web/core/util/bytes';
 import type { InspectorMeta } from './packet-inspector.js';
 import { hopsLink } from '../../components/path-dialog.js';
-import { pathHops } from '../../components/node-link.js';
+import { hashLink, nodeLink, pathHops } from '../../components/node-link.js';
 
 /** "14:05:09.123" (local), with the date when not today. */
 export function formatLogTime(ts: number, now: number): string {
@@ -72,6 +72,19 @@ export function packetInspectorProps(ins: PacketInspection, resolve: HopResolver
     { label: 'Type', value: `${ins.view.typeName}${ins.view.routeName ? ` · ${ins.view.routeName}` : ''}` },
     { label: 'Summary', value: ins.summary },
   ];
+  // the payload's source / destination hashes link to the nodes with that hash; ANON_REQ's full sender key to its node
+  const { src, dst } = ins.view.endpoints;
+  if (src !== null) {
+    meta.push({
+      label: 'From',
+      value: html`<span class="mono" data-endpoint="src"
+        >${src.length > 2 ? nodeLink(src, src, 'Node details') : hashLink(src, src, `Nodes whose key starts with ${src}`)}</span
+      >`,
+    });
+  }
+  if (dst !== null) {
+    meta.push({ label: 'To', value: html`<span class="mono" data-endpoint="dst">${hashLink(dst, dst, `Nodes whose key starts with ${dst}`)}</span>` });
+  }
   if (ins.view.path.length) {
     const n = ins.view.path.length;
     const hops = resolve?.(ins.view.path);

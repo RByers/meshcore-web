@@ -12,7 +12,7 @@ import { basicScenario, type BasicScenario, type BasicScenarioOptions } from '..
 import { systemClock, type Clock } from '../util/clock.js';
 import { ChannelsModel } from './channels-model.js';
 import { ChatModel, type ChatModelOptions } from './chat-model.js';
-import { NodeModel, normalizeNodeRef } from './node-model.js';
+import { NodeModel, normalizeNodeRef, type NodeModelOptions } from './node-model.js';
 import {
   ConnectionModel,
   memoryPreferences,
@@ -291,14 +291,16 @@ export class AppModel {
    * would grow that work forever. Callers must not hold a model across renders — re-request it
    * (the node page calls this on every render) and read the model's `disposed` signal while
    * rendering, so a view still showing an evicted model re-renders and picks up a fresh one.
+   * `opts.list` gives the listing-mode model (`/nodes/:prefix`), cached separately.
    */
-  node(ref: string): NodeModel {
-    const id = normalizeNodeRef(ref) ?? ref.trim().toLowerCase();
+  node(ref: string, opts: NodeModelOptions = {}): NodeModel {
+    const n = normalizeNodeRef(ref) ?? ref.trim().toLowerCase();
+    const id = opts.list ? `list:${n}` : n;
     let m = this.#nodes.get(id);
     if (m) {
       this.#nodes.delete(id); // re-insert: Map order is the LRU order, most recent last
     } else {
-      m = new NodeModel(id, { connection: this.connection, contacts: this.contacts, packetLog: this.packetLog });
+      m = new NodeModel(n, { connection: this.connection, contacts: this.contacts, packetLog: this.packetLog }, { list: opts.list ?? false });
     }
     this.#nodes.set(id, m);
     for (const [k, old] of this.#nodes) {
