@@ -1,16 +1,17 @@
 /**
  * `<mc-contact-stats>`: the *Stats* tab of the node page (`/node/:key/stats`) (docs/packet-stats.md §5). Maps
  * `app.packetStats.forContact(key)` onto the chart elements: tiles, packets heard over time, the
- * paths they arrived over (bar chart, or a map with each hop's line as thick as its packet count), signal over time (coloured by path), and the hop count distribution.
+ * paths they arrived over (bar chart, or a map with each hop's line as thick as its packet count), signal over time (coloured by path), the hop count distribution,
+ * and how this radio hears the node as the last hop (first for relays, which originate little).
  * Uses the same global date range as the packet log Stats tab (`<mc-stats-range>`).
  */
 import { css, html, nothing, type TemplateResult } from 'lit';
-import type { ContactPathStats, HopCount, NodeRef, PathUsageMap, StatPacket, Timeline } from '@meshcore-web/core/app';
+import type { ContactPathStats, ContactStats, HopCount, LastHopSignalPoint, NodeRef, PathUsageMap, StatPacket, Timeline } from '@meshcore-web/core/app';
 import { AppElement } from '../../app-context.js';
 import { formatRelative, formatSnr } from '../../format.js';
 import { hrefFor } from '../../router.js';
 import { shared } from '../../styles.js';
-import { assignSlots, type BarItem, type Describe, type DotPoint, type DotSelectDetail, type LineSeries, type SeriesPalette } from '../../charts/index.js';
+import { assignSlots, fixedSlots, type BarItem, type Describe, type DotPoint, type DotSelectDetail, type LineSeries, type SeriesPalette } from '../../charts/index.js';
 import { timelineDescribe, timelinePalette, timelineSeries } from '../packets/packet-stats.js';
 import type { McTileMap } from '../../components/tile-map.js';
 import { directedUsageLines } from '../../components/path-usage-lines.js';
@@ -28,6 +29,28 @@ const Y_FIELDS: Record<YField, { option: string; label: string; format: (v: numb
   hops: { option: 'Hops', label: 'Hops', format: (v) => (Number.isInteger(v) ? String(v) : ''), missing: 'a known hop count' },
 };
 
+/** Last-hop signal colours: heard straight from this node vs relayed by it. */
+const LAST_HOP_PALETTE = fixedSlots({ direct: 1, relayed: 2 }, new Map([['direct', 'Direct'], ['relayed', 'Relayed']]));
+
+/** SNR-over-time dots of the packets this node was the last hop of (points without an SNR left out). */
+export function lastHopDots(pts: readonly LastHopSignalPoint[]): DotPoint[] {
+  return pts.flatMap((p) =>
+    p.snr === null
+      ? []
+      : [
+          {
+            x: p.ts,
+            y: p.snr,
+            size: 1,
+            color: p.direct ? 'direct' : 'relayed',
+            label: p.direct ? 'Direct' : 'Relayed',
+            id: p.id,
+            ...(p.rssi !== null ? { title: `RSSI ${p.rssi} dBm` } : {}),
+          },
+        ],
+  );
+}
+
 /** "direct", or the hop labels joined with " > ". */
 export function pathLabel(pathKey: string, hops: readonly NodeRef[]): string {
   return pathKey === '' ? 'direct' : hops.map((n) => n.label).join(' > ');
@@ -42,6 +65,10 @@ interface Derived {
   dots: Record<YField, DotPoint[]>;
   hops: BarItem[];
 }
+
+const openPacket = (e: CustomEvent<DotSelectDetail>): void => {
+  location.hash = hrefFor(`/packets/${e.detail.id}`);
+};
 
 export class McContactStats extends AppElement {
   static override properties = { key: { type: String }, yField: { state: true }, pathView: { state: true } };
@@ -71,6 +98,13 @@ export class McContactStats extends AppElement {
       }
       section.card h3 {
         margin-top: 0;
+      }
+      .note {
+        margin: 0 0 8px;
+        font-size: 13px;
+      }
+      section.card .tiles {
+        margin-block-end: 12px;
       }
       .head h3 {
         margin: 0;
@@ -170,7 +204,7 @@ export class McContactStats extends AppElement {
     const s = stats.forContact(this.key).value;
     const win = stats.window.value;
     const range = html`<section class="card"><mc-stats-range></mc-stats-range></section>`;
-    if (s.from.length === 0 && s.via.length === 0) {
+    if (s.from.length === 0 && s.via.length === 0 && s.lastHopOf.length === 0) {
       return html`${range}
         <p class="muted" data-empty>${stats.loading.value ? 'Loading…' : 'No packets from or via this contact in the selected range.'}</p>`;
     }
@@ -180,6 +214,9 @@ export class McContactStats extends AppElement {
     const direct = s.paths.find((p) => p.pathKey === '');
     const y = Y_FIELDS[this.yField];
     const xDomain: [number, number] | undefined = win ? [win.from, win.to] : undefined;
+    // for relays (repeaters), which originate little, how we hear them is the main story: show it first
+    const lastHop = this.#lastHop(s, xDomain);
+    const lastHopFirst = s.lastHopOf.length > s.from.length;
     return html`
       ${range}
       <div class="tiles" data-section="tiles">
@@ -194,6 +231,7 @@ export class McContactStats extends AppElement {
         ></mc-stat-tile>
         <mc-stat-tile data-tile="snr" label="Mean SNR" .value=${meanSnr !== null ? formatSnr(meanSnr) : '—'}></mc-stat-tile>
       </div>
+      ${lastHopFirst ? lastHop : nothing}
       ${s.from.length === 0
         ? nothing
         : html`
@@ -236,9 +274,7 @@ export class McContactStats extends AppElement {
                 .palette=${d.pathPalette}
                 series-label="Path"
                 missing-label=${y.missing}
-                @dot-select=${(e: CustomEvent<DotSelectDetail>) => {
-                  location.hash = hrefFor(`/packets/${e.detail.id}`);
-                }}
+                @dot-select=${openPacket}
               ></mc-dot-plot>
             </section>
             <section class="card" data-section="hops">
@@ -246,7 +282,42 @@ export class McContactStats extends AppElement {
               <mc-bar-chart .items=${d.hops}></mc-bar-chart>
             </section>
           `}
+      ${lastHopFirst ? nothing : lastHop}
     `;
+  }
+
+  /** Last-hop dots, rebuilt only when the signal points change. */
+  #lastHopMemo: { pts: readonly LastHopSignalPoint[]; dots: DotPoint[] } | undefined;
+
+  /** "Heard via this node (last hop)": how well this radio hears the node, its own packets and those it relayed. */
+  #lastHop(s: ContactStats, xDomain: [number, number] | undefined): TemplateResult | typeof nothing {
+    if (s.lastHopOf.length === 0) return nothing;
+    if (this.#lastHopMemo?.pts !== s.lastHopSignal) this.#lastHopMemo = { pts: s.lastHopSignal, dots: lastHopDots(s.lastHopSignal) };
+    const sum = s.lastHopSummary;
+    const snr = (v: number | null): string => (v !== null ? formatSnr(v) : '—');
+    return html`<section class="card" data-section="last-hop">
+      <h3>Heard via this node (last hop)</h3>
+      <p class="muted note">Packets whose final transmission came from this node: its own heard directly, and the ones it relayed.</p>
+      <div class="tiles">
+        <mc-stat-tile data-tile="last-hop-packets" label="Packets" .value=${sum.count} hint="Received packets this node was the last to transmit"></mc-stat-tile>
+        <mc-stat-tile data-tile="last-hop-snr" label="Mean SNR" .value=${snr(sum.meanSnr)}></mc-stat-tile>
+        <mc-stat-tile
+          data-tile="last-hop-range"
+          label="Min / max SNR"
+          .value=${sum.minSnr !== null && sum.maxSnr !== null ? `${formatSnr(sum.minSnr)} / ${formatSnr(sum.maxSnr)}` : '—'}
+        ></mc-stat-tile>
+      </div>
+      <mc-dot-plot
+        .points=${this.#lastHopMemo.dots}
+        .xDomain=${xDomain}
+        y-label="SNR (dB)"
+        .yFormat=${formatSnr}
+        .palette=${LAST_HOP_PALETTE}
+        series-label="Heard"
+        missing-label="SNR"
+        @dot-select=${openPacket}
+      ></mc-dot-plot>
+    </section>`;
   }
   #usage(paths: readonly ContactPathStats[]): PathUsageMap {
     return this.app.paths.usage(

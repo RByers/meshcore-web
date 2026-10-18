@@ -328,7 +328,8 @@ is not shown; the inspector split is hidden). The Stats panel, top to bottom:
 10. **Signal by last hop** (`data-section="last-hops"`, `lastHops`), right after the first / final
    path node charts: how well this radio hears each neighbour. An `mc-bar-chart` with a bar per last
    hop (top 50 by packet count, contact links like the source chart, `a3?` rows for ambiguous
-   hashes), the bar value = mean SNR (dB; nodes whose packets carried no SNR show no value), tooltip
+   hashes), the bar value = mean SNR (dB; nodes whose packets carried no SNR show no value; negative
+   means grow left from the zero line, `mc-bar-chart` supports negative and `null` values), tooltip
    with the packet count (direct / relayed), min–max SNR, mean RSSI and last heard; footer "n
    received packets had no last hop, m more nodes". A bar filters by that last hop (chip "Last hop:
    X", field `lastHop`).
@@ -417,9 +418,12 @@ Other), dot size = bytes); *Hop count* distribution; *Heard via this node (last 
 (`data-section="last-hop"`, shown when `lastHopOf` is non-empty): tiles from `lastHopSummary`
 (packets, mean SNR, min / max SNR) and an SNR-over-time `mc-dot-plot` of `lastHopSignal`
 (x time, y SNR, colour = *Direct* (zero hop from this node) / *Relayed*; points without an SNR
-left out). Browser test in
+left out). The section comes right after the tiles when `lastHopOf` outnumbers the packets from the
+contact (repeaters), otherwise last; the tab shows its empty state only when `from`, `via` and
+`lastHopOf` are all empty. Browser test in
 `packages/web/test/contact-stats.test.ts`: the tab appears, the paths chart lists the direct row
-and a repeated path from the emulator scenario, the timeline renders.
+and a repeated path from the emulator scenario, the timeline renders, and a repeater's page leads
+with the last-hop section (tiles, dots).
 
 ## 6. Drill-down filters
 

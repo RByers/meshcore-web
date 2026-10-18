@@ -94,6 +94,30 @@ describe('mc-bar-chart', () => {
     for (const r of qa(el, 'rect.hit')) expect(Number(r.getAttribute('height'))).toBeGreaterThanOrEqual(12);
   });
 
+  it('draws negative values left of the zero line and no bar for a null value', async () => {
+    const el = await mount('mc-bar-chart', {
+      items: [
+        { label: 'up', value: 6 },
+        { label: 'down', value: -3 },
+        { label: 'none', value: null },
+      ],
+    } satisfies Partial<McBarChart>);
+    const marks = qa(el, '[data-mark="bar"]');
+    expect(marks).toHaveLength(2);
+    expect(marks[0]!.getAttribute('transform')).toBeNull();
+    expect(marks[1]!.getAttribute('transform')).toBe('scale(-1,1)');
+    // both bars meet at the zero line, which sits inside the plot
+    const up = (marks[0] as SVGGraphicsElement).getBBox();
+    const down = (marks[1] as SVGGraphicsElement).getBBox();
+    expect(down.width).toBeGreaterThan(0);
+    expect(Math.abs(-(down.x) - up.x)).toBeLessThan(0.5);
+    expect(up.x).toBeGreaterThan(0);
+    expect(up.width / down.width).toBeCloseTo(2, 1);
+    const values = qa(el, 'text.value').map((v) => v.textContent);
+    expect(values).toEqual(['6', '-3']);
+    expect(qa(el, '[data-label]')).toHaveLength(3);
+  });
+
   it('re-renders when resized', async () => {
     const el = await mount('mc-bar-chart', { items: [{ label: 'a', value: 1 }] }, 600);
     const before = Number(q(el, 'svg')!.getAttribute('width'));

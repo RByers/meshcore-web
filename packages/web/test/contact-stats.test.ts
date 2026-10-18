@@ -139,6 +139,53 @@ describe('contact Stats tab', () => {
     await el.updateComplete;
     await (plot as unknown as { updateComplete: Promise<unknown> }).updateComplete;
     expect(yLabel()).toBe('Hops');
+
+    // Alice was the last hop only of her direct advert: the last-hop section comes last
+    const order = within(el, '[data-section]').map((sec) => sec.getAttribute('data-section'));
+    expect(order.at(-1)).toBe('last-hop');
+    expect(tile('last-hop-packets')).toBe('1');
+    expect(tile('last-hop-snr')).toBe('8 dB');
+  });
+
+  it('shows how a repeater is heard as the last hop, first on its page', async () => {
+    const t = (h = createHarness());
+    await t.mount();
+    await t.connectEmulator();
+    await t.app.connection.capture!.idle();
+    const s = t.emulatorScenario();
+    const hill = s.keys.repeater[0]!;
+    const hillKey = toHex(s.keys.repeater);
+    const store = t.app.connection.store.value!;
+    const now = t.clock.now();
+    // Hilltop relays three of Alice's adverts (the last over two hops), SNR 4, 2 and −3
+    await store.packets.append({ direction: 'rx', source: 'logRxData', bytes: advert(s.keys.alice, 'Alice', [hill]), ts: now + 1, snr: 4, rssi: -100 });
+    await store.packets.append({ direction: 'rx', source: 'logRxData', bytes: advert(s.keys.alice, 'Alice', [hill]), ts: now + 2, snr: 2, rssi: -104 });
+    await store.packets.append({ direction: 'rx', source: 'logRxData', bytes: advert(s.keys.alice, 'Alice', [0x55, hill]), ts: now + 3, snr: -3, rssi: -110 });
+    await t.app.packetStats.settled();
+    await t.until(() => t.app.packetStats.forContact(hillKey).value.lastHopOf.length === 3, 5000, 'last hop packets');
+
+    location.hash = `#/node/${hillKey}/stats`;
+    await t.until(() => stats(t), 3000, 'stats element');
+    const el = stats(t);
+    await el.updateComplete;
+    const tile = (id: string) => within(t.query(`[data-tile="${id}"]`), '[data-field="value"]')[0]?.textContent?.trim();
+    expect(tile('from')).toBe('0');
+    // little of its own: the last-hop section follows the tiles, before anything else
+    const order = within(el, '[data-section]').map((sec) => sec.getAttribute('data-section'));
+    expect(order.slice(0, 2)).toEqual(['tiles', 'last-hop']);
+    expect(t.query('[data-section="last-hop"] h3')!.textContent).toBe('Heard via this node (last hop)');
+    expect(tile('last-hop-packets')).toBe('3');
+    expect(tile('last-hop-snr')).toBe('1 dB');
+    expect(tile('last-hop-range')).toBe('-3 dB / 4 dB');
+
+    // SNR over time, all Relayed (none heard straight from it)
+    const plot = t.query('[data-section="last-hop"] mc-dot-plot');
+    const yLabel = () => within(plot, '[data-field="y-label"]')[0]?.textContent;
+    await t.until(() => within(plot, '[data-mark="dot"]').length === 3 && yLabel(), 3000, 'last hop dots');
+    expect(yLabel()).toBe('SNR (dB)');
+    // one series (Relayed) → one colour, and no legend
+    expect(new Set(within(plot, '[data-mark="dot"]').map((d) => d.getAttribute('fill'))).size).toBe(1);
+    expect(within(plot, '[data-legend]')).toHaveLength(0);
   });
 
   it('shows one empty-state line when nothing was heard from the contact', async () => {

@@ -3,6 +3,9 @@
  * link when the item has an `href`; the value is printed at the bar end; height follows the item
  * count. Hover (rows are the hit targets) shows label, value and the optional `title`.
  *
+ * Values may be negative (e.g. SNR): the scale then spans below zero and those bars grow left
+ * from the zero line, their value printed just right of it. A `null` value draws no bar or value.
+ *
  * Items with a `key` are selectable: clicking the row (bar, or a label that isn't a link) or
  * pressing Enter / Space on the focused bar dispatches a bubbling, composed `bar-select` event
  * ({@link BarSelectDetail}). A linked label stays a plain link, so one row can both select (bar)
@@ -10,13 +13,14 @@
  */
 import { css, html, nothing, svg, type TemplateResult } from 'lit';
 import { scaleLinear } from 'd3-scale';
-import { max } from 'd3-array';
+import { max, min } from 'd3-array';
 import { ChartBase, chartStyles, formatNumber, hBarPath, tickCount, xGrid } from './chart-base.js';
 import { seriesColor } from './palette.js';
 
 export interface BarItem {
   label: string;
-  value: number;
+  /** Bar length; `null` = no value (no bar, no value label). */
+  value: number | null;
   /** Makes the label a link. */
   href?: string;
   /** Extra tooltip line. */
@@ -125,7 +129,8 @@ export class McBarChart extends ChartBase {
     this.hover = null;
   }
 
-  #fmt(v: number): string {
+  #fmt(v: number | null): string {
+    if (v === null) return '—';
     return this.format ? this.format(v) : formatNumber(v);
   }
 
@@ -191,9 +196,12 @@ export class McBarChart extends ChartBase {
     if (items.length === 0) return html`<p class="empty" data-chart="bar" data-empty>${this.emptyText}</p>`;
     const h = items.length * ROW;
     const w = this.width;
+    const lo = Math.min(min(items, (d) => d.value ?? 0) ?? 0, 0);
+    const hi = Math.max(max(items, (d) => d.value ?? 0) ?? 0, lo < 0 ? 0 : 1);
     const x = scaleLinear()
-      .domain([0, Math.max(max(items, (d) => d.value) ?? 0, 1)])
+      .domain([lo, hi])
       .range([0, Math.max(w - VALUE_ROOM, 10)]);
+    const x0 = x(0);
     const color = this.color ?? seriesColor(0);
     const pad = (ROW - BAR) / 2;
     const selectable = items.some((d) => d.key !== undefined);
@@ -223,13 +231,17 @@ export class McBarChart extends ChartBase {
           @pointerleave=${this.#onLeave}
         >
           ${w > 0 ? xGrid(x, 0, h, tickCount(w, 80)) : nothing}
-          <line class="baseline" x1="0.5" x2="0.5" y1="0" y2=${h}></line>
+          <line class="baseline" x1=${Math.round(x0) + 0.5} x2=${Math.round(x0) + 0.5} y1="0" y2=${h}></line>
           ${items.map((d, i) => {
-            const x1 = x(Math.max(0, d.value));
+            const hit = this.#hit(d, i, Math.max(w, 0));
+            if (d.value === null) return hit;
+            const x1 = x(d.value);
             const dim = this.hover !== null && this.hover !== i;
-            return svg`${this.#hit(d, i, Math.max(w, 0))}
-              <path class="bar ${dim ? 'dim' : ''}" data-mark="bar" d=${hBarPath(0, x1, i * ROW + pad, BAR)} fill=${color}></path>
-              <text class="value" x=${x1 + 6} y=${i * ROW + ROW / 2} dy="0.32em">${this.#fmt(d.value)}</text>`;
+            // a negative bar is drawn mirrored (rounded end on the left), its value right of zero
+            const bar = d.value < 0 ? hBarPath(-x0, -x1, i * ROW + pad, BAR) : hBarPath(x0, x1, i * ROW + pad, BAR);
+            return svg`${hit}
+              <path class="bar ${dim ? 'dim' : ''}" data-mark="bar" d=${bar} transform=${d.value < 0 ? 'scale(-1,1)' : nothing} fill=${color}></path>
+              <text class="value" x=${Math.max(x0, x1) + 6} y=${i * ROW + ROW / 2} dy="0.32em">${this.#fmt(d.value)}</text>`;
           })}
         </svg>
         ${this.renderTip()}

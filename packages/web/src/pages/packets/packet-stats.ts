@@ -3,10 +3,10 @@
  * `PacketStatsModel` (`app.packetStats`) as tiles and charts: packet rate (stacked), packets per
  * source node, packets over time (dot plot with y / colour selectors), network utilisation, text compression, the hop
  * count distribution, then the paths: a "Packet paths" map (on demand: each hop's line as thick as the packets
- * that crossed it, each node's dot sized by use) and the most common first and final nodes in the path. The bin size lives in the model (`<mc-stats-range parts="bin">`); only
+ * that crossed it, each node's dot sized by use), the most common first and final nodes in the path and the signal (mean SNR) by last hop. The bin size lives in the model (`<mc-stats-range parts="bin">`); only
  * the chart selectors are local state. Everything here maps model output to chart props.
  *
- * Drill-down (§6): clicking a source bar, first / final path node bar, hop-count bar or breakdown segment adds a model filter
+ * Drill-down (§6): clicking a source bar, first / final path node bar, last-hop signal bar, hop-count bar or breakdown segment adds a model filter
  * for that value (clicking the active one again removes it). The filter, date range included, is
  * shared with the Packets tab (owned by the packet log) and edited in the filter area above the
  * tabs (`<mc-packet-filters>`); here a "Showing X of Y packets" line notes when it narrows the range.
@@ -22,6 +22,7 @@ import {
   type CompressionStats,
   type ChannelMessageCount,
   type HopCount,
+  type LastHopStats,
   type LoraParams,
   type NodeRef,
   type Bounds,
@@ -39,7 +40,7 @@ import { AppElement } from '../../app-context.js';
 import { hrefFor } from '../../router.js';
 import { nodeHref } from '../../components/node-link.js';
 import { shared } from '../../styles.js';
-import { formatDuration } from '../../format.js';
+import { formatDuration, formatRelative, formatSnr } from '../../format.js';
 import {
   assignSlots,
   fixedSlots,
@@ -201,7 +202,34 @@ export function pathNodeFooter(s: SourceStats): string {
   return nodeFooter(s, (n) => `${n} ${n === 1 ? 'packet' : 'packets'} had no path`);
 }
 
-function nodeFooter(s: SourceStats, none: (n: number) => string): string {
+/**
+ * Signal-by-last-hop bars: value = mean SNR (null when none of its packets had one), a contact
+ * link like the source chart, keyed by `nodeId` (the lastHop filter value); `now` for "last heard".
+ */
+export function lastHopItems(s: LastHopStats, now: number, active?: string): BarItem[] {
+  return s.top.map((h) => {
+    const key = nodeId(h.node);
+    const parts = [`${formatNumber(h.count, 0)} ${h.count === 1 ? 'packet' : 'packets'} (${formatNumber(h.direct, 0)} direct, ${formatNumber(h.relayed, 0)} relayed)`];
+    if (h.minSnr !== null && h.maxSnr !== null) parts.push(`SNR ${formatSnr(h.minSnr)} – ${formatSnr(h.maxSnr)}`);
+    if (h.meanRssi !== null) parts.push(`mean RSSI ${formatNumber(h.meanRssi, 0)} dBm`);
+    parts.push(`last heard ${formatRelative(h.lastTs, now)}`);
+    return {
+      label: h.node.label,
+      value: h.meanSnr,
+      key,
+      selected: key === active,
+      ...(h.node.resolved && h.node.key && !h.node.self ? { href: nodeHref(h.node.key) } : {}),
+      title: `${parts.join(' · ')}${h.node.resolved ? '' : ' (not uniquely resolved)'}`,
+    };
+  });
+}
+
+/** "n received packets had no last hop, m more nodes" (empty when both are 0). */
+export function lastHopFooter(s: LastHopStats): string {
+  return nodeFooter(s, (n) => `${n} received ${n === 1 ? 'packet' : 'packets'} had no last hop`);
+}
+
+function nodeFooter(s: SourceStats | LastHopStats, none: (n: number) => string): string {
   const parts: string[] = [];
   if (s.unattributed > 0) parts.push(none(s.unattributed));
   if (s.others > 0) parts.push(`${s.others} more ${s.others === 1 ? 'node' : 'nodes'} (${s.othersPackets} packets)`);
@@ -382,6 +410,9 @@ export class McPacketStats extends AppElement {
         margin: 6px 0 0;
         font-size: 13px;
       }
+      .note.intro {
+        margin: 0 0 8px;
+      }
       .breakdowns {
         display: grid;
         gap: 12px;
@@ -556,6 +587,28 @@ export class McPacketStats extends AppElement {
     const node = this.app.packetStats.pathEnds.value.top.find((s) => nodeId(s.node) === e.detail.key)?.node;
     this.#toggle('pathEnd', e.detail.key, node?.label ?? e.detail.key);
   };
+
+  #onLastHop = (e: CustomEvent<BarSelectDetail>): void => {
+    const node = this.app.packetStats.lastHops.value.top.find((s) => nodeId(s.node) === e.detail.key)?.node;
+    this.#toggle('lastHop', e.detail.key, node?.label ?? e.detail.key);
+  };
+
+  /** Mean SNR per last hop: how well this radio hears each neighbour. */
+  #lastHops(s: LastHopStats, active: string | undefined): TemplateResult {
+    const footer = lastHopFooter(s);
+    return html`<section class="card" data-section="last-hops">
+      <h3>Signal by last hop</h3>
+      <p class="note muted intro">Mean SNR of the received packets each node was the last to transmit (its own, heard directly, or relayed).</p>
+      <mc-bar-chart
+        class="sources"
+        .items=${lastHopItems(s, this.app.clock.now(), active)}
+        .format=${formatSnr}
+        empty-text="No received packets with a known last hop in the shown packets."
+        @bar-select=${this.#onLastHop}
+      ></mc-bar-chart>
+      ${footer ? html`<p class="note muted" data-field="last-hops-footer">${footer}</p>` : nothing}
+    </section>`;
+  }
 
   /** A bar chart of packets per path node (first or last entry), with its footer line. */
   #pathNodes(id: string, title: string, s: SourceStats, active: string | undefined, onSelect: (e: CustomEvent<BarSelectDetail>) => void): TemplateResult {
@@ -793,7 +846,8 @@ export class McPacketStats extends AppElement {
 
       ${this.#pathsCard(stats.routes.value)}
       ${this.#pathNodes('path-starts', 'Most common first nodes in path', stats.pathStarts.value, active('pathStart'), this.#onPathStart)}
-      ${this.#pathNodes('path-ends', 'Most common final nodes in path', stats.pathEnds.value, active('pathEnd'), this.#onPathEnd)}`;
+      ${this.#pathNodes('path-ends', 'Most common final nodes in path', stats.pathEnds.value, active('pathEnd'), this.#onPathEnd)}
+      ${this.#lastHops(stats.lastHops.value, active('lastHop'))}`;
   }
 }
 

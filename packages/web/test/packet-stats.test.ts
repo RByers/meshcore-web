@@ -509,7 +509,8 @@ describe('/packets Stats packet paths map', () => {
   /**
    * Logs (directly, so the emulator's repeater adds no relayed copies) Alice's adverts once direct,
    * twice via Hilltop and once via unknown hop 55 then Hilltop, and one of Bob's (no location) via
-   * Hilltop; then opens the Stats tab. Alice, Hilltop and this radio have locations.
+   * Hilltop; then opens the Stats tab. Alice, Hilltop and this radio have locations. SNRs: 6 for
+   * the direct advert, then 4, 2, −3 and −7 for the ones Hilltop relayed (mean −1).
    */
   async function openWithPaths(): Promise<{ t: Harness; el: McPacketStats; hill: string; self: string; alice: string }> {
     const t = (h = createHarness());
@@ -521,12 +522,12 @@ describe('/packets Stats packet paths map', () => {
     const hill = s.keys.repeater[0]!;
     const store = t.app.connection.store.value!;
     const now = t.clock.now();
-    const rx = (bytes: Uint8Array, dt: number) => store.packets.append({ direction: 'rx', source: 'logRxData', bytes, ts: now + dt, snr: 4, rssi: -100 });
-    await rx(advert(s.keys.alice, 'Alice', []), 0);
-    await rx(advert(s.keys.alice, 'Alice', [hill]), 1);
-    await rx(advert(s.keys.alice, 'Alice', [hill]), 2);
-    await rx(advert(s.keys.alice, 'Alice', [0x55, hill]), 3);
-    await rx(advert(s.keys.bob, 'Bob', [hill]), 4);
+    const rx = (bytes: Uint8Array, dt: number, snr: number) => store.packets.append({ direction: 'rx', source: 'logRxData', bytes, ts: now + dt, snr, rssi: -100 });
+    await rx(advert(s.keys.alice, 'Alice', []), 0, 6);
+    await rx(advert(s.keys.alice, 'Alice', [hill]), 1, 4);
+    await rx(advert(s.keys.alice, 'Alice', [hill]), 2, 2);
+    await rx(advert(s.keys.alice, 'Alice', [0x55, hill]), 3, -3);
+    await rx(advert(s.keys.bob, 'Bob', [hill]), 4, -7);
     await t.app.packetStats.settled();
     await t.until(() => t.app.packetStats.routes.value.reduce((n, r) => n + r.count, 0) === 5, 5000, 'routes');
     await t.click('[data-tab="stats"]');
@@ -625,7 +626,7 @@ describe('/packets Stats packet paths map', () => {
   it('sits below hop count, followed by charts of the most common first and final path nodes; a bar filters by it', async () => {
     const { t, el, hill } = await openWithPaths();
     const order = [...el.shadowRoot!.querySelectorAll('[data-section]')].map((s) => s.getAttribute('data-section'));
-    expect(order.slice(-4)).toEqual(['hops', 'paths', 'path-starts', 'path-ends']);
+    expect(order.slice(-5)).toEqual(['hops', 'paths', 'path-starts', 'path-ends', 'last-hops']);
     expect(el.shadowRoot!.querySelector('[data-section="path-starts"] h3')!.textContent).toBe('Most common first nodes in path');
     expect(el.shadowRoot!.querySelector('[data-section="path-ends"] h3')!.textContent).toBe('Most common final nodes in path');
 
@@ -646,5 +647,38 @@ describe('/packets Stats packet paths map', () => {
     expect(chips(t)[0]).toMatch(/^First in path: /);
     expect(t.app.packetStats.points.value.map((p) => p.path.length)).toEqual([2]);
     expect(bars('path-ends')).toEqual([[hill, '1']]);
+  });
+
+  it('charts mean SNR by last hop, negative bars included; a bar filters by that last hop', async () => {
+    const { t, el, hill, alice } = await openWithPaths();
+    const card = el.shadowRoot!.querySelector('[data-section="last-hops"]')!;
+    expect(card.querySelector('h3')!.textContent).toBe('Signal by last hop');
+    const bars = (): [string, string][] =>
+      inChart(el, 'last-hops', 'mc-bar-chart', 'rect[role="button"]').map((r) => [r.getAttribute('data-key')!, r.getAttribute('aria-label')!.split(': ').pop()!]);
+    // count desc: Hilltop relayed 4 (SNR 4, 2, −3, −7), Alice was heard directly once (SNR 6)
+    expect(bars()).toEqual([
+      [hill, '-1 dB'],
+      [alice, '6 dB'],
+    ]);
+    const links = inChart(el, 'last-hops', 'mc-bar-chart', '[data-label] a').map((a) => a.getAttribute('href'));
+    expect(links).toEqual([`#/node/${hill}`, `#/node/${alice}`]);
+    // Hilltop's mean is negative: its bar grows left from the zero line (mirrored), Alice's right
+    const marks = inChart(el, 'last-hops', 'mc-bar-chart', '[data-mark="bar"]');
+    expect(marks).toHaveLength(2);
+    expect(marks[0]!.getAttribute('transform')).toBe('scale(-1,1)');
+    expect(marks[1]!.getAttribute('transform')).toBeNull();
+    expect(card.querySelector('[data-field="last-hops-footer"]')).toBeNull();
+    // the tooltip text: count (direct / relayed), SNR range, mean RSSI
+    const top = t.app.packetStats.lastHops.value.top[0]!;
+    expect(top).toMatchObject({ count: 4, direct: 0, relayed: 4, minSnr: -7, maxSnr: 4, meanRssi: -100 });
+
+    inChart(el, 'last-hops', 'mc-bar-chart', `rect[data-key="${hill}"]`)[0]!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await t.until(() => chips(t).length > 0, 3000, 'last hop chip');
+    await settle(t, el);
+    expect(t.app.packetStats.filters.value).toEqual([expect.objectContaining({ field: 'lastHop', value: hill })]);
+    expect(chips(t)[0]).toMatch(/^Last hop: /);
+    expect(t.app.packetStats.points.value).toHaveLength(4);
+    expect(bars()).toEqual([[hill, '-1 dB']]);
+    expect(inChart(el, 'last-hops', 'mc-bar-chart', 'rect[role="button"]')[0]!.getAttribute('aria-pressed')).toBe('true');
   });
 });
