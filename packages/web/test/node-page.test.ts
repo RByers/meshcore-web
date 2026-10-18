@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { PayloadType, RouteType, buildPacket, encodeAdvertAppData } from '@meshcore-web/core/packet';
 import { scenarioKey } from '@meshcore-web/core/emulator';
+import { ContactFlag } from '@meshcore-web/core/protocol';
 import { concatBytes, toHex } from '@meshcore-web/core/util/bytes';
 import type { PacketRecord } from '@meshcore-web/core/store';
 import '../src/mc-app.js';
@@ -132,6 +133,26 @@ describe('node page', () => {
     const room = key(t, 'room');
     await t.go(`/node/${room}/messages`, '[data-field="room-login-hint"]');
     expect(t.query<HTMLAnchorElement>('[data-field="room-login-hint"] a')!.getAttribute('href')).toBe(`#/node/${room}/overview`);
+  });
+
+  it('toggles favourite from the Info tab, on the radio too', async () => {
+    const t = await connected();
+    const bob = key(t, 'bob');
+    await t.go(`/node/${bob}`, '[data-section="contact"] [data-action="favourite"]');
+    const star = () => t.query<HTMLButtonElement>('[data-section="contact"] [data-action="favourite"]')!;
+    expect(star().getAttribute('aria-pressed')).toBe('false');
+    expect(t.query('[data-field="contact-flags"]')!.textContent!.trim()).toBe('on radio');
+
+    await t.click('[data-section="contact"] [data-action="favourite"]');
+    await t.until(() => star().getAttribute('aria-pressed') === 'true' && !star().disabled, 5000, 'starred and saved to the radio');
+    expect(t.app.contacts.view(bob)!.favourite).toBe(true);
+    expect(star().textContent!.trim()).toBe('★ Favourite');
+    expect(t.emulatorScenario().emulator.getContact(t.emulatorScenario().keys.bob)!.flags & ContactFlag.FAVOURITE).toBe(ContactFlag.FAVOURITE);
+
+    await t.click('[data-section="contact"] [data-action="favourite"]');
+    await t.until(() => star().getAttribute('aria-pressed') === 'false' && !star().disabled, 5000, 'unstarred and saved to the radio');
+    expect(t.app.contacts.view(bob)!.favourite).toBe(false);
+    expect(t.emulatorScenario().emulator.getContact(t.emulatorScenario().keys.bob)!.flags & ContactFlag.FAVOURITE).toBe(0);
   });
 
   it('Remove contact takes two clicks (another click disarms) and the page stays, as a non-contact', async () => {

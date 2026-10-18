@@ -3,13 +3,14 @@
  * hash / prefix), path and direct signal (contacts), last seen / heard, location — and a link to
  * the packet log filtered to it. Packets heard over time are on the *Stats* tab.
  *
- * A contact gets a *Contact* section: local note, SMAZ (chat & room), favourite / not-on-radio,
- * and a two-click *Remove contact*. A node only heard advertising gets
+ * A contact gets a *Contact* section: local note, SMAZ (chat & room), a favourite toggle, the
+ * on-radio flag and a two-click *Remove contact*. A node only heard advertising gets
  * *Add contact* (from its advert). Several candidates for a hash / prefix are listed as links.
  *
  * Test hooks: `dl.info` `[data-field="key|path|direct-signal|last-seen|heard|location"]`,
  * `[data-candidate="<key>"]`, `[data-section="contact|note|smaz"]`, `[data-field="contact-flags"]`,
- * `[data-action="remove-contact|add-contact|node-packets"]` (`data-armed` while the
+ * `[data-action="favourite|remove-contact|add-contact|node-packets"]` (`aria-pressed` on the
+ * favourite toggle; `data-armed` while the
  * remove button awaits its confirming click).
  */
 import { css, html, nothing, type TemplateResult } from 'lit';
@@ -107,6 +108,7 @@ export class McNodeInfo extends AppElement {
   #armed = false;
   #removing = false;
   #adding = false;
+  #starring = false;
 
   /** Any click other than on the armed Remove button disarms it (runs after the button's own handler). */
   readonly #onClick = (e: Event): void => {
@@ -220,13 +222,13 @@ export class McNodeInfo extends AppElement {
   // ---- contact section ----
 
   #contactSection(v: ContactView): TemplateResult {
-    const flags = [v.favourite ? '★ favourite' : '', v.onDevice ? 'on radio' : 'not on radio'].filter(Boolean).join(' · ');
     return html`<section class="contact" data-section="contact">
       <h3>Contact</h3>
       ${this.#noteSetting(v)}
       ${v.typeName === 'chat' || v.typeName === 'room' ? this.#smazSetting(v) : nothing}
       <div class="card actions">
-        <span class="muted" data-field="contact-flags">${flags}</span>
+        ${this.#favouriteButton(v)}
+        <span class="muted" data-field="contact-flags">${v.onDevice ? 'on radio' : 'not on radio'}</span>
         ${this.#removeButton(v)}
       </div>
     </section>`;
@@ -279,6 +281,32 @@ export class McNodeInfo extends AppElement {
       await this.app.contacts.setSmaz(key, on);
     } catch (err) {
       this.app.notifications.error('Could not change compression', err);
+    }
+  }
+
+  /** Stars / unstars the contact (locally and, when on the radio, its FAVOURITE flag). */
+  #favouriteButton(v: ContactView): TemplateResult {
+    return html`<button
+      data-action="favourite"
+      aria-pressed=${v.favourite ? 'true' : 'false'}
+      ?disabled=${this.#starring}
+      title=${v.favourite ? 'Remove from favourites' : 'Add to favourites'}
+      @click=${() => void this.#toggleFavourite(v)}
+    >
+      ${v.favourite ? '★ Favourite' : '☆ Add to favourites'}
+    </button>`;
+  }
+
+  async #toggleFavourite(v: ContactView): Promise<void> {
+    this.#starring = true;
+    this.requestUpdate();
+    try {
+      await this.app.contacts.setFavourite(v.key, !v.favourite);
+    } catch (err) {
+      this.app.notifications.error(`Could not ${v.favourite ? 'unstar' : 'star'} ${v.name}`, err);
+    } finally {
+      this.#starring = false;
+      this.requestUpdate();
     }
   }
 
