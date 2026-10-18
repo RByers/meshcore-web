@@ -681,4 +681,43 @@ describe('/packets Stats packet paths map', () => {
     expect(bars()).toEqual([[hill, '-1 dB']]);
     expect(inChart(el, 'last-hops', 'mc-bar-chart', 'rect[role="button"]')[0]!.getAttribute('aria-pressed')).toBe('true');
   });
+
+  it('maps the first / final path nodes on demand, each dot sized by its packet count', async () => {
+    const { t, el, hill } = await openWithPaths();
+    const card = (id: string) => el.shadowRoot!.querySelector(`[data-section="${id}"]`)!;
+    const markers = (id: string) => [...card(id).querySelectorAll<HTMLElement>('mc-map-marker')];
+    const button = card('path-starts').querySelector('[data-action="path-starts-map"]')!;
+    expect(button.textContent!.trim()).toBe('Map');
+    expect(card('path-starts').querySelector('mc-tile-map')).toBeNull();
+
+    // estimates off: Hilltop (3 packets) is placed; hop 55 has no location
+    await t.click('[data-section="path-starts"] [data-action="path-starts-map"]');
+    await settle(t, el);
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    expect(markers('path-starts').map((m) => [m.dataset['node'], m.dataset['count'], m.getAttribute('kind')])).toEqual([[hill, '3', 'repeater']]);
+    expect(markerSize(markers('path-starts')[0]!)).toBe(2);
+    const note = card('path-starts').querySelector('[data-field="node-map-note"]')!.textContent!;
+    expect(note).toMatch(/first in their path \(most: 3\)/);
+    expect(note).toMatch(/1 node \(1 packet\) has no known location/);
+    // the other card's map is independent
+    expect(card('path-ends').querySelector('mc-tile-map')).toBeNull();
+
+    // estimates on: 55 is placed too, its dot smaller than Hilltop's
+    card('path-starts').querySelector<HTMLInputElement>('[data-approximate]')!.click();
+    await settle(t, el);
+    await t.until(() => markers('path-starts').length === 2, 3000, 'estimated 55');
+    const [big, small] = markers('path-starts');
+    expect([big!.dataset['node'], small!.dataset['node'], small!.hasAttribute('approximate')]).toEqual([hill, '#55', true]);
+    expect(markerSize(small!)).toBeLessThan(markerSize(big!));
+    expect(markerSize(small!)).toBeGreaterThanOrEqual(1.1);
+
+    await t.click('[data-section="path-ends"] [data-action="path-ends-map"]');
+    await settle(t, el);
+    expect(markers('path-ends').map((m) => [m.dataset['node'], m.dataset['count']])).toEqual([[hill, '4']]);
+
+    await t.click('[data-section="path-starts"] [data-action="path-starts-map"]');
+    await settle(t, el);
+    expect(card('path-starts').querySelector('mc-tile-map')).toBeNull();
+    expect(card('path-ends').querySelector('mc-tile-map')).not.toBeNull();
+  });
 });

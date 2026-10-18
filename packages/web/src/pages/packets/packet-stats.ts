@@ -15,6 +15,8 @@ import { css, html, nothing, type TemplateResult } from 'lit';
 import {
   formatDistance,
   nodeId,
+  placeNodeCounts,
+  untracked,
   timelineSeriesDescription,
   packetFilterChips,
   type Breakdown,
@@ -28,6 +30,7 @@ import {
   type Bounds,
   type PathUsageMap,
   type PathUsageRoute,
+  type PlacedNodeCounts,
   type SourceStats,
   type StatPacket,
   type StatsFilter,
@@ -356,16 +359,26 @@ const percent = (v: number): string => formatPercent(v);
 
 // ------------------------------------------------------------------------------ element
 
+/** The first / final path node cards (their `data-section`). */
+type PathNodeSection = 'path-starts' | 'path-ends';
+/** The cards with a map. */
+type MapSection = 'paths' | PathNodeSection;
+const MAP_SECTIONS: readonly MapSection[] = ['paths', 'path-starts', 'path-ends'];
+
+
 export class McPacketStats extends AppElement {
   static override properties = {
     yField: { state: true },
     colorField: { state: true },
     showMap: { state: true },
+    nodeMaps: { state: true },
   };
   declare yField: YField;
   declare colorField: ColorField;
   /** The "Packet paths" card shows its map (else a one-line summary). */
   declare showMap: boolean;
+  /** The first / final path node cards showing their map. */
+  declare nodeMaps: ReadonlySet<PathNodeSection>;
 
   static override styles = [
     shared,
@@ -455,29 +468,61 @@ export class McPacketStats extends AppElement {
     this.yField = 'snr';
     this.colorField = 'type';
     this.showMap = false;
+    this.nodeMaps = new Set();
   }
 
-  /** Fit the paths map to its routes on the next update (map opened, estimate toggled, routes changed). */
-  #fitPending = false;
-  /** The bounds the paths map was last fitted to: new routes re-fit only when they move them. */
-  #fittedBounds: Bounds | null = null;
+  /**
+   * Per map (keyed by its card's `data-section`): fit it on the next update (map opened, estimate
+   * toggled), and the bounds it was last fitted to (new packets re-fit only when they move them).
+   */
+  #fits = new Map<MapSection, { pending: boolean; bounds: Bounds | null }>();
+
+  #requestFit(section: MapSection): void {
+    this.#fits.set(section, { pending: true, bounds: this.#fits.get(section)?.bounds ?? null });
+  }
+
+  /** The paths map of the shown packets (memoised in `PathModel`, shared by every map here). */
+  #usage(): PathUsageMap {
+    return this.app.paths.routesUsage(this.app.packetStats.routes.value, { directed: true });
+  }
+
+  #placed(section: PathNodeSection): PlacedNodeCounts {
+    const stats = this.app.packetStats;
+    return placeNodeCounts(section === 'path-starts' ? stats.pathStarts.value : stats.pathEnds.value, this.#usage());
+  }
+
+  /** The "Approximate positions" checkbox (one app setting for every map), when it can matter. */
+  #estimateToggle(show: boolean): TemplateResult | typeof nothing {
+    const estimate = this.app.appSettings.approximatePositions.value;
+    return estimate || show
+      ? html`<label class="estimate"
+          ><input
+            type="checkbox"
+            data-approximate
+            .checked=${estimate}
+            @change=${(e: Event) => {
+              this.app.appSettings.setApproximatePositions((e.target as HTMLInputElement).checked);
+              for (const s of MAP_SECTIONS) this.#requestFit(s);
+            }}
+          />
+          Approximate positions of nodes without a location</label
+        >`
+      : nothing;
+  }
+
+  #mapButton(open: boolean, action: string, onClick: () => void): TemplateResult {
+    return html`<button class="small" data-action=${action} aria-pressed=${open ? 'true' : 'false'} @click=${onClick}>${open ? 'Hide map' : 'Map'}</button>`;
+  }
 
   #pathsCard(routes: readonly PathUsageRoute[]): TemplateResult {
     const packets = routes.reduce((n, r) => n + r.count, 0);
     return html`<section class="card" data-section="paths">
       <div class="head">
         <h3>Packet paths</h3>
-        <button
-          class="small"
-          data-action="paths-map"
-          aria-pressed=${this.showMap ? 'true' : 'false'}
-          @click=${() => {
-            this.showMap = !this.showMap;
-            this.#fitPending = this.showMap;
-          }}
-        >
-          ${this.showMap ? 'Hide map' : 'Map'}
-        </button>
+        ${this.#mapButton(this.showMap, 'paths-map', () => {
+          this.showMap = !this.showMap;
+          if (this.showMap) this.#requestFit('paths');
+        })}
       </div>
       ${this.showMap
         ? this.#pathsMap(routes)
@@ -490,22 +535,7 @@ export class McPacketStats extends AppElement {
 
   #pathsMap(routes: readonly PathUsageRoute[]): TemplateResult {
     const m: PathUsageMap = this.app.paths.routesUsage(routes, { directed: true });
-    const estimate = this.app.appSettings.approximatePositions.value;
-    const toggle =
-      estimate || m.incomplete > 0
-        ? html`<label class="estimate"
-            ><input
-              type="checkbox"
-              data-approximate
-              .checked=${estimate}
-              @change=${(e: Event) => {
-                this.app.appSettings.setApproximatePositions((e.target as HTMLInputElement).checked);
-                this.#fitPending = true;
-              }}
-            />
-            Approximate positions of nodes without a location</label
-          >`
-        : nothing;
+    const toggle = this.#estimateToggle(m.incomplete > 0);
     if (m.edges.length === 0) {
       return html`<p class="note muted" data-field="no-map">None of these paths can be drawn: the nodes on them have no known location.</p>
         ${toggle}`;
@@ -538,17 +568,18 @@ export class McPacketStats extends AppElement {
   }
 
   protected override updated(): void {
-    if (!this.showMap) return;
-    const map = this.renderRoot.querySelector<McTileMap>('mc-tile-map');
-    if (!map) return;
-    const b = this.app.paths.routesUsage(this.app.packetStats.routes.peek(), { directed: true }).bounds;
-    // a live packet over already-drawn nodes keeps the user's pan / zoom; a filter that moves the
-    // bounds (or opening the map, toggling estimates) re-fits
-    const moved = !sameBounds(b, this.#fittedBounds);
-    if (!this.#fitPending && !moved) return;
-    if (b) map.fitBounds(b, { maxZoom: 15, padding: 40 });
-    this.#fittedBounds = b;
-    this.#fitPending = false;
+    for (const section of MAP_SECTIONS) {
+      const open = section === 'paths' ? this.showMap : this.nodeMaps.has(section);
+      const map = open ? this.renderRoot.querySelector<McTileMap>(`[data-section="${section}"] mc-tile-map`) : null;
+      if (!map) continue;
+      const b = untracked(() => (section === 'paths' ? this.#usage().bounds : this.#placed(section).bounds));
+      // a live packet over already-drawn nodes keeps the user's pan / zoom; a filter that moves the
+      // bounds (or opening the map, toggling estimates) re-fits
+      const fit = this.#fits.get(section) ?? { pending: true, bounds: null };
+      if (!fit.pending && sameBounds(b, fit.bounds)) continue;
+      if (b) map.fitBounds(b, { maxZoom: 15, padding: 40 });
+      this.#fits.set(section, { pending: false, bounds: b });
+    }
   }
 
   /** Dot plot props for the last (points, y, colour): a new array would re-lay-out every dot. */
@@ -611,13 +642,61 @@ export class McPacketStats extends AppElement {
   }
 
   /** A bar chart of packets per path node (first or last entry), with its footer line. */
-  #pathNodes(id: string, title: string, s: SourceStats, active: string | undefined, onSelect: (e: CustomEvent<BarSelectDetail>) => void): TemplateResult {
+  #pathNodes(id: PathNodeSection, title: string, s: SourceStats, active: string | undefined, onSelect: (e: CustomEvent<BarSelectDetail>) => void): TemplateResult {
     const footer = pathNodeFooter(s);
+    const open = this.nodeMaps.has(id);
     return html`<section class="card" data-section=${id}>
-      <h3>${title}</h3>
+      <div class="head">
+        <h3>${title}</h3>
+        ${s.top.length
+          ? this.#mapButton(open, `${id}-map`, () => {
+              const next = new Set(this.nodeMaps);
+              if (open) next.delete(id);
+              else {
+                next.add(id);
+                this.#requestFit(id);
+              }
+              this.nodeMaps = next;
+            })
+          : nothing}
+      </div>
+      ${open && s.top.length ? this.#pathNodesMap(id, title) : nothing}
       <mc-bar-chart class="sources" .items=${sourceItems(s, active)} empty-text="No packets with a path in the shown packets." @bar-select=${onSelect}></mc-bar-chart>
       ${footer ? html`<p class="note muted" data-field=${`${id}-footer`}>${footer}</p>` : nothing}
     </section>`;
+  }
+
+  /** The nodes of a first / final path node card on a map, each dot's area ∝ its packet count. */
+  #pathNodesMap(id: PathNodeSection, title: string): TemplateResult {
+    const p = this.#placed(id);
+    const which = id === 'path-starts' ? 'first' : 'final';
+    const lost = p.unplaced
+      ? ` ${formatNumber(p.unplaced, 0)} ${p.unplaced === 1 ? 'node' : 'nodes'} (${formatNumber(p.unplacedPackets, 0)} ${p.unplacedPackets === 1 ? 'packet' : 'packets'}) ${p.unplaced === 1 ? 'has' : 'have'} no known location.`
+      : '';
+    const toggle = this.#estimateToggle(p.unplaced > 0 || p.markers.some((m) => m.approximate));
+    if (p.markers.length === 0) {
+      return html`<p class="note muted" data-field="no-map">None of these nodes can be placed: they have no known location.</p>
+        ${toggle}`;
+    }
+    return html`<mc-tile-map .tileUrl=${this.app.map.tileUrl.value} label=${title} data-field="node-map">
+        ${p.markers.map(
+          (m) => html`<mc-map-marker
+            data-node=${m.id}
+            data-count=${m.count}
+            kind=${m.kind ?? ''}
+            style=${`--marker-size: ${usageMarkerSize(m.count, p.maxCount).toFixed(2)}rem`}
+            lat=${m.lat}
+            lon=${m.lon}
+            label=${m.node.label}
+            description=${`${formatNumber(m.count, 0)} packet${m.count === 1 ? '' : 's'}${m.approximate ? ', approximate location' : ''}`}
+            ?approximate=${m.approximate}
+          ></mc-map-marker>`,
+        )}
+      </mc-tile-map>
+      <p class="note muted" data-field="node-map-note">
+        Dot size shows how many packets had each node ${which} in their path (most: ${formatNumber(p.maxCount, 0)}).${lost}
+      </p>
+      ${toggle}`;
   }
 
   #onChannel = (e: CustomEvent<BarSelectDetail>): void => {

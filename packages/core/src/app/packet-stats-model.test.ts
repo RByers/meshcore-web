@@ -44,6 +44,7 @@ import {
   nodeEndpoint,
   nodeId,
   nodeStats,
+  placeNodeCounts,
   filterKey,
   filterPoints,
   lastHopSignalStats,
@@ -58,6 +59,7 @@ import {
   type StatsFilter,
 } from './packet-stats-model.js';
 import { PacketLogModel } from './packet-log-model.js';
+import type { PathUsageMap, PathUsageStop } from './path-usage.js';
 import type { DmKeys, SummaryContext } from './packet-summary.js';
 import { signal, type ReadonlySignal } from './signal.js';
 
@@ -1041,6 +1043,31 @@ describe('path start / end nodes', () => {
     expect(pts.map((p) => filterKey(p, 'pathStart'))).toEqual([null, hill.key, hill.key, '#55']);
     expect(pts.map((p) => filterKey(p, 'pathEnd'))).toEqual([null, hill.key, hill.key, hill.key]);
     expect(filterPoints(pts, [{ field: 'pathStart', value: '#55', label: '55' }]).map((p) => p.id)).toEqual([3]);
+  });
+
+  it('places counted nodes where the paths map put them: by key, else the busiest stop of the hash', () => {
+    const stop = (id: string, lat: number, count: number, extra: Partial<PathUsageStop> = {}): PathUsageStop => ({ id, role: 'hop', label: id, lat, lon: 0, approximate: false, count, ...extra });
+    const usage: PathUsageMap = {
+      stops: [
+        stop('hill', 1, 4, { node: { key: hill.key!, name: 'Hill', kind: 'repeater', lat: 1, lon: 0 }, hash: 'aa' }),
+        stop('55@a', 2, 1, { hash: '55', approximate: true }),
+        stop('55@b', 3, 2, { hash: '55', approximate: true }),
+      ],
+      edges: [],
+      maxCount: 0,
+      total: 4,
+      incomplete: 0,
+      bounds: null,
+    };
+    const lost = node('77');
+    const placed = placeNodeCounts(nodeStats([...pts, { ...base, id: 4, path: [lost] }], (p) => p.path[0]), usage);
+    expect(placed.markers.map((m) => [m.id, m.lat, m.count, m.kind, m.approximate])).toEqual([
+      [hill.key, 1, 2, 'repeater', false],
+      ['#55', 3, 1, undefined, true],
+    ]);
+    expect(placed.maxCount).toBe(2);
+    expect([placed.unplaced, placed.unplacedPackets]).toEqual([1, 1]);
+    expect(placed.bounds).toEqual({ south: 1, west: 0, north: 3, east: 0 });
   });
 });
 

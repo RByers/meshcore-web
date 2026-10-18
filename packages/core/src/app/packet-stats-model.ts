@@ -26,12 +26,12 @@ import { fromHex, toHex, utf8Encode } from '../util/bytes.js';
 import type { Unsubscribe } from '../util/events.js';
 import { loraAirtimeMs, loraParamsFromSelfInfo, type LoraParams } from './airtime.js';
 import type { ConnectionModel } from './connection.js';
-import { haversineMeters, hasLocation, type LatLon } from './geo.js';
+import { boundsOf, haversineMeters, hasLocation, type Bounds, type LatLon } from './geo.js';
 import type { DrillSource, PacketFilter, SharedPacketFilter } from './packet-log-model.js';
 import { decryptDm, viewPacket, type DmKeys, type PacketView, type SummaryContext } from './packet-summary.js';
-import type { PathEndpoint } from './path-geometry.js';
+import type { PathEndpoint, PathGeoNode } from './path-geometry.js';
 import { resolveHop } from './path-resolver.js';
-import type { PathUsageRoute } from './path-usage.js';
+import type { PathUsageMap, PathUsageRoute, PathUsageStop } from './path-usage.js';
 import { batch, computed, effect, signal, untracked, type ReadonlySignal } from './signal.js';
 import { StoreBoundModel } from './store-bound.js';
 
@@ -1192,6 +1192,59 @@ export function lastHopSignalStats(pts: readonly StatPacket[]): LastHopStats {
     .sort((a, b) => b.count - a.count || a.node.label.localeCompare(b.node.label));
   const rest = all.slice(TOP_SOURCES);
   return { top: all.slice(0, TOP_SOURCES), unattributed, others: rest.length, othersPackets: rest.reduce((n, s) => n + s.count, 0) };
+}
+
+/** A counted node placed on a map (see {@link placeNodeCounts}). */
+export interface PlacedNodeCount extends LatLon {
+  /** `nodeId(node)`. */
+  id: string;
+  node: NodeRef;
+  count: number;
+  /** The map node's kind (repeater, self…) when it resolved to one. */
+  kind?: PathGeoNode['kind'];
+  /** The position is an estimate (ambiguous hash / interpolated). */
+  approximate: boolean;
+}
+
+export interface PlacedNodeCounts {
+  /** Busiest first. */
+  markers: PlacedNodeCount[];
+  /** Largest marker count (0 when none). */
+  maxCount: number;
+  /** Nodes that could not be placed, and the packets they count. */
+  unplaced: number;
+  unplacedPackets: number;
+  bounds: Bounds | null;
+}
+
+/**
+ * Places the counted nodes of `s` (e.g. {@link PacketStatsModel.pathStarts}) where the paths map
+ * `usage` (`PathModel.routesUsage` of the same packets' routes) put them, so both maps agree,
+ * estimates included. A node is matched by public key, else by hop hash; a hash placed at several
+ * estimated positions takes the busiest. Nodes the map left off count as unplaced.
+ */
+export function placeNodeCounts(s: SourceStats, usage: PathUsageMap): PlacedNodeCounts {
+  const byKey = new Map<string, PathUsageStop>();
+  const byHash = new Map<string, PathUsageStop>();
+  for (const st of usage.stops) {
+    if (st.node) byKey.set(st.node.key.toLowerCase(), st);
+    const h = st.hash?.toLowerCase();
+    if (h && (byHash.get(h)?.count ?? -1) < st.count) byHash.set(h, st);
+  }
+  const markers: PlacedNodeCount[] = [];
+  let unplaced = 0;
+  let unplacedPackets = 0;
+  for (const { node, count } of s.top) {
+    const st = (node.key && byKey.get(node.key.toLowerCase())) || (node.hash ? byHash.get(node.hash.toLowerCase()) : undefined);
+    if (!st) {
+      unplaced++;
+      unplacedPackets += count;
+      continue;
+    }
+    markers.push({ id: nodeId(node), node, count, lat: st.lat, lon: st.lon, approximate: st.approximate, ...(st.node ? { kind: st.node.kind } : {}) });
+  }
+  markers.sort((a, b) => b.count - a.count);
+  return { markers, maxCount: markers[0]?.count ?? 0, unplaced, unplacedPackets, bounds: boundsOf(markers) };
 }
 
 function hopCounts(pts: readonly StatPacket[]): HopCount[] {

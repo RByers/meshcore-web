@@ -27,6 +27,8 @@ export interface PathUsageStop extends LatLon {
   label: string;
   /** The resolved node, when exactly one matches. */
   node?: PathGeoNode;
+  /** Hop hash hex (hops and hash endpoints). */
+  hash?: string;
   /** Position is an estimate (ambiguous / interpolated / extrapolated). */
   approximate: boolean;
   /** Packets whose path passed through (or started / ended at) this stop. */
@@ -145,7 +147,7 @@ export function buildRouteUsageMap(
       const id = stopId(placed);
       let u = stops.get(id);
       if (!u) {
-        u = { id, role: s.role, label: s.label, lat: placed.lat, lon: placed.lon, approximate: isApproximate(s.position), count: 0, ...(s.node ? { node: s.node } : {}) };
+        u = { id, role: s.role, label: s.label, lat: placed.lat, lon: placed.lon, approximate: isApproximate(s.position), count: 0, ...(s.node ? { node: s.node } : {}), ...(s.hash ? { hash: s.hash } : {}) };
         stops.set(id, u);
       }
       u.count += p.count;

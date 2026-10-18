@@ -325,6 +325,14 @@ is not shown; the inspector split is hidden). The Stats panel, top to bottom:
    the first node is the repeater nearest the source and the final one is the repeater this radio
    heard; for a direct packet they are the next and last hops still to travel. A bar filters by that
    node (chips "First in path: X" / "Last in path: X").
+   Each card has its own *Map* / *Hide map* toggle (`data-action="path-starts-map"` /
+   `"path-ends-map"`, `aria-pressed`), shown above the bars: an `<mc-tile-map>` with one marker per
+   node (`placeNodeCounts`: the node's stop in the paths map's `routesUsage`, by key else the busiest
+   stop of its hash, so the maps agree, estimates included), its diameter 1.1–2 rem ∝ √(count /
+   busiest) like the paths map (dot area ∝ packets), the count in its tooltip; a note with the
+   busiest count and how many nodes (packets) have no known location; the shared "Approximate
+   positions" checkbox. Each map fits its markers when opened / when the checkbox changes, and
+   re-fits only when filters move its bounds.
 10. **Signal by last hop** (`data-section="last-hops"`, `lastHops`), right after the first / final
    path node charts: how well this radio hears each neighbour. An `mc-bar-chart` with a bar per last
    hop (top 50 by packet count, contact links like the source chart, `a3?` rows for ambiguous
