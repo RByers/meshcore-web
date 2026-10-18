@@ -165,6 +165,7 @@ lastHops: LastHopStats   // signal per last hop (lastHopSignalStats), received p
   //   Quartiles by linear interpolation between closest ranks (R type 7 / numpy default: h = (n − 1)·p).
   // Grouped by nodeId(lastHop), so an ambiguous hop hash (resolveHop label `a3?`) is a row of its own
   // rather than being dropped or split: it is still one radio link, just not attributable to one contact.
+linkQuality: LinkQualityStats   // link quality per neighbour (linkQualityStats(points, decodeLimit)), see below
 timeline: { binMs: number; bins: { t: number; series: Record<string, number> }[]; series: string[] }
    // series (non-empty only, by count desc, 'Other' last): one per known channel name (GRP_TXT/GRP_DATA), 'Unknown channels', 'DMs' (TXT_MSG), 'Adverts', 'ACKs', 'Paths', 'Traces', 'Requests' (REQ/RESPONSE/ANON_REQ), 'Control', 'Other' (MULTIPART, RAW_CUSTOM, unknown). Bin size picked from the span: aim for 60–150 bins on round steps (1 min … 1 day). Expose `setBin(ms | 'auto')` too.
 utilization: {
@@ -190,6 +191,30 @@ interface CompressionStats extends CompressionCounts {
 ```
 
 Keep the series naming stable (color follows the entity: the UI maps series name → palette slot).
+
+**Link quality per neighbour** (`linkQuality`, `linkQualityStats(pts, decodeLimit)`): "which nodes
+do I hear directly, and how reliably?". Over the filtered, in-range **received** packets **with an
+SNR** (sent packets and packets without an SNR are skipped), grouped by `nodeId(lastHop)`; a zero-hop
+flood counts its source as the last hop (§1.3, `direct`), so a neighbour's own packets and the ones
+it relayed are one link.
+
+```ts
+LinkQualityStats = { top: NeighbourLink[], decodeLimit: DecodeLimit | null,
+  unattributed /* received with an SNR but lastHop null: TRACE, direct routes, unattributed zero-hop */,
+  others /* neighbours beyond the top 50 */, othersPackets }
+NeighbourLink = { node: NodeRef, count /* packets with an SNR */, medianSnr, minSnr, maxSnr,
+  medianRssi /* over those with an RSSI, null when none */, lastTs,
+  margin /* medianSnr − decodeLimit.snrDb; null when the SF is unknown */,
+  level: 'comfortable' /* margin ≥ 10 dB */ | 'ok' /* ≥ 5 dB */ | 'marginal' /* < 5 dB */ | null }
+```
+
+Medians by `quantileSorted(…, 0.5)` (box-stats.ts). The 50 neighbours with the most packets are kept
+(so a rarely heard one drops out before a busy one), then sorted by median SNR desc (then count,
+label). **Unresolved hops** are kept, not dropped or pooled: as in `lastHops`, an unknown or ambiguous
+hop hash is its own row (`a3?`, `node.resolved` false) — it is still one radio link this radio
+hears, just not attributable to one contact — and the row's `lastHop` drill-down still works
+(`#a3`). `linkMarginLevel(margin)` and `LINK_MARGIN_COMFORTABLE_DB` / `LINK_MARGIN_OK_DB` hold the
+thresholds.
 
 ### 1.7 Routes (the "packet paths" map)
 
@@ -278,6 +303,7 @@ without the app):
 
 - `<mc-bar-chart>` horizontal bars: `items: { label, value, href?, title?, key?, selected? }[]`; label column is a link when `href` is set; value label at the bar end; sorted as given; keyed rows dispatch `bar-select` (§3 drill-down).
 - `<mc-box-plot>` horizontal box-and-whisker rows on one value axis (tick labels below, zero line when 0 is in range): `rows: { label, box: BoxStats | null, href?, title?: string | string[], key?, selected? }[]`, `format`, `empty-row-text`; per row whiskers with end caps, box q1–q3, median line, mean diamond, outlier dots, the median printed at the right; a null box shows `empty-row-text`. Label links, tooltip and keyed-row `bar-select` / pressed state as `<mc-bar-chart>`.
+- `<mc-range-plot>` horizontal min–max range bars with a median marker on one value axis (tick labels below): `rows: { label, detail?, min, max, median, tone?: 'good' | 'ok' | 'bad', valueText?, valueSub?, href?, title?, key?, selected? }[]`, `refLine: { value, label } | null`, `format`, `label` (the SVG's aria-label; the ref label is appended), `empty-text`. Each row: a two-line label (name, muted `detail`), a bar coloured by `tone` (`--mc-ok` / `--mc-warn` / `--mc-danger`, accent when none, `data-tone` on the row group), a median tick, `valueText` / `valueSub` (in the tone colour) at the right. `refLine` is a vertical dashed `--mc-danger` line across every row, labelled above them (`data-ref-line`), and is always inside the axis. Label links, tooltip and keyed-row `bar-select` / pressed state as `<mc-bar-chart>`.
 - `<mc-dot-plot>` `points: { x: number, y: number | null, size: number, color: string /* series key */, id }[]`, `xDomain`, `yLabel`, `yFormat`; dot radius ∝ `sqrt(size)` (area ∝ bytes, 2–9 px); nulls in `y` dropped with a count shown ("n packets without SNR"); click → `dot-select` event with the id; legend with series → colour (≤ 8 + Other). `refLines: RefLine[]` draws reference lines under the dots (muted label above the right end, `data-ref-line=key`, labels appended to the SVG's aria-label) and widens the y domain so each line is always visible: `{ value, label, key? }` is a horizontal dashed line (`--mc-warn` stroke); `{ kind: 'series', points: { t, v }[], holdMs?, label, key? }` a step path (each sample held until the next, or for `holdMs` → a gap; clipped to the plot; `data-ref-kind="series"`, `stepPath`).
 - `<mc-line-chart>` `series: { key, points: { t, v }[] }[]`, `xDomain`, `stacked?: boolean`; crosshair tooltip listing all series at the hovered bin; legend. `fit-y` fits the y range to the data instead of starting at 0 (not stacked); `gap-ms` breaks the line between points further apart (`splitAtGaps`).
 - `<mc-breakdown>` a single horizontal 100 % stacked bar per dimension: `segments: { label, value, title?, key?, selected? }[]` with a legend / inline labels; 2 px gaps between segments; keyed segments dispatch `segment-select`.
@@ -386,7 +412,19 @@ is not shown; the inspector split is hidden). The Stats panel, top to bottom:
    count (direct / relayed) and last heard; footer "n received packets had no last hop, m more
    nodes". Clicking a row filters by that last hop (chip "Last hop: X", field `lastHop`).
 
-**Drill-down** (model side in §6): clicking a source bar, a channel bar, a hop-count bar, a first / final path node bar, a last-hop signal bar, or a breakdown segment /
+11. **Link quality by neighbour** (`data-section="link-quality"`, `linkQuality` §1.6, `mc-range-plot`),
+   after the last-hop box plots: one row per neighbour (median SNR desc) with a min–max SNR bar and a
+   median tick on a shared SNR axis, and the radio's decode limit as a dashed vertical line across
+   all rows ("SF10 limit −15 dB", none when the SF is unknown). The label (contact link like the
+   source chart) has a muted "n pkts · −95 dBm" line (count, median RSSI); at the right the margin
+   ("+12.5 dB") over the level word, coloured comfortable `--mc-ok` / ok `--mc-warn` / marginal
+   `--mc-danger` (median SNR when the SF is unknown, uncoloured). Tooltip: median / range, margin,
+   count, median RSSI, last heard. Clicking a row adds the `lastHop` filter (same as §3 item 10).
+   Footer "n received packets with SNR had no last hop, m more nodes"; empty state when nothing
+   qualifies; a muted note explains the margin. Fits a phone-width card (the page grid is
+   `minmax(0, 1fr)` so measured charts shrink after a resize).
+
+**Drill-down** (model side in §6): clicking a source bar, a channel bar, a hop-count bar, a first / final path node bar, a last-hop signal bar or link-quality row, or a breakdown segment /
 legend entry (type, route, direction, category, channel, compression) adds a filter for that value; clicking the
 active value again removes it. On source bars the *bar* filters and the *label* stays the contact
 link. Charts opt in per item with a `key` (`<mc-bar-chart>` dispatches `bar-select`, keyed rows
@@ -410,7 +448,9 @@ source drill-down filters the List tab and its chip removes it; a text filter na
 the filtered count; one preset / *From* pair for both tabs, cleared by *Reset*); the
 compression section's counts, summary, *Compressed* filter, empty state and the *Compression* dot
 colouring; the paths card's summary, map lines and widths, sized markers with counts (this radio
-`self`), note, filter narrowing, the approximate toggle's dashed lines and *Hide map*.
+`self`), note, filter narrowing, the approximate toggle's dashed lines and *Hide map*; the link
+quality rows (order, labels, detail, margin text and tone, the decode-limit line, row click → lastHop
+filter), its empty state and its phone-width fit.
 
 ## 4. Docs
 

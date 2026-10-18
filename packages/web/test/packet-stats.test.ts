@@ -8,6 +8,7 @@ import '../src/pages/packets/index.js';
 import { smazEncodeIfSmaller } from '@meshcore-web/core/util/smaz';
 import { createHarness, type Harness, type HarnessOptions } from '../src/testing/harness.js';
 import type { McTileMap } from '../src/components/tile-map.js';
+import type { McRangePlot } from '../src/charts/range-plot.js';
 import { timelineDescribe, timelinePalette, timelineSeries, type McPacketStats } from '../src/pages/packets/packet-stats.js';
 import { NOISE_FLOOR_FIRST_DELAY_MS, NOISE_FLOOR_INTERVAL_MS, timelineSeriesDescription } from '@meshcore-web/core/app';
 import { toDatetimeLocal } from '../src/pages/packets/inspection.js';
@@ -704,7 +705,7 @@ describe('/packets Stats packet paths map', () => {
   it('sits below hop count, followed by charts of the most common first and final path nodes; a bar filters by it', async () => {
     const { t, el, hill } = await openWithPaths();
     const order = [...el.shadowRoot!.querySelectorAll('[data-section]')].map((s) => s.getAttribute('data-section'));
-    expect(order.slice(-5)).toEqual(['hops', 'paths', 'path-starts', 'path-ends', 'last-hops']);
+    expect(order.slice(-6)).toEqual(['hops', 'paths', 'path-starts', 'path-ends', 'last-hops', 'link-quality']);
     expect(el.shadowRoot!.querySelector('[data-section="path-starts"] h3')!.textContent).toBe('Most common first nodes in path');
     expect(el.shadowRoot!.querySelector('[data-section="path-ends"] h3')!.textContent).toBe('Most common final nodes in path');
 
@@ -759,6 +760,92 @@ describe('/packets Stats packet paths map', () => {
     expect(t.app.packetStats.points.value).toHaveLength(4);
     expect(rows()).toEqual([[hill, 'median -0.5 dB']]);
     expect(inChart(el, 'last-hops', 'mc-box-plot', 'rect[role="button"]')[0]!.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('link quality: an SNR range per neighbour against the decode limit, margin as text and colour; a row filters by it', async () => {
+    const { t, el, hill, alice } = await openWithPaths();
+    const card = el.shadowRoot!.querySelector('[data-section="link-quality"]')!;
+    expect(card.querySelector('h3')!.textContent).toBe('Link quality by neighbour');
+    const sf = t.app.connection.selfInfo.value!.radioSf;
+    const limit = t.app.packetStats.decodeLimit.value!;
+    expect(limit.sf).toBe(sf);
+    const plot = card.querySelector('mc-range-plot')!;
+    await t.until(() => inChart(el, 'link-quality', 'mc-range-plot', '.axis .tick').length > 0, 3000, 'range plot axis');
+
+    // median desc: Alice heard directly once (6), Hilltop relayed SNR 4, 2, −3, −7 (median −0.5)
+    const keys = inChart(el, 'link-quality', 'mc-range-plot', 'rect[role="button"]').map((r) => r.getAttribute('data-key'));
+    expect(keys).toEqual([alice, hill]);
+    const labels = inChart(el, 'link-quality', 'mc-range-plot', '[data-label]');
+    expect(labels.map((l) => l.querySelector('a')!.getAttribute('href'))).toEqual([`#/node/${alice}`, `#/node/${hill}`]);
+    expect(labels.map((l) => l.querySelector('[data-detail]')!.textContent)).toEqual(['1 pkt · −100 dBm', '4 pkts · −100 dBm']);
+
+    const fmt = (v: number) => `${v >= 0 ? '+' : '−'}${Math.abs(v)} dB`;
+    const level = (m: number) => (m >= 10 ? 'comfortable' : m >= 5 ? 'ok' : 'marginal');
+    const tone = { comfortable: 'good', ok: 'ok', marginal: 'bad' } as const;
+    const margins = [6 - limit.snrDb, -0.5 - limit.snrDb];
+    expect(inChart(el, 'link-quality', 'mc-range-plot', '[data-field="value"]').map((v) => v.textContent)).toEqual(margins.map(fmt));
+    expect(inChart(el, 'link-quality', 'mc-range-plot', '[data-field="value-sub"]').map((v) => v.textContent)).toEqual(margins.map(level));
+    expect(inChart(el, 'link-quality', 'mc-range-plot', '[data-row]').map((g) => g.dataset['tone'])).toEqual(margins.map((m) => tone[level(m)]));
+
+    // Hilltop's bar spans −7…4 with the median inside; the decode limit is one dashed line left of every bar
+    const rowMark = (i: number, mark: string) => inChart(el, 'link-quality', 'mc-range-plot', `[data-row="${i}"] [data-mark="${mark}"]`)[0]!;
+    const range = rowMark(1, 'range');
+    const med = Number(rowMark(1, 'median').getAttribute('x1'));
+    expect(med).toBeGreaterThan(Number(range.getAttribute('x')));
+    expect(med).toBeLessThan(Number(range.getAttribute('x')) + Number(range.getAttribute('width')));
+    const ref = inChart(el, 'link-quality', 'mc-range-plot', '[data-ref-line]');
+    expect(ref).toHaveLength(1);
+    expect(ref[0]!.querySelector('[data-field="ref-label"]')!.textContent).toBe(`SF${sf} limit −${Math.abs(limit.snrDb)} dB`);
+    expect(Number(ref[0]!.querySelector('line')!.getAttribute('x1'))).toBeLessThan(Number(range.getAttribute('x')));
+    expect(plot.shadowRoot!.querySelector('svg')!.getAttribute('aria-label')).toContain(`SF${sf} limit`);
+    expect(card.querySelector('[data-field="link-quality-footer"]')).toBeNull();
+    expect(card.textContent).toContain('Margin = median SNR above the');
+
+    inChart(el, 'link-quality', 'mc-range-plot', `rect[data-key="${hill}"]`)[0]!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await t.until(() => chips(t).length > 0, 3000, 'last hop chip');
+    await settle(t, el);
+    expect(t.app.packetStats.filters.value).toEqual([expect.objectContaining({ field: 'lastHop', value: hill })]);
+    expect(chips(t)[0]).toMatch(/^Last hop: /);
+    const pressed = inChart(el, 'link-quality', 'mc-range-plot', 'rect[role="button"]');
+    expect(pressed.map((r) => [r.getAttribute('data-key'), r.getAttribute('aria-pressed')])).toEqual([[hill, 'true']]);
+  });
+
+  it('link quality: an empty state when no received packet has an SNR', async () => {
+    const t = (h = createHarness());
+    await t.mount();
+    await t.connectEmulator('/packets');
+    await t.until(() => t.query('[data-tab="stats"]'), 3000, 'stats tab');
+    await t.app.connection.capture!.idle();
+    const s = t.emulatorScenario();
+    const alice = toHex(s.keys.alice);
+    await t.app.connection.store.value!.packets.append({ direction: 'rx', source: 'logRxData', bytes: advert(s.keys.alice, 'Alice', []), ts: t.clock.now() });
+    await t.app.packetStats.settled();
+    await t.until(() => t.app.packetStats.points.value.some((p) => p.source?.key === alice), 5000, 'advert');
+    await t.app.packetStats.addFilter({ field: 'source', value: alice, label: 'Alice' });
+    await t.click('[data-tab="stats"]');
+    await t.until(() => t.query('mc-packet-stats'), 3000, 'stats element');
+    const el = t.query<McPacketStats>('mc-packet-stats')!;
+    await settle(t, el);
+    expect(t.app.packetStats.points.value).toHaveLength(1);
+    const empty = inChart(el, 'link-quality', 'mc-range-plot', '[data-empty]');
+    expect(empty.map((e) => e.textContent)).toEqual(['No received packets with an SNR and a known last hop in the shown packets.']);
+    expect(el.shadowRoot!.querySelector('[data-section="link-quality"]')!.textContent).toContain('Margin = median SNR above the');
+  });
+
+  it('link quality: the range plot fits a phone-width card', async () => {
+    const { t, el } = await openWithPaths();
+    await page.viewport(375, 800);
+    const plot = el.shadowRoot!.querySelector<McRangePlot>('[data-section="link-quality"] mc-range-plot')!;
+    // re-measured for the narrow card: the svg as wide as its column, the value text inside the host
+    await t.until(() => {
+      const svgEl = plot.shadowRoot!.querySelector('svg');
+      const col = plot.shadowRoot!.querySelector('[data-measure]');
+      return svgEl !== null && col !== null && Number(svgEl.getAttribute('width')) === Math.floor(col.getBoundingClientRect().width) && plot.getBoundingClientRect().width < 375;
+    }, 3000, 'narrow range plot');
+    await plot.updateComplete;
+    expect(plot.scrollWidth).toBeLessThanOrEqual(plot.clientWidth);
+    const right = plot.getBoundingClientRect().right;
+    for (const v of plot.shadowRoot!.querySelectorAll('[data-field="value-sub"]')) expect(v.getBoundingClientRect().right).toBeLessThanOrEqual(right + 1);
   });
 
   it('maps the first / final path nodes on demand, each dot sized by its packet count', async () => {

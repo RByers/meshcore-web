@@ -34,7 +34,7 @@ import { resolveHop } from './path-resolver.js';
 import type { PathUsageMap, PathUsageRoute, PathUsageStop } from './path-usage.js';
 import { batch, computed, effect, signal, untracked, type ReadonlySignal } from './signal.js';
 import { StoreBoundModel } from './store-bound.js';
-import { boxStats, type BoxStats } from './box-stats.js';
+import { boxStats, quantileSorted, type BoxStats } from './box-stats.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1224,6 +1224,107 @@ export function lastHopSignalStats(pts: readonly StatPacket[]): LastHopStats {
   return { top: all.slice(0, TOP_SOURCES), unattributed, others: rest.length, othersPackets: rest.reduce((n, s) => n + s.count, 0) };
 }
 
+/** Link margin at or above which a neighbour's link is "comfortable" (dB over the decode limit). */
+export const LINK_MARGIN_COMFORTABLE_DB = 10;
+/** Link margin at or above which a neighbour's link is "ok"; below it, "marginal". */
+export const LINK_MARGIN_OK_DB = 5;
+
+/** How much SNR headroom a link has over the decode limit ({@link linkMarginLevel}). */
+export type LinkMarginLevel = 'comfortable' | 'ok' | 'marginal';
+
+/** The level of an SNR margin (dB): ≥ 10 comfortable, ≥ 5 ok, else marginal. */
+export function linkMarginLevel(marginDb: number): LinkMarginLevel {
+  if (marginDb >= LINK_MARGIN_COMFORTABLE_DB) return 'comfortable';
+  if (marginDb >= LINK_MARGIN_OK_DB) return 'ok';
+  return 'marginal';
+}
+
+/** How reliably this radio hears one neighbour (a last hop; {@link linkQualityStats}). */
+export interface NeighbourLink {
+  node: NodeRef;
+  /** Received packets from this last hop with an SNR. */
+  count: number;
+  medianSnr: number;
+  minSnr: number;
+  maxSnr: number;
+  /** Median over those packets with an RSSI; null when none had one. */
+  medianRssi: number | null;
+  /** ts of the newest of those packets. */
+  lastTs: number;
+  /** medianSnr − the decode limit's SNR; null when the decode limit is unknown. */
+  margin: number | null;
+  /** {@link linkMarginLevel} of `margin`; null with it. */
+  level: LinkMarginLevel | null;
+}
+
+/** Link quality per neighbour ({@link PacketStatsModel.linkQuality}). */
+export interface LinkQualityStats {
+  /** The {@link TOP_SOURCES} neighbours with the most packets, by median SNR desc. */
+  top: NeighbourLink[];
+  /** The decode limit the margins are measured against (null: no margins). */
+  decodeLimit: DecodeLimit | null;
+  /** Received packets with an SNR but no last hop (TRACE, direct routes, unattributed zero-hop). */
+  unattributed: number;
+  /** Neighbours beyond the top list. */
+  others: number;
+  /** Packets from those neighbours. */
+  othersPackets: number;
+}
+
+function median(values: number[]): number | null {
+  if (values.length === 0) return null;
+  return quantileSorted(values.sort((a, b) => a - b), 0.5);
+}
+
+/**
+ * Link quality per neighbour (docs/packet-stats.md §1.9): the received packets of `pts` with an
+ * SNR, grouped by last hop (`nodeId`; a zero-hop packet's last hop is its source). Like
+ * {@link lastHopSignalStats}, a hop hash that is unknown or ambiguous is its own row (`a3?`,
+ * `node.resolved` false). The {@link TOP_SOURCES} neighbours with the most packets are kept and
+ * sorted by median SNR desc (then count, label); `margin` is measured against `decodeLimit`.
+ */
+export function linkQualityStats(pts: readonly StatPacket[], decodeLimit: DecodeLimit | null): LinkQualityStats {
+  const m = new Map<string, { node: NodeRef; snrs: number[]; rssis: number[]; lastTs: number }>();
+  let unattributed = 0;
+  for (const p of pts) {
+    if (p.direction !== 'in' || p.snr === null) continue;
+    const node = p.lastHop;
+    if (!node) {
+      unattributed++;
+      continue;
+    }
+    const id = nodeId(node);
+    let e = m.get(id);
+    if (!e) m.set(id, (e = { node, snrs: [], rssis: [], lastTs: p.ts }));
+    e.snrs.push(p.snr);
+    if (p.rssi !== null) e.rssis.push(p.rssi);
+    e.lastTs = Math.max(e.lastTs, p.ts);
+  }
+  const all = [...m.values()].sort((a, b) => b.snrs.length - a.snrs.length || a.node.label.localeCompare(b.node.label));
+  const rest = all.slice(TOP_SOURCES);
+  const top = all
+    .slice(0, TOP_SOURCES)
+    .map((e): NeighbourLink => {
+      const count = e.snrs.length;
+      const medianSnr = median(e.snrs) ?? 0;
+      const margin = decodeLimit ? medianSnr - decodeLimit.snrDb : null;
+      return {
+        node: e.node,
+        count,
+        medianSnr,
+        // sorted by median()
+        minSnr: e.snrs[0] ?? medianSnr,
+        maxSnr: e.snrs[count - 1] ?? medianSnr,
+        medianRssi: median(e.rssis),
+        lastTs: e.lastTs,
+        margin,
+        level: margin === null ? null : linkMarginLevel(margin),
+      };
+    })
+    .sort((a, b) => b.medianSnr - a.medianSnr || b.count - a.count || a.node.label.localeCompare(b.node.label));
+  return { top, decodeLimit, unattributed, others: rest.length, othersPackets: rest.reduce((n, e) => n + e.snrs.length, 0) };
+}
+
 /** A counted node placed on a map (see {@link placeNodeCounts}). */
 export interface PlacedNodeCount extends LatLon {
   /** `nodeId(node)`. */
@@ -1406,6 +1507,8 @@ export class PacketStatsModel extends StoreBoundModel implements DrillSource {
   readonly pathEnds: ReadonlySignal<SourceStats>;
   /** Signal (SNR / RSSI) of the received `points` per last hop ({@link lastHopSignalStats}). */
   readonly lastHops: ReadonlySignal<LastHopStats>;
+  /** Link quality per neighbour of the received `points` with an SNR ({@link linkQualityStats}), margins against `decodeLimit`. */
+  readonly linkQuality: ReadonlySignal<LinkQualityStats>;
   readonly timeline: ReadonlySignal<Timeline>;
   readonly utilization: ReadonlySignal<Utilization>;
   readonly hops: ReadonlySignal<HopCount[]>;
@@ -1527,6 +1630,7 @@ export class PacketStatsModel extends StoreBoundModel implements DrillSource {
     this.pathStarts = computed(() => nodeStats(this.points.value, (p) => p.path[0]));
     this.pathEnds = computed(() => nodeStats(this.points.value, (p) => p.path[p.path.length - 1]));
     this.lastHops = computed(() => lastHopSignalStats(this.points.value));
+    this.linkQuality = computed(() => linkQualityStats(this.points.value, this.decodeLimit.value));
 
     const binning = (this.#binning = computed((): Binning | null => {
       const w = this.window.value;

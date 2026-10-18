@@ -48,6 +48,8 @@ import {
   filterKey,
   filterPoints,
   lastHopSignalStats,
+  linkQualityStats,
+  linkMarginLevel,
   snrSummary,
   TOP_SOURCES,
   type NodeRef,
@@ -1230,5 +1232,93 @@ describe('PacketStatsModel — signal by last hop (§1.6, §5)', () => {
     expect(s.top[0]).toMatchObject({ node: { hash: '00' }, count: 2, snrCount: 1, meanSnr: 1, meanRssi: null, relayed: 2, direct: 0 });
     expect(s).toMatchObject({ unattributed: 0, others: 2, othersPackets: 2 });
     expect(snrSummary([])).toEqual({ count: 0, snrCount: 0, meanSnr: null, minSnr: null, maxSnr: null, meanRssi: null, snr: null });
+  });
+
+  it('link quality per neighbour: median / min / max SNR, median RSSI and margin (§1.9)', async () => {
+    const h = await lastHopHarness();
+    const q = h.model.linkQuality.value;
+    // SF10 decode limit −15 dB; Hilltop's SNR-less ACK skipped
+    expect(q.decodeLimit).toEqual({ sf: 10, snrDb: -15 });
+    expect(q.top).toEqual([
+      {
+        node: expect.objectContaining({ key: HILL.key, label: 'Hilltop', resolved: true }),
+        count: 2,
+        medianSnr: 7,
+        minSnr: 4,
+        maxSnr: 10,
+        medianRssi: -90,
+        lastTs: T + 1000,
+        margin: 22,
+        level: 'comfortable',
+      },
+      // the ambiguous hash is its own row, the zero-hop packet counting its source as the last hop
+      { node: expect.objectContaining({ hash: 'c3', label: 'c3?', resolved: false }), count: 2, medianSnr: -4, minSnr: -6, maxSnr: -2, medianRssi: -90, lastTs: T + 4000, margin: 11, level: 'comfortable' },
+    ]);
+    expect(q).toMatchObject({ unattributed: 4, others: 0, othersPackets: 0 }); // ACK, TRACE, two DIRECT routes
+
+    // SF7 (−7.5 dB): c3? drops to marginal; unknown SF → no margins
+    h.selfInfo.value = { ...SELF, radioSf: 7 };
+    expect(h.model.linkQuality.value.top.map((r) => [r.margin, r.level])).toEqual([
+      [14.5, 'comfortable'],
+      [3.5, 'marginal'],
+    ]);
+    h.selfInfo.value = null;
+    expect(h.model.linkQuality.value.decodeLimit).toBeNull();
+    expect(h.model.linkQuality.value.top.map((r) => [r.margin, r.level])).toEqual([
+      [null, null],
+      [null, null],
+    ]);
+
+    // drill-down filters apply
+    await h.model.addFilter({ field: 'lastHop', value: '#c3', label: 'c3?' });
+    expect(h.model.linkQuality.value.top.map((r) => r.node.label)).toEqual(['c3?']);
+  });
+
+  it('link quality: levels, sent packets, unattributed, top neighbours by count sorted by median', () => {
+    expect([10, 9.9, 5, 4.9, -3].map(linkMarginLevel)).toEqual(['comfortable', 'ok', 'ok', 'marginal', 'marginal']);
+    const base: StatPacket = {
+      id: 0,
+      ts: 0,
+      direction: 'in',
+      bytes: 10,
+      payloadType: PayloadType.ACK,
+      typeName: 'ACK',
+      routeType: RouteType.FLOOD,
+      routeName: 'FLOOD',
+      hops: 1,
+      snr: 0,
+      rssi: null,
+      category: 'ack',
+      channel: null,
+      source: null,
+      lastHop: null,
+      direct: false,
+      path: [],
+      pathKey: '',
+      destHash: null,
+      distanceM: null,
+      airtimeMs: null,
+      compression: null,
+      textBytes: null,
+    };
+    const hop = (hash: string): NodeRef => ({ hash, label: hash, resolved: false });
+    // TOP_SOURCES + 1 neighbours: 'zz' has one packet (dropped), the others two each, median = i
+    const pts: StatPacket[] = [];
+    for (let i = 0; i < TOP_SOURCES; i++) {
+      const hash = i.toString(16).padStart(2, '0');
+      pts.push({ ...base, lastHop: hop(hash), snr: i - 1, rssi: -100 }, { ...base, lastHop: hop(hash), snr: i + 1, rssi: -90, ts: 5 });
+    }
+    pts.push(
+      { ...base, lastHop: hop('zz'), snr: 99 },
+      { ...base, lastHop: hop('00'), snr: null }, // no SNR: skipped
+      { ...base, lastHop: hop('00'), snr: 30, direction: 'out' }, // sent: skipped
+      { ...base, snr: 3 }, // no last hop
+    );
+    const q = linkQualityStats(pts, { sf: 12, snrDb: -20 });
+    expect(q.top).toHaveLength(TOP_SOURCES);
+    expect(q.top[0]).toMatchObject({ node: { hash: '31' }, count: 2, medianSnr: 49, minSnr: 48, maxSnr: 50, medianRssi: -95, lastTs: 5, margin: 69, level: 'comfortable' });
+    expect(q.top.at(-1)).toMatchObject({ node: { hash: '00' }, count: 2, medianSnr: 0, margin: 20 });
+    expect(q).toMatchObject({ unattributed: 1, others: 1, othersPackets: 1 });
+    expect(linkQualityStats([], null)).toEqual({ top: [], decodeLimit: null, unattributed: 0, others: 0, othersPackets: 0 });
   });
 });
