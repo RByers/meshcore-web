@@ -343,6 +343,16 @@ describe('ChannelsModel', () => {
     expect(await m.details('00')).toBeUndefined();
   });
 
+  it('details: reads the store when the channel list has not caught up yet', async () => {
+    const { app, store } = await connected();
+    const m = app.channels;
+    await vi.waitFor(() => expect(m.views.value).toHaveLength(2));
+    // the model reloads after the store event, so right after the write it doesn't know the channel
+    const rec = await store.channels.put({ name: 'Late', psk: Uint8Array.from({ length: 16 }, (_, i) => 16 - i), deviceIndex: null });
+    expect(m.find(rec.key)).toBeUndefined();
+    expect((await m.details(rec.key))?.name).toBe('Late');
+  });
+
   it('renaming a #hashtag channel without a key joins the new hashtag', async () => {
     const { app, s } = await connected();
     const m = app.channels;

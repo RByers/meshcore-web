@@ -89,9 +89,13 @@ export class ChannelsModel extends StoreBoundModel {
     return this.#channels.peek().find((c) => c.key === k);
   }
 
-  /** Key, hash and settings of a stored channel (undefined if unknown). */
+  /**
+   * Key, hash and settings of a stored channel (undefined if unknown). Falls back to the store
+   * when the in-memory list hasn't loaded (or reloaded) yet, so a chat page opened straight from
+   * a link doesn't report its channel as missing.
+   */
   async details(key: string): Promise<ChannelDetails | undefined> {
-    const c = this.find(key);
+    const c = this.find(key) ?? (await this.store?.channels.get(key));
     if (!c) return undefined;
     return {
       name: c.name,
