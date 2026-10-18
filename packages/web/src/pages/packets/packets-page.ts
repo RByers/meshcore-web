@@ -233,10 +233,15 @@ export class McPacketsPage extends AppElement {
         background: var(--mc-surface-2);
         font-weight: 600;
       }
+      /* One line per row: a long summary is cut off with an ellipsis (full text in its title)
+         instead of wrapping and making its row taller than the rest. width: 100% gives the
+         summary the leftover space; max-width: 0 lets it shrink below its text width. */
       td.summary {
-        white-space: normal;
+        width: 100%;
+        max-width: 0;
         min-width: 14rem;
-        overflow-wrap: anywhere;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
       td.num {
         text-align: end;
@@ -782,7 +787,7 @@ export class McPacketsPage extends AppElement {
               ${rec.format === 'none'
                 ? html`<td class="num muted" title="On-air bytes unknown: logged from the command sent to the radio">—</td>`
                 : html`<td class="num">${rec.bytes.length}</td>`}
-              <td class="summary">${r.summary}</td>
+              <td class="summary" title=${r.summary}>${r.summary}</td>
             </tr>`;
           })}
         </tbody>
@@ -820,7 +825,7 @@ export class McPacketsPage extends AppElement {
               <td class="dir-${rec.direction}" title=${rec.direction === 'out' ? 'host → device' : 'device → host'}>${rec.direction === 'out' ? '→ dev' : '← dev'}</td>
               <td><span class="mono">${rec.code >= 0 ? rec.code.toString(16).padStart(2, '0') : '--'}</span> ${r.name}</td>
               <td class="num">${rec.size}</td>
-              <td class="summary">${r.summary}</td>
+              <td class="summary" title=${r.summary}>${r.summary}</td>
             </tr>`;
           })}
         </tbody>

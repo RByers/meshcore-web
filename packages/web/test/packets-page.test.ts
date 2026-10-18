@@ -55,6 +55,23 @@ describe('/packets page', () => {
     expect(t.query('[data-field="counts"]')!.textContent).toMatch(/^\d+ packets$/);
   });
 
+  it('keeps every row one line tall: a long summary is cut off, not wrapped', async () => {
+    await page.viewport(900, 800); // narrow table: the summary column has little room
+    const t = await openLog();
+    const s = t.emulatorScenario();
+    s.nodes.bob.sendChannelMessage('Public', 'short');
+    s.nodes.bob.sendChannelMessage('Public', 'a long message that would wrap '.repeat(4));
+    const row = (text: string): HTMLElement | undefined =>
+      t.queryAll<HTMLElement>('tr[data-type="GRP_TXT"]').find((r) => r.textContent?.includes(text));
+    await t.until(() => row('short') && row('would wrap'), 5000, 'short and long GRP_TXT rows');
+    const long = row('would wrap');
+    const short = row('short');
+    expect(long!.offsetHeight).toBe(short!.offsetHeight);
+    const cell = long!.querySelector<HTMLElement>('td.summary')!;
+    expect(cell.scrollWidth).toBeGreaterThan(cell.clientWidth); // truncated
+    expect(cell.title).toContain('a long message that would wrap');
+  });
+
   it('filters by payload type', async () => {
     const t = await openLog();
     await traffic(t);
